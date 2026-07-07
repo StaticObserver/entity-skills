@@ -100,6 +100,7 @@ namespace user {
 | `07-custom-output.md` | 自定义诊断量 | 自定义输出、额外诊断量、derived field |
 | `08-custom-post-step.md` | 时间步钩子 | 补充注入、移动窗口、动态边界、piston、周期性注入 |
 | `09-toml-config.md` | **必读** | 必读 |
+| `10-higher-order.md` | 需要自定义 field stencil 或高阶 shape | stencil、Cherenkov、数值色散、高阶形状、shape_order、esirkepov、delta_x、beta_xy |
 
 ## 开发工作流（7 步）
 
@@ -191,6 +192,7 @@ namespace user {
 | 非 PERIODIC 边界 | `06-boundary.md` |
 | 有自定义输出 | `07-custom-output.md` |
 | 有时间步钩子 | `08-custom-post-step.md` |
+| 需要高阶方法 | `10-higher-order.md` |
 | 总是需要 | `00-normalization.md`, `01-skeleton.md`, `09-toml-config.md` |
 
 加载所有匹配的 references，仔细阅读 API 签名、约束和陷阱。
