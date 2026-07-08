@@ -1,5 +1,7 @@
 # 02 — 场初始化（InitFields）
 
+> 基于 Entity v1.4.4
+
 ## 何时使用
 
 需要设置模拟的初始电磁场配置时。触发关键词：初始 B 场、初始 E 场、磁场位形、电场分布、Wald、dipole、Harris sheet。
@@ -243,7 +245,7 @@ struct DriveFields : public InitFields<D> {
 
 ## 常见陷阱
 
-1. **忘记除以/乘以 larmor0** — **不要**在 InitFields 中除以 larmor0！场值直接返回物理值。详情见 `00-normalization.md`
+1. **InitFields 中额外乘以/除以归一化系数** — InitFields 返回的场值是 code normalized 单位，直接返回物理值即可，不需要额外考虑 larmor0 等归一化系数。详情见 `00-normalization.md`
 2. **球坐标混淆** — 在 Spherical 中 ex2 = Eθ 不是 Ey，物理含义完全不同
 3. **SR vs GR basis 混用** — SR 返回 orthonormal basis，GR 返回 coordinate basis。如果在 GR 中误用 SR 的 tetrad 约定，场值会在度规非平凡区域畸变
 4. **D 场遗漏** — GR 中只设 bx 不设 dx，代码不报错但电场解算错误

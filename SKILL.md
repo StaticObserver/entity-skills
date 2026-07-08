@@ -26,72 +26,30 @@ description: Design, write, and debug Entity problem generators (pgen.hpp + TOML
 
 ## Hard Rules
 
-1. **归一化**：B0 = 1/larmor0 引擎内置。init_flds 不除以 larmor0。ext_current 乘以 skindepth0²/larmor0 补偿（详见 `references/00-normalization.md`）
+1. **归一化**：InitFields 返回的场值是 code normalized 单位，直接写入 EM 数组即可，不需要额外考虑归一化系数。ext_current 需乘以 skindepth0²/larmor0 补偿（详见 `references/00-normalization.md`）
 2. **坐标基**：SRPIC → local tetrad (orthonormal) basis。GRPIC → coordinate basis。不可混用
 3. **单位域**：InitPrtls = 物理单位。CustomPostStep / ext_current = 代码单位
 4. **实例名强制**：`init_flds`、`ext_force`、`ext_current` 的名字由 C++20 concept 检测，不可改变
 5. **写代码前有确认门**：Step 2 产出 design.md 后，必须取得用户明确确认
 6. **审计后才交付**：Step 5-6 的三向审计必须通过，不可跳过
-7. **current_filters 默认 0**：依赖电荷守恒的 PGen 必须设 `current_filters = 0`
-8. **species 索引 1-based**：arch::InjectUniform* 的 species 参数从 1 开始
+7. **species 索引 1-based**：arch::InjectUniform* 的 species 参数从 1 开始
 
-## 最小可运行 PGen
+## Reference 索引
 
-Entity 的所有功能检查通过 `if constexpr` 实现——不存在的方法/成员会被静默跳过。因此 PGen 的最小骨架只需要 traits 声明 + 空构造函数：
+> 所有 reference 基于 **Entity v1.4.4** 编写。
 
-```cpp
-#pragma once
-#include "enums.h"
-#include "global.h"
-#include "traits/pgen.h"
-#include "framework/domain/metadomain.h"
+### 必读（每次都需要加载）
 
-namespace user {
-  using namespace ntt;
+| Reference | 内容概要 |
+|-----------|---------|
+| `00-normalization.md` | 归一化约定，code normalized 单位系统，InitFields/ext_current 的数值规范 |
+| `01-skeleton.md` | PGen 骨架模板、最小可运行 PGen、traits 声明、参数读取、所需 includes |
+| `09-toml-config.md` | TOML 配置完整参考，所有 section/参数/陷阱 |
 
-  template <SimEngine::type S, class M>
-  struct PGen {
-    static constexpr auto engines {
-      ::traits::pgen::compatible_with<SimEngine::SRPIC> {}
-    };
-    static constexpr auto metrics {
-      ::traits::pgen::compatible_with<Metric::Minkowski> {}
-    };
-    static constexpr auto dimensions {
-      ::traits::pgen::compatible_with<Dim::_1D> {}
-    };
-    PGen(const SimulationParams&, const Metadomain<S, M>&) {}
-  };
-} // namespace user
-```
-
-以下成员/方法**全部可选**（引擎通过 traits 检测是否存在，不存在就跳过）：
-
-| 成员/方法 | 不存在时的行为 |
-|-----------|--------------|
-| `init_flds` | 场保持为零（真空） |
-| `InitPrtls()` | 不注入粒子（无粒子模拟） |
-| `CustomPostStep()` | 无时间步钩子 |
-| `MatchFields()` | MATCH 边界不可用 |
-| `FixFieldsConst()` | FIXED 边界不可用 |
-| `AtmFields()` | ATMOSPHERE 边界不可用 |
-| `ext_current` | 无外部电流源 |
-| `ext_force` | 无外部力 |
-| `ExternalFields()` | 无外部 E/B/力 |
-| `CustomFieldOutput()` | 无自定义场输出 |
-| `CustomStat()` | 无自定义统计量 |
-| `CustomParticleUpdate()` | 无自定义粒子更新 |
-
-编译只需要 `pgens/<name>/pgen.hpp` 存在即可（CMake 的 `set_problem_generator()` 只检查这个文件）。
-
-## Reference 功能摘要
-
-根据用户需求关键词匹配需要加载的 references：
+### 按功能加载（匹配用户需求）
 
 | Reference | 何时需要 | 触发关键词 |
 |-----------|---------|-----------|
-| `00-normalization.md` | **必读** | 必读 |
-| `01-skeleton.md` | **必读** | 必读 |
 | `02-init-fields.md` | 需要初始电磁场 | 磁场、电场、Bx/By/Bz、Ex/Ey/Ez、Wald、dipole、Harris sheet |
 | `03-particle-injection.md` | 需要粒子 | 等离子体、粒子、电子、离子、注入、Maxwellian、密度分布、pair plasma |
 | `04-ext-current.md` | Ampere 源项（仅 Minkowski） | 外部电流、天线、axion current、J_ext、源项 |
@@ -99,14 +57,16 @@ namespace user {
 | `06-boundary.md` | 非 PERIODIC 边界 | open boundary、吸收边界、固定边界、大气层、conductor |
 | `07-custom-output.md` | 自定义诊断量 | 自定义输出、额外诊断量、derived field |
 | `08-custom-post-step.md` | 时间步钩子 | 补充注入、移动窗口、动态边界、piston、周期性注入 |
-| `09-toml-config.md` | **必读** | 必读 |
 | `10-higher-order.md` | 需要自定义 field stencil 或高阶 shape | stencil、Cherenkov、数值色散、高阶形状、shape_order、esirkepov、delta_x、beta_xy |
+| `pgens-index.md` | 需要参考官方 PGen 实现 | 参考实现、官方例子、Entity 自带的 pgen、模板参考 |
 
 ## 开发工作流（7 步）
 
 ### Step 1: 需求澄清 → user_requirements.md
 
 加载 `00-normalization.md` 和 `01-skeleton.md` 作为背景知识。
+
+**user_requirements.md 记录 WHAT**：用户想要模拟的物理场景，用物理语言描述。不涉及代码结构、C++ 类名、archetype 选择——这些属于设计阶段。
 
 向用户逐项确认以下信息。按顺序询问，不要跳过：
 
@@ -179,6 +139,8 @@ namespace user {
 
 ### Step 2: 匹配 References → 设计文档 → design.md
 
+**design.md 记录 HOW**：基于用户需求，给出具体的代码实现方案——PGen 结构、InitFields 公式、注入 archetype 选择、TOML 参数表等。这是从物理需求到代码设计的转换。
+
 **子步骤 2a: 匹配 references**
 
 根据 user_requirements.md 中的功能点，匹配需要加载的 references：
@@ -193,6 +155,7 @@ namespace user {
 | 有自定义输出 | `07-custom-output.md` |
 | 有时间步钩子 | `08-custom-post-step.md` |
 | 需要高阶方法 | `10-higher-order.md` |
+| 需要参考官方实现 | `pgens-index.md` |
 | 总是需要 | `00-normalization.md`, `01-skeleton.md`, `09-toml-config.md` |
 
 加载所有匹配的 references，仔细阅读 API 签名、约束和陷阱。
@@ -248,7 +211,7 @@ namespace user {
 - Particles: PERIODIC × 2
 
 ## 归一化检查清单
-- [ ] InitFields 不除以 larmor0
+- [ ] InitFields 场值是 code normalized 单位，无需额外系数
 - [ ] ext_current 乘以 skindepth0²/larmor0（如适用）
 - [ ] InitPrtls 使用物理单位
 - [ ] CustomPostStep 使用代码单位（如适用）
@@ -292,7 +255,7 @@ namespace user {
 3. 填入 particles + species（如有粒子）
 4. 填入 [setup] section（PGen 专属参数）
 5. 填入 output 配置
-6. 设置 `current_filters = 0`（电荷守恒默认）
+6. 设置 `current_filters = 0`
 
 ### Step 5: 三向审计
 
@@ -306,7 +269,7 @@ Prompt: "审计以下 PGen 代码的语法正确性和潜在 bug。检查：
 2. traits 声明是否与用户需求匹配
 3. 每个使用的 API 调用是否签名正确（对照 references 中的签名）
 4. 单位系统是否正确标记
-5. 归一化约定是否正确（InitFields 不除以 larmor0，ext_current 补偿系数）
+5. 归一化约定是否正确（InitFields 返回值是 code normalized 单位，ext_current 补偿系数）
 6. 常见陷阱：1-based vs 0-based 索引混淆、CommunicateFields 遗忘、死粒子电荷守恒
 7. 潜在的性能问题
 输出：问题列表（严重/警告），每个问题附带具体的代码位置和修复建议"

@@ -1,5 +1,7 @@
 # 01 — PGen 骨架
 
+> 基于 Entity v1.4.4
+
 ## 何时使用
 
 **必读**。这是所有 PGen 的起点。定义 PGen struct 的结构、编译期兼容性检查、构造函数签名、参数读取模式。
@@ -36,7 +38,7 @@ namespace user {
     real_t param1, param2;
 
     // 子结构体（由其他 references 定义）
-    InitFields<D> init_flds;  // 必选
+    InitFields<D> init_flds;  // 可选（不存在时场保持为零）
 
     // 构造函数
     PGen(const SimulationParams& p, Metadomain<S, M>& m)
@@ -170,7 +172,60 @@ auto xi_min = params.template get<std::vector<real_t>>("setup.xi_min");
 
 ---
 
-## 代码示例：最小 PGen
+## 最小可运行 PGen
+
+Entity 的所有功能检查通过 `if constexpr` 实现——不存在的方法/成员会被静默跳过。因此 PGen 的最小骨架只需要 traits 声明 + 空构造函数。
+
+### 可选成员/方法一览
+
+以下成员/方法**全部可选**（引擎通过 traits 检测是否存在，不存在就跳过）：
+
+| 成员/方法 | 不存在时的行为 |
+|-----------|--------------|
+| `init_flds` | 场保持为零（真空） |
+| `InitPrtls()` | 不注入粒子（无粒子模拟） |
+| `CustomPostStep()` | 无时间步钩子 |
+| `MatchFields()` | MATCH 边界不可用 |
+| `FixFieldsConst()` | FIXED 边界不可用 |
+| `AtmFields()` | ATMOSPHERE 边界不可用 |
+| `ext_current` | 无外部电流源 |
+| `ext_force` | 无外部力 |
+| `ExternalFields()` | 无外部 E/B/力 |
+| `CustomFieldOutput()` | 无自定义场输出 |
+| `CustomStat()` | 无自定义统计量 |
+| `CustomParticleUpdate()` | 无自定义粒子更新 |
+
+编译只需要 `pgens/<name>/pgen.hpp` 存在即可（CMake 的 `set_problem_generator()` 只检查这个文件）。
+
+### 代码示例：纯骨架（仅 traits + 空构造）
+
+```cpp
+#pragma once
+#include "enums.h"
+#include "global.h"
+#include "traits/pgen.h"
+#include "framework/domain/metadomain.h"
+
+namespace user {
+  using namespace ntt;
+
+  template <SimEngine::type S, class M>
+  struct PGen {
+    static constexpr auto engines {
+      ::traits::pgen::compatible_with<SimEngine::SRPIC> {}
+    };
+    static constexpr auto metrics {
+      ::traits::pgen::compatible_with<Metric::Minkowski> {}
+    };
+    static constexpr auto dimensions {
+      ::traits::pgen::compatible_with<Dim::_1D> {}
+    };
+    PGen(const SimulationParams&, const Metadomain<S, M>&) {}
+  };
+} // namespace user
+```
+
+### 代码示例：带 InitFields 的最小 PGen
 
 ```cpp
 #pragma once

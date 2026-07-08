@@ -1,5 +1,7 @@
 # 05 — 外部力（ext_force + ExternalFields）
 
+> 基于 Entity v1.4.4
+
 ## 何时使用
 
 需要对粒子施加外力时。触发关键词：外部加速度、非电磁力、辐射反作用力、外部 E/B 场、ExternalFields、辐射压强。

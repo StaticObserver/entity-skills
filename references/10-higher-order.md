@@ -1,5 +1,7 @@
 # 10 — 高阶方法（Field Stencil & Particle Shape）
 
+> 基于 Entity v1.4.4
+
 ## 何时使用
 
 当用户需要以下功能时加载此 reference：

@@ -1,5 +1,7 @@
 # 09 — TOML 配置参考
 
+> 基于 Entity v1.4.4
+
 ## 何时使用
 
 **必读**。每一个 PGen 都需要一个匹配的 TOML 文件。这份参考覆盖 Entity 支持的所有 TOML section 和参数。
@@ -269,9 +271,9 @@ boundaries = { fields = ["PERIODIC"], particles = ["PERIODIC"] }
     metric = "Minkowski"
     coord  = "cartesian"
 
-  [grid.boundaries]
-    fields     = [["PERIODIC"], ["PERIODIC"]]
-    particles = [["PERIODIC"], ["PERIODIC"]]
+[boundaries]
+  fields     = [["PERIODIC"], ["PERIODIC"]]
+  particles  = [["PERIODIC"], ["PERIODIC"]]
 
 [scales]
   larmor0     = 1.0
@@ -319,5 +321,4 @@ boundaries = { fields = ["PERIODIC"], particles = ["PERIODIC"] }
 3. **PascalCase 写成了 lowercase** — `engine = "srpic"` 不被识别
 4. **species label 和 PGen 代码不对应** — PGen 中用 1-based 索引注入但 TOML 顺序不同
 5. **use_weights 忘了设为 true** — 有粒子注入的 PGen 必须设置，否则权重逻辑异常
-6. **current_filters > 0 导致电荷不守恒** — 依赖电荷守恒的 PGen（如 axion）必须设 0
-7. **[setup] 参数名有 typo** — TOML 和 `params.get()` 中的 key 必须字符级匹配
+6. **[setup] 参数名有 typo** — TOML 和 `params.get()` 中的 key 必须字符级匹配

@@ -1,5 +1,7 @@
 # 06 — 边界条件（MatchFields / FixFieldsConst / AtmFields）
 
+> 基于 Entity v1.4.4
+
 ## 何时使用
 
 需要非 PERIODIC 边界条件时。触发关键词：open boundary、匹配边界、固定边界、大气层边界、吸收边界、视界边界、导体边界、MatchFields、FixFields、AtmFields。

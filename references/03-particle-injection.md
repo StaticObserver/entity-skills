@@ -1,5 +1,7 @@
 # 03 — 粒子注入（InitPrtls + Replenish）
 
+> 基于 Entity v1.4.4
+
 ## 何时使用
 
 当模拟需要包含粒子时。触发关键词：等离子体、粒子初始化、电子/离子注入、Maxwellian 分布、空间分布、补充注入、粒子 replenish、pair plasma。
@@ -182,7 +184,7 @@ arch::spatial_dist::Replenish<M, 3, TargetProfile> sdist(
 | `Maxwellian<D, C>(pool, T, drift)` | (random_pool, 温度, 漂移四速) | 漂移麦克斯韦，最常用 |
 | `Cold<D>` | () | v = 0 |
 | `Powerlaw<D>(pool, gmin, gmax, index)` | (random_pool, gamma_min, gamma_max, 幂律指数) | 相对论幂律 |
-| `JuttnerSinge(v, T, pool)` | 自由函数，非 archetype | 相对论 Juttner-Synge 分布 |
+| `JuttnerSynge(v, T, pool)` | 自由函数，非 archetype | 相对论 Juttner-Synge 分布 |
 
 ### 自定义能量分布接口
 
@@ -194,7 +196,7 @@ struct MyEnergyDist {
     // 必须：设置速度（local tetrad basis）
     Inline void operator()(const coord_t<D>& x, vec_t<Dim::_3D>& v) const {
         // 可以使用内置辅助函数
-        JuttnerSinge(v, temperature, pool);
+        JuttnerSynge(v, temperature, pool);
         // 或手动设置
         v[0] = drift_ux;
         v[1] = ZERO;

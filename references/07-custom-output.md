@@ -1,5 +1,7 @@
 # 07 — 自定义输出（CustomFieldOutput + CustomStat）
 
+> 基于 Entity v1.4.4
+
 ## 何时使用
 
 需要在标准场量（E, B, J, Rho, T00 等）之外输出自定义诊断量时。触发关键词：自定义场、derived field、标量诊断量、CustomFieldOutput、CustomStat、额外输出量。

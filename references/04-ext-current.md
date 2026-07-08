@@ -1,5 +1,7 @@
 # 04 — 外部电流源（ext_current）
 
+> 基于 Entity v1.4.4
+
 ## 何时使用
 
 需要在 Ampere 定律中添加外部源电流时。触发关键词：外部电流、天线驱动、axion current、Wald current、J_ext、电流源项。
