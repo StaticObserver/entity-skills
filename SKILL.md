@@ -38,15 +38,16 @@ description: Design, write, and debug Entity problem generators (pgen.hpp + TOML
 
 > 所有 reference 基于 **Entity v1.4.4** 编写。
 
-### 必读（每次都需要加载）
+### 背景知识（Step 1 加载）
 
 | Reference | 内容概要 |
 |-----------|---------|
 | `00-normalization.md` | 归一化约定，code normalized 单位系统，InitFields/ext_current 的数值规范 |
 | `01-skeleton.md` | PGen 骨架模板、最小可运行 PGen、traits 声明、参数读取、所需 includes |
-| `09-toml-config.md` | TOML 配置完整参考，所有 section/参数/陷阱 |
 
 ### 按功能加载（匹配用户需求）
+
+> `09-toml-config.md` 在构建 TOML 时（Step 4）加载。`pgens-index.md` 在不确定 API 用法或需要参考实现时加载。
 
 | Reference | 何时需要 | 触发关键词 |
 |-----------|---------|-----------|
@@ -57,8 +58,9 @@ description: Design, write, and debug Entity problem generators (pgen.hpp + TOML
 | `06-boundary.md` | 非 PERIODIC 边界 | open boundary、吸收边界、固定边界、大气层、conductor |
 | `07-custom-output.md` | 自定义诊断量 | 自定义输出、额外诊断量、derived field |
 | `08-custom-post-step.md` | 时间步钩子 | 补充注入、移动窗口、动态边界、piston、周期性注入 |
-| `10-higher-order.md` | 需要自定义 field stencil 或高阶 shape | stencil、Cherenkov、数值色散、高阶形状、shape_order、esirkepov、delta_x、beta_xy |
-| `pgens-index.md` | 需要参考官方 PGen 实现 | 参考实现、官方例子、Entity 自带的 pgen、模板参考 |
+| `09-toml-config.md` | 生成/验证 TOML 配置 | 写 TOML、配置参数、section 语法、TOML 骨架 |
+| `10-higher-order.md` | 自定义 field stencil 或高阶 shape | stencil、Cherenkov、数值色散、高阶形状、shape_order、esirkepov、delta_x、beta_xy |
+| `pgens-index.md` | 不确定 API 用法或实现模式时 | 参考实现、官方例子、Entity 自带的 pgen、模板参考 |
 
 ## 开发工作流（7 步）
 
@@ -66,29 +68,39 @@ description: Design, write, and debug Entity problem generators (pgen.hpp + TOML
 
 加载 `00-normalization.md` 和 `01-skeleton.md` 作为背景知识。
 
-**user_requirements.md 记录 WHAT**：用户想要模拟的物理场景，用物理语言描述。不涉及代码结构、C++ 类名、archetype 选择——这些属于设计阶段。
+分 **3 轮**向用户收集需求。每轮确认完后展示中间结果。按顺序轮询，不要跳到下一轮。
 
-向用户逐项确认以下信息。按顺序询问，不要跳过：
+**第 1 轮 — 基础信息**：
 
 | # | 问题 | 选项/说明 | 默认值 |
 |---|------|----------|--------|
 | 1 | PGen 名称 | 英文小写+下划线 | **必填** |
 | 2 | 物理问题描述 | 自由文本：模拟什么现象？ | **必填** |
 | 3 | Simulation engine | `SRPIC` / `GRPIC` | `SRPIC` |
-| 4 | Metric | `Minkowski` / `Spherical` / `QSpherical` / `Kerr_Schild` / `QKerr_Schild` | `Minkowski` |
+| 4 | Metric | `Minkowski` / `Spherical` / `QSpherical` / `Kerr_Schild` / `QKerr_Schild` / `Kerr_Schild_0` | `Minkowski` |
 | 5 | 空间维度 | 1D / 2D / 3D | 根据问题推断 |
 | 6 | 网格分辨率 + 物理范围 | 每维 [N, extent_min, extent_max] | **必填** |
+
+**第 2 轮 — 物理配置**：
+
+| # | 问题 | 选项/说明 | 默认值 |
+|---|------|----------|--------|
 | 7 | 初始场配置 | B 场？E 场？空间分布？均匀/非均匀？ | 无（真空） |
 | 8 | 粒子物种数 + 每个物种的 label/mass/charge | 列表 | 无粒子 |
 | 9 | 粒子初始分布 | Uniform / NonUniform？温度？漂移速度？密度？ | — |
 | 10 | 边界条件 | PERIODIC / MATCH / FIXED / ABSORB / ... | PERIODIC |
+
+**第 3 轮 — 高级功能 + 运行时**：
+
+| # | 问题 | 选项/说明 | 默认值 |
+|---|------|----------|--------|
 | 11 | 是否需要外部电流/力？ | 描述物理机制 | 无 |
 | 12 | 是否需要时间步钩子？ | 补充注入/移动窗口/动态边界/... | 无 |
 | 13 | 是否需要自定义输出？ | 额外场量/统计量 | 无 |
 | 14 | Fiducial scales | larmor0, skindepth0 | larmor0=1.0, skindepth0=1.0 |
 | 15 | 运行时参数 | `runtime`、`ppc0`、`CFL`、`output interval` | runtime=100.0, ppc0=32, CFL=0.45 |
 
-收集完所有答案后，将结果写入 `user_requirements.md`，格式如下：
+三轮收集完成后，将结果写入 `user_requirements.md`（保留 `<描述>` 占位符，不填入示例数据）：
 
 ```markdown
 # User Requirements — <pgen_name>
@@ -99,16 +111,16 @@ description: Design, write, and debug Entity problem generators (pgen.hpp + TOML
 ## 模拟参数
 | 参数 | 值 |
 |------|-----|
-| Engine | SRPIC |
-| Metric | Minkowski |
-| Dimensions | 2D |
-| Resolution | [256, 256] |
-| Extent | [[-10, 10], [-10, 10]] |
-| Boundaries | PERIODIC |
-| Runtime | 100.0 |
-| larmor0 | 1.0 |
-| skindepth0 | 1.0 |
-| CFL | 0.45 |
+| Engine | ... |
+| Metric | ... |
+| Dimensions | ... |
+| Resolution | ... |
+| Extent | ... |
+| Boundaries | ... |
+| Runtime | ... |
+| larmor0 | ... |
+| skindepth0 | ... |
+| CFL | ... |
 
 ## 场配置
 <描述初始 E/B 场>
@@ -116,8 +128,6 @@ description: Design, write, and debug Entity problem generators (pgen.hpp + TOML
 ## 物种列表
 | # | Label | Mass | Charge | Pusher | maxnpart |
 |---|-------|------|--------|--------|----------|
-| 1 | e- | 1.0 | -1.0 | Boris | 5e6 |
-| 2 | e+ | 1.0 | 1.0 | Boris | 5e6 |
 
 ## 粒子初始分布
 <温度、漂移速度、密度、分布类型>
@@ -143,22 +153,13 @@ description: Design, write, and debug Entity problem generators (pgen.hpp + TOML
 
 **子步骤 2a: 匹配 references**
 
-根据 user_requirements.md 中的功能点，匹配需要加载的 references：
+对照上文「按功能加载」索引表，根据 user_requirements.md 匹配对应的 reference 文件。额外规则：
+- 总是加载 `00-normalization.md`, `01-skeleton.md`
+- 有粒子注入时的 replenish 依赖 `03` + `08`
+- 不确定 API 用法时加载 `pgens-index.md`
+- `09-toml-config.md` 在 Step 4 加载
 
-| 需求特征 | 加载的 reference |
-|---------|-----------------|
-| 有初始场 | `02-init-fields.md` |
-| 有粒子 | `03-particle-injection.md` |
-| 有外部电流 | `04-ext-current.md` |
-| 有外部力 | `05-ext-force.md` |
-| 非 PERIODIC 边界 | `06-boundary.md` |
-| 有自定义输出 | `07-custom-output.md` |
-| 有时间步钩子 | `08-custom-post-step.md` |
-| 需要高阶方法 | `10-higher-order.md` |
-| 需要参考官方实现 | `pgens-index.md` |
-| 总是需要 | `00-normalization.md`, `01-skeleton.md`, `09-toml-config.md` |
-
-加载所有匹配的 references，仔细阅读 API 签名、约束和陷阱。
+加载匹配的 references 后，仔细阅读 API 签名、约束和陷阱。
 
 **子步骤 2b: 编写 design.md**
 
@@ -235,14 +236,17 @@ description: Design, write, and debug Entity problem generators (pgen.hpp + TOML
 1. Include guards + headers（来自 01-skeleton）
 2. namespace + using（来自 01-skeleton）
 3. InitFields struct（来自 02-init-fields，如设计需要）
-4. ext_current / ext_force struct（来自 04/05，如设计需要）
-5. PGen struct（来自 01-skeleton）：
+4. ext_current struct（来自 04，如设计需要）
+5. ext_force struct / ExtFields（来自 05，如设计需要。ext_force 与 ExternalFields 方法二选一）
+6. PGen struct（来自 01-skeleton）：
    - traits 声明
    - 成员变量
    - 构造函数（params.get 读取 [setup] 参数）
    - InitPrtls()（来自 03，如设计需要）
    - MatchFields / FixFieldsConst / AtmFields（来自 06，如设计需要）
+   - ExternalFields()（来自 05，如设计需要。返回 ExtFields functor）
    - CustomPostStep()（来自 08，如设计需要）
+   - CustomParticleUpdate()（来自 08，如设计需要。返回 UpdateFunctor）
    - CustomFieldOutput() / CustomStat()（来自 07，如设计需要）
 
 每个方法加注释标注使用的是物理单位还是代码单位。
@@ -259,53 +263,15 @@ description: Design, write, and debug Entity problem generators (pgen.hpp + TOML
 
 ### Step 5: 三向审计
 
-**同时拉起三个独立的审计子 Agent。** 每个子 Agent 只负责一个审计维度，互不干扰。
+**并行启动 3 个审计子 Agent**（均使用 `general-purpose` 类型，`subagent_type`="general-purpose"）。每个 Agent 先读取 `references/` 下对应文件，再读取生成的 pgen.hpp、TOML、user_requirements.md 和 design.md 进行审计。若某个 Agent 失败/超时，fallback 到主 Agent 串行完成该审计。
 
-#### 审计 Agent 1: 代码正确性
+**Agent 1 — 代码正确性**：检查语法、traits 匹配、API 签名（对照 references）、单位标记、归一化约定、常见陷阱（1-based/0-based 索引、CommunicateFields 遗忘、死粒子电荷守恒）、性能问题。输出严重/警告问题列表 + 修复建议。
 
-```
-Prompt: "审计以下 PGen 代码的语法正确性和潜在 bug。检查：
-1. C++ 语法是否正确（括号匹配、分号、模板语法）
-2. traits 声明是否与用户需求匹配
-3. 每个使用的 API 调用是否签名正确（对照 references 中的签名）
-4. 单位系统是否正确标记
-5. 归一化约定是否正确（InitFields 返回值是 code normalized 单位，ext_current 补偿系数）
-6. 常见陷阱：1-based vs 0-based 索引混淆、CommunicateFields 遗忘、死粒子电荷守恒
-7. 潜在的性能问题
-输出：问题列表（严重/警告），每个问题附带具体的代码位置和修复建议"
-```
+**Agent 2 — 需求满足度**：逐项对照 user_requirements.md 检查：场配置、粒子物种+注入、边界条件+对应方法、[setup] 参数、自定义输出。输出 ✓/✗/⚠ 检查表。
 
-#### 审计 Agent 2: 需求满足度
+**Agent 3 — 代码-TOML 一致性**：检查 params.get 与 TOML [setup] 双向匹配、species 索引一致、traits×TOML 兼容、BC 方法对应、custom output 名字匹配。输出不一致项列表。
 
-```
-Prompt: "对照 user_requirements.md 审计以下 PGen 代码 + TOML 是否完整实现了用户需求。检查：
-1. user_requirements.md 中列出的每一项功能是否都有对应的代码实现
-2. 用户指定的物理场在 InitFields 中是否正确设置
-3. 用户指定的粒子物种是否全部在 TOML 中定义并在 InitPrtls 中注入
-4. 用户指定的边界条件是否在 TOML 中正确配置，是否匹配 MatchFields/FixFieldsConst 的实现
-5. 用户的 [setup] 参数是否全部在构造函数中读取和在 TOML 中定义
-6. 用户指定的输出需求是否在 TOML 和 CustomFieldOutput/CustomStat 中实现
-输出：逐项检查表（✓/✗/⚠），对不满足的项目给出具体缺失描述"
-```
-
-#### 审计 Agent 3: 代码-TOML 一致性
-
-```
-Prompt: "审计 PGen 代码和 TOML 文件之间的一致性。检查：
-1. pgen.hpp 中每个 params.get<T>('setup.xxx') 的 xxx 是否在 TOML [setup] 中有对应项（类型匹配）
-2. TOML [setup] 中的每个参数是否在 pgen.hpp 中被读取
-3. TOML particles.nspec 是否等于 [[particles.species]] 的数量
-4. TOML species label/charge/mass 与代码中 Inject 的 species 索引是否一致
-5. grid.dim 是否与 pgen.hpp traits dimensions 兼容
-6. grid.metric.metric 是否与 pgen.hpp traits metrics 兼容
-7. simulation.engine 是否与 pgen.hpp traits engines 兼容
-8. TOML boundaries 的 BC 类型是否有对应的 PGen 方法（如 MATCH→MatchFields, FIXED→FixFieldsConst）
-9. [output.fields] custom 列表是否与 CustomFieldOutput 中的 name 匹配
-10. [output.stats] custom 列表是否与 CustomStat 中的 name 匹配
-输出：不一致项列表，每个附带具体的代码行号和 TOML 行号"
-```
-
-三个审计 Agent **并行启动**，等待全部完成后收集结果。
+冲突裁决优先级：代码正确性 > 需求满足度 > 一致性。
 
 ### Step 6: 收集审计结果并修复
 
@@ -313,6 +279,8 @@ Prompt: "审计 PGen 代码和 TOML 文件之间的一致性。检查：
 2. 逐个修复，每修复一个在报告中标记 ✓
 3. 对于需要用户权衡的问题（如性能 vs 精度），列出选项并询问用户
 4. 修复完成后，如果改动较大（≥3 处修改），重新运行审计 Agent 1 做回归检查
+5. 如果连续 2 轮修复后审计仍不通过，回退到 Step 2 重新设计（不修改原始 user_requirements.md）
+6. 编译失败时：先自行排查语法/include 错误，无法解决时回退到 Step 4 重新生成
 
 审计结果汇总格式：
 
