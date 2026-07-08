@@ -1,53 +1,53 @@
-# 10 — 高阶方法（Field Stencil & Particle Shape）
+# 10 — Higher-Order Methods (Field Stencil & Particle Shape)
 
-> 基于 Entity v1.4.4
+> Based on Entity v1.4.4
 
-## 何时使用
+## When to Use
 
-当用户需要以下功能时加载此 reference：
+Load this reference when the user needs:
 
-- 自定义场求解器模板（stencil）以抑制 Cherenkov 不稳定性或数值色散
-- 使用高于 1 阶的粒子形状函数提升数值精度
-- 降低数值加热，以允许更低的分辨率运行
-- 配置 `[algorithms.fieldsolver]` 的非对角项（`beta_xy` 等）
+- Custom field solver stencils to suppress Cherenkov instability or numerical dispersion
+- Particle shape functions above 1st order to improve numerical accuracy
+- Reduced numerical heating to allow running at lower resolution
+- Configuration of `[algorithms.fieldsolver]` off-diagonal terms (`beta_xy`, etc.)
 
-**前置条件**：`09-toml-config.md` 中 `[algorithms.fieldsolver]` 和 `[algorithms.deposit]` 的参数表。
+**Prerequisites**: Parameter tables for `[algorithms.fieldsolver]` and `[algorithms.deposit]` in `09-toml-config.md`.
 
 ---
 
-## 1. 广义场模板 (Generalized Field Stencil)
+## 1. Generalized Field Stencil
 
-### 背景
+### Background
 
-基于 Blinne et al. (2018)，Entity 支持通过 `[algorithms.fieldsolver]` 中的 `delta` 和 `beta` 参数自定义 Maxwell 求解器的有限差分模板。这可以显著减少数值色散，抑制 Cherenkov 不稳定性。
+Based on Blinne et al. (2018), Entity supports customizing the Maxwell solver's finite-difference stencil through `delta` and `beta` parameters in `[algorithms.fieldsolver]`. This can significantly reduce numerical dispersion and suppress Cherenkov instability.
 
-关键头文件：`kernels/faraday_mink.hpp`
+Key header: `kernels/faraday_mink.hpp`
 
-### 参数说明
+### Parameters
 
-所有参数在 `[algorithms.fieldsolver]` 下配置（`09-toml-config.md` 中已列出）：
+All parameters are configured under `[algorithms.fieldsolver]` (listed in `09-toml-config.md`):
 
-| 参数 | 说明 |
-|------|------|
-| `delta_x`, `delta_y`, `delta_z` | 对角方向二阶偏移修正系数 |
-| `beta_xy`, `beta_yx` | x-y 平面交叉项模板系数 |
-| `beta_xz`, `beta_zx` | x-z 平面交叉项模板系数 |
-| `beta_yz`, `beta_zy` | y-z 平面交叉项模板系数 |
+| Parameter | Description |
+|-----------|-------------|
+| `delta_x`, `delta_y`, `delta_z` | Diagonal direction second-order offset correction coefficients |
+| `beta_xy`, `beta_yx` | x-y plane cross-term stencil coefficients |
+| `beta_xz`, `beta_zx` | x-z plane cross-term stencil coefficients |
+| `beta_yz`, `beta_zy` | y-z plane cross-term stencil coefficients |
 
-### 关键约束
+### Key Constraint
 
-> **模板针对给定的 CFL 优化，必须使用与模板匹配的 CFL。**
+> **Stencils are optimized for a given CFL; you must use the CFL matching the stencil.**
 
-CFL 在论文中为 standard convention，换算到 Entity 需乘以 √(N_dim)：
-- **2D**: Entity CFL = 论文 CFL / √2
-- **3D**: Entity CFL = 论文 CFL / √3
+The CFL in the paper uses standard convention. To convert to Entity, multiply by √(N_dim):
+- **2D**: Entity CFL = paper CFL / √2
+- **3D**: Entity CFL = paper CFL / √3
 
-### 预定义模板
+### Predefined Stencils
 
-#### 2D 模板
+#### 2D Stencils
 
-| 求解器 | 优化模式 | 论文 CFL | Entity CFL | delta_x/y | beta_xy/yx |
-|--------|---------|---------|------------|-----------|------------|
+| Solver | Optimized For | Paper CFL | Entity CFL | delta_x/y | beta_xy/yx |
+|--------|--------------|-----------|------------|-----------|------------|
 | Yee | — | 1.0 | 1/√2 ≈ 0.707 | 0.0 | 0.0 |
 | Cowan | min1 | 0.99 | 0.99/√2 | -0.122 | 0.108 |
 | Cowan | min2 | 0.985 | 0.985/√2 | -0.120 | 0.106 |
@@ -62,7 +62,7 @@ CFL 在论文中为 standard convention，换算到 Entity 需乘以 √(N_dim)�
 | Lehe | min5 | 0.98 | 0.98/√2 | -0.121 | 0.106 |
 | Lehe | min6 | 0.975 | 0.975/√2 | -0.118 | 0.102 |
 
-**TOML 示例（2D Cowan min3）**：
+**TOML Example (2D Cowan min3)**:
 
 ```toml
 [algorithms.fieldsolver]
@@ -76,38 +76,38 @@ CFL 在论文中为 standard convention，换算到 Entity 需乘以 √(N_dim)�
   CFL = 0.686    # ≡ 0.97 / sqrt(2)
 ```
 
-#### 3D 模板
+#### 3D Stencils
 
-| 求解器 | 优化模式 | 论文 CFL | Entity CFL | delta_x/y/z | beta_(全部6项) |
-|--------|---------|---------|------------|-------------|---------------|
+| Solver | Optimized For | Paper CFL | Entity CFL | delta_x/y/z | beta_(all 6) |
+|--------|--------------|-----------|------------|-------------|--------------|
 | Yee | — | 1.0 | 1/√3 ≈ 0.577 | 0.0 | 0.0 |
 | — | min1 | 0.5 | 0.5/√3 | -0.00867 | -0.00867 |
 | — | min2 | 0.5 | 0.5/√3 | -0.00733 | -0.00867 |
 | — | min3 | 0.5 | 0.5/√3 | -0.006 | -0.00667 |
 | — | min4 | 0.1 | 0.1/√3 | -0.048434 | -0.048434 |
 
-> 3D 模板的 delta_x = delta_y = delta_z，所有 6 个 beta 参数相同。
+> For 3D stencils, delta_x = delta_y = delta_z, and all 6 beta parameters are identical.
 
-### Yee (默认) 模板
+### Yee (Default) Stencil
 
-不设置任何 delta/beta 参数即为标准 Yee 网格。`delta_x/y/z = 0`，`beta_* = 0`。
+Not setting any delta/beta parameters yields the standard Yee mesh. `delta_x/y/z = 0`, `beta_* = 0`.
 
 ---
 
-## 2. 高阶粒子形状函数
+## 2. Higher-Order Particle Shape Functions
 
-### 背景
+### Background
 
-Entity v1.3.0 之前仅支持 1 阶粒子形状函数。现在支持 **1 到 11 阶**，通过 Esirkepov (2001) 电流沉积方案。
+Before Entity v1.3.0, only 1st-order particle shape functions were supported. Now orders **1 through 11** are supported via the Esirkepov (2001) current deposition scheme.
 
-关键头文件：
+Key headers:
 - `kernels/particle_shapes.hpp`
 - `kernels/current_deposit.hpp`
 - `kernels/particle_pusher_sr.hpp`
 
-### 编译配置
+### Build Configuration
 
-高阶形状函数是**编译期选项**，通过 CMake 参数启用：
+Higher-order shape functions are a **compile-time option**, enabled via CMake parameters:
 
 ```bash
 cmake -B build \
@@ -115,57 +115,57 @@ cmake -B build \
   -D shape_order=<N>
 ```
 
-- `<N>` = 1 ~ 11 的整数
-- `deposit=esirkepov` 是必须的（Esirkepov 方案，保证电荷守恒）
+- `<N>` = integer from 1 to 11
+- `deposit=esirkepov` is required (Esirkepov scheme, guarantees charge conservation)
 
-### 效果
+### Effects
 
-- **数值加热显著降低**：在周期性边界条件的漂移等离子体测试中，高阶形状函数允许在远低于 Debye 长度分辨率下运行而不会发生数值加热失控
-- **精度提升**：电流沉积和粒子推进的数值精度提升
+- **Numerical heating significantly reduced**: In drifting plasma tests with periodic boundary conditions, higher-order shape functions allow running at resolutions far below the Debye length without uncontrolled numerical heating
+- **Accuracy improvement**: Numerical accuracy of current deposition and particle push is enhanced
 
-### 性能代价
+### Performance Cost
 
-| 维度 | 计算开销 |
-|------|---------|
-| 1D | **可忽略** |
-| 2D | 中等 |
-| 3D | **可能显著增加** |
+| Dimension | Computational Cost |
+|-----------|-------------------|
+| 1D | **Negligible** |
+| 2D | Moderate |
+| 3D | **Can be significant** |
 
-### 注意事项
+### Important Note
 
-> **强烈建议在降低分辨率前进行收敛性测试。**
+> **Strongly recommended to perform convergence tests before lowering resolution.**
 
-高阶形状函数不能替代正确的物理分辨率，仅作为数值方法的改进手段。
+Higher-order shape functions are not a substitute for proper physical resolution but an improvement to the numerical method.
 
-### TOML 中的对应参数
+### Corresponding TOML Parameters
 
-`[algorithms.deposit]` section（已在 `09-toml-config.md` 中定义）：
+`[algorithms.deposit]` section (defined in `09-toml-config.md`):
 
 ```toml
 [algorithms.deposit]
   enable = true
-  order  = 4   # 必须与 cmake -D shape_order=N 一致
+  order  = 4   # Must match cmake -D shape_order=N
 ```
 
 ---
 
-## 常见陷阱
+## Common Pitfalls
 
-1. **CFL 不匹配** — 使用论文模板值但未换算 CFL（忘记乘以 √(N_dim)），导致 CFL 条件不匹配
-2. **shape_order 与 TOML order 不一致** — CMake 的 `-D shape_order=N` 和 TOML 的 `algorithms.deposit.order` 必须一致
-3. **忘记启用 esirkepov** — 高阶形状函数需要 `-D deposit=esirkepov`，使用默认 deposit 方案无法启用
-4. **盲目使用高阶 shape** — 3D 场景下 11 阶形状函数的计算开销可能非常大，先做收敛性测试
-5. **stencil 仅适用于 Minkowski** — 广义场模板目前仅在 Minkowski 度规下可用（参考 `faraday_mink.hpp`）
+1. **CFL mismatch** — Using paper stencil values without converting CFL (forgetting to multiply by √(N_dim)), resulting in CFL condition mismatch
+2. **shape_order vs TOML order inconsistency** — CMake `-D shape_order=N` and TOML `algorithms.deposit.order` must match
+3. **Forgot to enable esirkepov** — Higher-order shape functions require `-D deposit=esirkepov`; the default deposit scheme cannot be used
+4. **Blindly using high-order shape** — In 3D, 11th-order shape functions can have very large computational cost; run convergence tests first
+5. **Stencil only applicable to Minkowski** — The generalized field stencil is currently only available under the Minkowski metric (see `faraday_mink.hpp`)
 
 ---
 
-## 与 PGen 开发的关系
+## Relationship to PGen Development
 
-高阶方法**主要在 TOML 配置层面**设置，不直接影响 PGen 代码。但以下场景需要关注：
+Higher-order methods are **primarily set at the TOML configuration level** and do not directly affect PGen code. However, the following scenarios require attention:
 
-| 场景 | PGen 注意事项 |
-|------|--------------|
-| stencil 非零参数 | 不影响 PGen 代码，仅 TOML 配置 |
-| 高阶形状函数 | 不影响 PGen 代码，仅编译选项 + TOML |
-| CFL 调整 | TOML `algorithms.timestep.CFL` 需与模板匹配 |
-| 降低分辨率 | PGen 中的物理场/粒子可能需要重新归一化 |
+| Scenario | PGen Consideration |
+|----------|-------------------|
+| Non-zero stencil parameters | Does not affect PGen code; TOML configuration only |
+| Higher-order shape functions | Does not affect PGen code; build option + TOML only |
+| CFL adjustment | TOML `algorithms.timestep.CFL` must match the stencil |
+| Lowering resolution | Physical fields/particles in PGen may need re-normalization |

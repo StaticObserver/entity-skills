@@ -1,132 +1,132 @@
-# 官方 PGen 参考索引
+# Official PGen Reference Index
 
-> 基于 Entity v1.4.4 源码 (`pgens/` 目录)，共 7 个 PGen。
-> 源码地址：https://github.com/entity-toolkit/entity/tree/v1.4.4/pgens
+> Based on Entity v1.4.4 source (`pgens/` directory), 7 PGens total.
+> Source: https://github.com/entity-toolkit/entity/tree/v1.4.4/pgens
 
-编写 PGen 时可参考这些官方实现，每个 PGen 展示了不同的功能组合和代码模式。
+Use these official implementations as references when writing a PGen. Each PGen demonstrates a different combination of features and code patterns.
 
 ---
 
-## 一览
+## Overview
 
-| PGen | Engine | Metric | Dim | 核心功能 |
-|------|--------|--------|-----|---------|
-| [streaming](#streaming) | SRPIC | Minkowski | 1D/2D/3D | 均匀中性等离子体 + 漂移速度 + 倾斜 B 场 |
-| [shock](#shock) | SRPIC | Minkowski | 1D/2D/3D | 部分填充等离子体 + 移动注入器 replenish |
-| [reconnection](#reconnection) | SRPIC | Minkowski | 2D/3D | Harris 电流片 + guide field + open BC + replenish |
-| [turbulence](#turbulence) | SRPIC | Minkowski | 2D/3D | 天线驱动湍流 + Fourier 模式 + 随机驱动 |
-| [magnetosphere](#magnetosphere) | SRPIC | Spherical/QSpherical | 2D | 旋转磁化星体 + 偶极/单极场 + 球坐标 |
-| [wald](#wald) | GRPIC | Kerr-Schild family | 2D | 黑洞磁层 Wald 解 + 竖直 B 场 |
-| [accretion](#accretion) | GRPIC | Kerr-Schild family | 2D | 黑洞磁层 + pair cascade 注入 + GJ 密度 |
+| PGen | Engine | Metric | Dim | Core Features |
+|------|--------|--------|-----|---------------|
+| [streaming](#streaming) | SRPIC | Minkowski | 1D/2D/3D | Uniform neutral plasma + drift velocity + oblique B-field |
+| [shock](#shock) | SRPIC | Minkowski | 1D/2D/3D | Partially filled plasma + moving injector replenish |
+| [reconnection](#reconnection) | SRPIC | Minkowski | 2D/3D | Harris current sheet + guide field + open BC + replenish |
+| [turbulence](#turbulence) | SRPIC | Minkowski | 2D/3D | Antenna-driven turbulence + Fourier modes + random driving |
+| [magnetosphere](#magnetosphere) | SRPIC | Spherical/QSpherical | 2D | Rotating magnetized star + dipole/monopole field + spherical coordinates |
+| [wald](#wald) | GRPIC | Kerr-Schild family | 2D | Black hole magnetosphere Wald solution + uniform vertical B-field |
+| [accretion](#accretion) | GRPIC | Kerr-Schild family | 2D | Black hole magnetosphere + pair cascade injection + GJ density |
 
 ---
 
 ## streaming
 
-**最简单的入门 PGen**。均匀等离子体 + 恒定倾斜磁场，适合作为新 PGen 的起点。
+**The simplest starter PGen**. Uniform plasma + constant oblique magnetic field. Ideal as a starting point for new PGens.
 
-**功能清单**：
-- `InitFields` — 均匀倾斜 B 场（Bmag, Btheta, Bphi），E = 0
-- `InitPrtls` — 成对注入 Maxwellian 分布粒子（nspec 必须为偶数），支持每物种独立温度和漂移速度
+**Feature Checklist**:
+- `InitFields` — Uniform oblique B-field (Bmag, Btheta, Bphi), E = 0
+- `InitPrtls` — Pair-injected Maxwellian-distributed particles (nspec must be even), supports per-species independent temperature and drift velocity
 
-**可参考的模式**：traits 声明、参数读取、InjectUniformMaxwellians 用法、多物种循环
+**Reference Patterns**: traits declaration, parameter reading, InjectUniformMaxwellians usage, multi-species looping
 
 ---
 
 ## shock
 
-**部分填充 + 移动注入器**的典型实现。等离子体初始只占据域的一部分，注入窗口随时间推进不断补充新鲜等离子体。
+**Classic implementation of partial filling + moving injector**. Plasma initially occupies only a fraction of the domain, with the injection window advancing over time continuously replenishing fresh plasma.
 
-**功能清单**：
-- `InitFields` — 均匀倾斜 B 场，E = -v x B
-- `InitPrtls` — 部分填充 Maxwellian 分布（filling_fraction 控制填充比例），两个物种不同温度
-- `CustomPostStep` — 移动注入器：清除窗口内旧粒子 → 重置 EM 场 → 注入新 Maxwellian 分布
+**Feature Checklist**:
+- `InitFields` — Uniform oblique B-field, E = -v x B
+- `InitPrtls` — Partially filled Maxwellian distribution (filling_fraction controls fill ratio), two species with different temperatures
+- `CustomPostStep` — Moving injector: clear old particles in window → reset EM fields → inject new Maxwellian distribution
 
-**可参考的模式**：部分域填充、CustomPostStep 粒子 replenish、场重置
+**Reference Patterns**: partial domain filling, CustomPostStep particle replenish, field reset
 
 ---
 
 ## reconnection
 
-**磁重联**的完整实现。Harris 型电流片 + guide field + 开放边界 + 边界 replenish。
+**Complete implementation of magnetic reconnection**. Harris-type current sheet + guide field + open boundaries + boundary replenish.
 
-**功能清单**：
-- `InitFields` — Harris 电流片 B 场（tanh 剖面）+ guide field
-- `InitPrtls` — 均匀背景 Maxwellian + 电流片非均匀密度层，CurrentLayer 空间分布，电流片内漂移速度
-- `CustomPostStep` — 开放边界激活后，在顶部/底部边界 replenish 背景密度粒子
-- `MatchFields` — x1 方向 MATCH 边界场值
+**Feature Checklist**:
+- `InitFields` — Harris current sheet B-field (tanh profile) + guide field
+- `InitPrtls` — Uniform background Maxwellian + current sheet non-uniform density layer, CurrentLayer spatial distribution, drift velocity within current sheet
+- `CustomPostStep` — After open boundaries are activated, replenish background density particles at top/bottom boundaries
+- `MatchFields` — x1-direction MATCH boundary field values
 
-**可参考的模式**：非均匀场（tanh）、非均匀粒子分布（CurrentLayer）、Open BC + replenish、MatchFields、漂移速度计算
+**Reference Patterns**: non-uniform field (tanh), non-uniform particle distribution (CurrentLayer), Open BC + replenish, MatchFields, drift velocity computation
 
 ---
 
 ## turbulence
 
-**天线驱动湍流**。通过 Fourier 模式叠加 + 随机驱动模拟湍动谱。
+**Antenna-driven turbulence**. Simulates a turbulent spectrum via Fourier mode superposition + random driving.
 
-**功能清单**：
-- `InitFields` — 多 Fourier 模式叠加的横向磁场扰动 + 引导场 bx3 = 1.0
-- `ExternalCurrent` — 由矢量势旋度计算驱动电流（jx1/jx2/jx3）
-- `InitPrtls` — 单温度 Maxwellian 注入
-- `CustomPostStep` — 随机驱动（Langevin 型噪声 + 阻尼），粒子 escape/reset 循环
+**Feature Checklist**:
+- `InitFields` — Transverse magnetic field perturbation from multiple Fourier mode superposition + guide field bx3 = 1.0
+- `ExternalCurrent` — Driving current computed from vector potential curl (jx1/jx2/jx3)
+- `InitPrtls` — Single-temperature Maxwellian injection
+- `CustomPostStep` — Random driving (Langevin-type noise + damping), particle escape/reset loop
 
-**可参考的模式**：ext_current（天线驱动）、Fourier 模式叠加、CustomPostStep 随机驱动、escape 粒子处理
+**Reference Patterns**: ext_current (antenna driving), Fourier mode superposition, CustomPostStep random driving, escape particle handling
 
 ---
 
 ## magnetosphere
 
-**球坐标 + 旋转星体磁层**。SRPIC 下使用 Spherical/QSpherical 坐标的唯一官方 PGen。
+**Spherical coordinates + rotating stellar magnetosphere**. The only official PGen using Spherical/QSpherical coordinates under SRPIC.
 
-**功能清单**：
-- `InitFields` — 偶极场（r⁻³ 衰减，cosθ 角分布）或单极场（r⁻² 衰减）
-- `DriveFields`（继承 InitFields）— 叠加刚性旋转感应电场（E = -v×B，v = Ω×r）
-- `MatchFields` — 内边界匹配场值（传递时间参数给 DriveFields）
+**Feature Checklist**:
+- `InitFields` — Dipole field (r⁻³ decay, cosθ angular distribution) or monopole field (r⁻² decay)
+- `DriveFields` (derives from InitFields) — Superimpose rigid-rotation induced electric field (E = -v×B, v = Ω×r)
+- `MatchFields` — Inner boundary matching field values (passing time parameter to DriveFields)
 
-**可参考的模式**：Spherical 坐标、继承式 Field Setter（InitFields → DriveFields）、MatchFields 传递时变参数、球坐标下的场分量
+**Reference Patterns**: Spherical coordinates, inherited Field Setter (InitFields → DriveFields), MatchFields passing time-varying parameters, field components in spherical coordinates
 
 ---
 
 ## wald
 
-**GRPIC 黑洞磁层初始化**。仅设初始场，无粒子。
+**GRPIC black hole magnetosphere initialization**. Sets up initial fields only; no particles.
 
-**功能清单**：
-- `InitFields` — Wald 真空解（磁势 A₃ → 有限差分计算 B 和 D）或竖直均匀 B 场
-- 支持 `Kerr_Schild` / `QKerr_Schild` / `Kerr_Schild_0` 三种度规
+**Feature Checklist**:
+- `InitFields` — Wald vacuum solution (magnetic potential A₃ → finite-difference computation of B and D) or uniform vertical B-field
+- Supports three metrics: `Kerr_Schild` / `QKerr_Schild` / `Kerr_Schild_0`
 
-**可参考的模式**：GRPIC traits、势方法（A₃/A₀/A₁）、GR metric API（spin、h_ij、alpha）
+**Reference Patterns**: GRPIC traits, potential method (A₃/A₀/A₁), GR metric API (spin, h_ij, alpha)
 
 ---
 
 ## accretion
 
-**GRPIC 黑洞磁层 + pair cascade**。7 个 PGen 中最复杂的。
+**GRPIC black hole magnetosphere + pair cascade**. The most complex of the 7 PGens.
 
-**功能清单**：
-- `InitFields` — Wald 解 + 竖直 B 场（与 wald 类似）
-- `InitPrtls` — 在磁化参数超过阈值且密度低于阈值的区域注入 e⁻/e⁺ 对（Goldreich-Julian 密度标度）
-- `CustomPostStep` — 周期性 pair injection 循环
+**Feature Checklist**:
+- `InitFields` — Wald solution + uniform vertical B-field (similar to wald)
+- `InitPrtls` — Inject e⁻/e⁺ pairs in regions where magnetization exceeds threshold and density is below threshold (Goldreich-Julian density scaling)
+- `CustomPostStep` — Periodic pair injection loop
 
-**可参考的模式**：GRPIC + 粒子注入、条件注入（sigma > threshold, density < threshold）、GJ 密度计算、Kerr-Schild 坐标下的粒子初始化
+**Reference Patterns**: GRPIC + particle injection, conditional injection (sigma > threshold, density < threshold), GJ density computation, particle initialization in Kerr-Schild coordinates
 
 ---
 
-## 功能矩阵
+## Feature Matrix
 
-从上到下排列，可快速找到包含特定功能的 PGen：
+Arranged from top to bottom for quick lookup of PGens containing a specific feature:
 
-| 功能 | streaming | shock | reconnection | turbulence | magnetosphere | wald | accretion |
-|------|:---:|:---:|:---:|:---:|:---:|:---:|:---:|
-| InitFields (均匀 B) | ✓ | ✓ | | | | | |
-| InitFields (非均匀 B) | | | ✓ | ✓ | ✓ | ✓ | ✓ |
-| InitFields (球坐标) | | | | | ✓ | | |
-| InitFields (势方法 A) | | | | | | ✓ | |
+| Feature | streaming | shock | reconnection | turbulence | magnetosphere | wald | accretion |
+|---------|:---:|:---:|:---:|:---:|:---:|:---:|:---:|
+| InitFields (uniform B) | ✓ | ✓ | | | | | |
+| InitFields (non-uniform B) | | | ✓ | ✓ | ✓ | ✓ | ✓ |
+| InitFields (spherical) | | | | | ✓ | | |
+| InitFields (potential method A) | | | | | | ✓ | |
 | InitPrtls (Uniform Maxwellian) | ✓ | ✓ | ✓ | ✓ | | | |
 | InitPrtls (NonUniform) | | | ✓ | | | | |
-| InitPrtls (GR 粒子) | | | | | | | ✓ |
+| InitPrtls (GR particles) | | | | | | | ✓ |
 | ext_current | | | | ✓ | | | |
 | MatchFields | | | ✓ | | ✓ | | |
 | CustomPostStep | | ✓ | ✓ | ✓ | | | ✓ |
-| Spherical 坐标 | | | | | ✓ | | |
+| Spherical coordinates | | | | | ✓ | | |
 | GRPIC / Kerr-Schild | | | | | | ✓ | ✓ |

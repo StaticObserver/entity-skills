@@ -1,67 +1,67 @@
-# 06 — 边界条件（MatchFields / FixFieldsConst / AtmFields）
+# 06 — Boundary Conditions (MatchFields / FixFieldsConst / AtmFields)
 
-> 基于 Entity v1.4.4
+> Based on Entity v1.4.4
 
-## 何时使用
+## When to Use
 
-需要非 PERIODIC 边界条件时。触发关键词：open boundary、匹配边界、固定边界、大气层边界、吸收边界、视界边界、导体边界、MatchFields、FixFields、AtmFields。
+When non-PERIODIC boundary conditions are needed. Trigger keywords: open boundary, matching boundary, fixed boundary, atmosphere boundary, absorbing boundary, horizon boundary, conducting boundary, MatchFields, FixFields, AtmFields.
 
-**如果所有方向都是 PERIODIC，跳过此 reference。**
-
----
-
-## BC 类型总览
-
-### 场 BC
-
-| TOML 值 | 含义 | PGen 中的对应方法 |
-|---------|------|------------------|
-| `"PERIODIC"` | 周期性 | 不需要 |
-| `"MATCH"` | 匹配边界 | `MatchFields(time)` 或 `MatchFieldsInX1/X2/X3(time)` |
-| `"FIXED"` | 固定值边界 | `FixFieldsConst(time, bc_in, em)` |
-| `"ATMOSPHERE"` | 大气层边界 | `AtmFields(time)` |
-| `"CUSTOM"` | 自定义 | 引擎扩展 |
-| `"HORIZON"` | 视界边界（仅 GR） | 不需要（自动处理） |
-| `"CONDUCTOR"` | 导体边界 | `FixFieldsConst` |
-
-### 粒子 BC
-
-| TOML 值 | 含义 | 配对要求 |
-|---------|------|---------|
-| `"PERIODIC"` | 周期性 | — |
-| `"ABSORB"` | 吸收 | — |
-| `"ATMOSPHERE"` | 大气层 | 与场 ATMOSPHERE 配对 |
-| `"CUSTOM"` | 自定义 | — |
-| `"REFLECT"` | 反射 | 与场 CONDUCTOR 配对 |
-| `"HORIZON"` | 视界 | — |
+**If all directions are PERIODIC, skip this reference.**
 
 ---
 
-## MatchFields（MATCH 边界）
+## BC Type Overview
 
-### 签名
+### Field BC
+
+| TOML Value | Meaning | Corresponding Method in PGen |
+|------------|---------|------------------------------|
+| `"PERIODIC"` | Periodic | Not needed |
+| `"MATCH"` | Matching boundary | `MatchFields(time)` or `MatchFieldsInX1/X2/X3(time)` |
+| `"FIXED"` | Fixed value boundary | `FixFieldsConst(time, bc_in, em)` |
+| `"ATMOSPHERE"` | Atmosphere boundary | `AtmFields(time)` |
+| `"CUSTOM"` | Custom | Engine extension |
+| `"HORIZON"` | Horizon boundary (GR only) | Not needed (automatic) |
+| `"CONDUCTOR"` | Conducting boundary | `FixFieldsConst` |
+
+### Particle BC
+
+| TOML Value | Meaning | Pairing Requirement |
+|------------|---------|---------------------|
+| `"PERIODIC"` | Periodic | — |
+| `"ABSORB"` | Absorbing | — |
+| `"ATMOSPHERE"` | Atmosphere | Pair with field ATMOSPHERE |
+| `"CUSTOM"` | Custom | — |
+| `"REFLECT"` | Reflecting | Pair with field CONDUCTOR |
+| `"HORIZON"` | Horizon | — |
+
+---
+
+## MatchFields (MATCH Boundary)
+
+### Signature
 
 ```cpp
-// 通用 MATCH（所有方向用同一个）
+// Generic MATCH (same for all directions)
 auto MatchFields(simtime_t time) const -> FieldSetterType;
 
-// 方向特定 MATCH
+// Direction-specific MATCH
 auto MatchFieldsInX1(simtime_t time) const -> FieldSetterType;
 auto MatchFieldsInX2(simtime_t time) const -> FieldSetterType;
 auto MatchFieldsInX3(simtime_t time) const -> FieldSetterType;
 ```
 
-### 参数说明
+### Parameter Description
 
-| 参数 | 含义 |
-|------|------|
-| `time` | 当前模拟时间（用于时间依赖边界场） |
-| 返回值 | 一个 field setter 结构体（与 InitFields 同接口） |
+| Parameter | Meaning |
+|-----------|---------|
+| `time` | Current simulation time (for time-dependent boundary fields) |
+| Return value | A field setter struct (same interface as InitFields) |
 
-### 代码示例
+### Code Example
 
 ```cpp
-// 简单的常数匹配场
+// Simple constant matching field
 template <Dimension D>
 struct MatchData {
     Inline auto bx1(const coord_t<D>&) const -> real_t { return 1.0; }
@@ -74,46 +74,46 @@ auto MatchFields(simtime_t time) const {
 }
 ```
 
-**MatchFields vs MatchFieldsInX1/X2/X3**：
-- `MatchFields` 对全部有 MATCH 的方向通用
-- `MatchFieldsInX1` 只在 X1 方向的 MATCH 边界使用，X2/X3 可用不同的
+**MatchFields vs MatchFieldsInX1/X2/X3**:
+- `MatchFields` is generic for all directions with MATCH
+- `MatchFieldsInX1` is only used on MATCH boundaries in the X1 direction; X2/X3 can use different ones
 
-### TOML 配置
+### TOML Configuration
 
 ```toml
 [boundaries]
   fields    = [["MATCH"], ["PERIODIC"]]     # X1=MATCH, X2=PERIODIC
   particles = [["ABSORB"], ["PERIODIC"]]
-  match_ds  = 0.5                           # 匹配层宽度
+  match_ds  = 0.5                           # Matching layer width
 ```
 
 ---
 
-## FixFieldsConst（FIXED 边界）
+## FixFieldsConst (FIXED Boundary)
 
-### 签名
+### Signature
 
 ```cpp
 auto FixFieldsConst(simtime_t time, const bc_in& bc, const em& comp) const
     -> std::pair<real_t, bool>;
 ```
 
-### 参数说明
+### Parameter Description
 
-| 参数 | 含义 |
-|------|------|
-| `time` | 当前时间 |
-| `bc` | 哪个边界：`bc_in::Mx1`(左), `bc_in::Px1`(右), `bc_in::Mx2`, `bc_in::Px2`, ... |
-| `comp` | 哪个分量：`em::ex1`, `em::bx2`, `em::dx3`, ... |
-| 返回值 `pair<real_t, bool>` | 值 + 是否应用 |
+| Parameter | Meaning |
+|-----------|---------|
+| `time` | Current time |
+| `bc` | Which boundary: `bc_in::Mx1`(left), `bc_in::Px1`(right), `bc_in::Mx2`, `bc_in::Px2`, ... |
+| `comp` | Which component: `em::ex1`, `em::bx2`, `em::dx3`, ... |
+| Return value `pair<real_t, bool>` | Value + whether to apply |
 
-### 代码示例
+### Code Example
 
 ```cpp
 auto FixFieldsConst(simtime_t time, const bc_in& bc, const em& comp) const
     -> std::pair<real_t, bool> {
 
-    // X1 左边界 → 时间依赖驱动
+    // X1 left boundary → time-dependent drive
     if (bc == bc_in::Mx1) {
         real_t ramp = time < t_transition
             ? time / t_transition
@@ -126,32 +126,32 @@ auto FixFieldsConst(simtime_t time, const bc_in& bc, const em& comp) const
         }
     }
 
-    // 未处理的分量 → 不应用
+    // Unhandled components → not applied
     return { ZERO, false };
 }
 ```
 
-### TOML 配置
+### TOML Configuration
 
 ```toml
 [boundaries]
   fields    = [["FIXED"], ["PERIODIC"]]
-  particles = [["REFLECT"], ["PERIODIC"]]   # FIXED 场 + REFLECT 粒子 = CONDUCTOR
+  particles = [["REFLECT"], ["PERIODIC"]]   # FIXED field + REFLECT particles = CONDUCTOR
 ```
 
 ---
 
-## AtmFields（ATMOSPHERE 边界）
+## AtmFields (ATMOSPHERE Boundary)
 
-### 签名
+### Signature
 
 ```cpp
 auto AtmFields(simtime_t time) const -> FieldSetterType;
 ```
 
-返回值是一个 field setter（与 InitFields 相同接口），在 atmosphere 层中设置场值。
+The return value is a field setter (same interface as InitFields), which sets field values in the atmosphere layer.
 
-### 代码示例
+### Code Example
 
 ```cpp
 template <Dimension D>
@@ -171,7 +171,7 @@ auto AtmFields(simtime_t time) const {
 }
 ```
 
-### TOML 配置
+### TOML Configuration
 
 ```toml
 [boundaries]
@@ -182,16 +182,16 @@ auto AtmFields(simtime_t time) const {
     temperature = 0.01
     density     = 1.0
     height      = 1.0
-    species     = [1, 2]    # 哪些物种参与大气层
+    species     = [1, 2]    # Which species participate in the atmosphere
     ds          = 0.5
-    g           = 1.0       # 引力加速度
+    g           = 1.0       # Gravitational acceleration
 ```
 
 ---
 
-## Dynamic BC 切换（CustomPostStep 中）
+## Dynamic BC Switching (in CustomPostStep)
 
-在运行中动态切换边界类型：
+Dynamically switch boundary types at runtime:
 
 ```cpp
 void CustomPostStep(timestep_t step, simtime_t time, Domain<S, M>& domain) {
@@ -204,23 +204,23 @@ void CustomPostStep(timestep_t step, simtime_t time, Domain<S, M>& domain) {
 }
 ```
 
-**注意**：使用 `setFldsBC`/`setPrtlBC` 的 PGen 必须用 non-const `Metadomain<S, M>&`（见 `01-skeleton.md`）。
+**Note**: PGen using `setFldsBC`/`setPrtlBC` must use a non-const `Metadomain<S, M>&` (see `01-skeleton.md`).
 
 ---
 
-## 球坐标和 GR 特殊情况
+## Spherical Coordinates and GR Special Cases
 
-| 情况 | BC 设置 |
-|------|--------|
-| Spherical θ 边界 | 自动设置（不需要在 TOML 中指定） |
-| Spherical φ 边界 | 自动 PERIODIC（因为 2π 周期性） |
-| GR HORIZON 边界 | 自动设置（不需要在 TOML 中指定，不需要 pgen 方法） |
+| Case | BC Settings |
+|------|-------------|
+| Spherical theta boundary | Automatically set (no need to specify in TOML) |
+| Spherical phi boundary | Automatically PERIODIC (due to 2-pi periodicity) |
+| GR HORIZON boundary | Automatically set (no need to specify in TOML, no pgen method needed) |
 
-在这些情况下，TOML 只设置**不自动处理**的维度。例如 2D Spherical 只需设置 rmin 边界的 BC。
+In these cases, TOML only sets BC for dimensions that are **not automatically handled**. For example, 2D Spherical only needs BC settings for the rmin boundary.
 
 ---
 
-## 所需 Includes
+## Required Includes
 
 ```cpp
 #include "enums.h"     // bc_in, em, FldsBC, PrtlBC
@@ -228,22 +228,22 @@ void CustomPostStep(timestep_t step, simtime_t time, Domain<S, M>& domain) {
 
 ---
 
-## 约束与不兼容
+## Constraints and Incompatibilities
 
-| 约束 | 说明 |
-|------|------|
-| CONDUCTOR 场 + REFLECT 粒子 | 必须配对使用 |
-| ATMOSPHERE 场 + ATMOSPHERE 粒子 | 必须配对使用 |
-| HORIZON 仅 GR | SRPIC 中不存在视界边界 |
-| MatchFields 和 MatchFieldsInX1 的优先级 | 同时定义时，方向特定的版本优先 |
-| FixFieldsConst 的 bc_in 参数 | 必须用 `bc_in::Mx1` 而不是 `"x1"` 字符串 |
+| Constraint | Description |
+|------------|-------------|
+| CONDUCTOR field + REFLECT particles | Must be paired |
+| ATMOSPHERE field + ATMOSPHERE particles | Must be paired |
+| HORIZON GR only | Horizon boundaries do not exist in SRPIC |
+| MatchFields and MatchFieldsInX1 priority | When both are defined, the direction-specific version takes priority |
+| FixFieldsConst bc_in parameter | Must use `bc_in::Mx1`, not `"x1"` string |
 
 ---
 
-## 常见陷阱
+## Common Pitfalls
 
-1. **match_ds 太小** — 匹配层太薄 → 场在边界振荡 → 增加 match_ds (5-10% of domain)
-2. **忘了 particle BC** — 只设 fields BC 不设 particles BC → 粒子堆积或泄漏
-3. **球坐标设错维度** — 2D Spherical 的 BC 数组只需 1 个元素（r 方向），theta 和 phi 自动处理
-4. **AtmFields 不完整** — atmosphere 边界需要 TOML 中的 `[boundaries.atmosphere]` 配置才能正常工作
-5. **Dynamic BC 后忘记改回** — 如果 setFldsBC 是永久变更，后续所有步都受影响。用 flag 确保只切换一次
+1. **match_ds too small** — matching layer too thin → fields oscillate at boundary → increase match_ds (5-10% of domain)
+2. **Forgot particle BC** — only setting fields BC without particles BC → particle accumulation or leakage
+3. **Wrong dimensions set for spherical coordinates** — 2D Spherical BC array only needs 1 element (r direction); theta and phi are handled automatically
+4. **Incomplete AtmFields** — atmosphere boundaries need `[boundaries.atmosphere]` configuration in TOML to work properly
+5. **Forgot to revert after Dynamic BC** — if setFldsBC is a permanent change, all subsequent steps are affected. Use a flag to ensure it switches only once

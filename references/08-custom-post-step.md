@@ -1,58 +1,58 @@
-# 08 — 时间步钩子（CustomPostStep）
+# 08 — Timestep Hook (CustomPostStep)
 
-> 基于 Entity v1.4.4
+> Based on Entity v1.4.4
 
-## 何时使用
+## When to Use
 
-需要在每个（或每 N 个）时间步执行自定义逻辑时。触发关键词：时间步钩子、周期性注入、补充粒子、移动注入器、动态边界切换、移动窗口、piston、粒子清理、场驱动。
+When you need to execute custom logic at every (or every N-th) timestep. Trigger keywords: timestep hook, periodic injection, particle replenishment, moving injector, dynamic boundary switching, moving window, piston, particle cleanup, field driving.
 
-**如果模拟不需要任何时间步级别的自定义行为，跳过此 reference。**
+**If your simulation does not require any timestep-level custom behavior, skip this reference.**
 
 ---
 
-## 基础签名
+## Basic Signature
 
 ```cpp
 void CustomPostStep(timestep_t step, simtime_t time, Domain<S, M>& domain);
 ```
 
-| 参数 | 含义 | 注意 |
-|------|------|------|
-| `step` | 当前步序号（从 0 开始） | 用于 `step % N` 频率控制 |
-| `time` | 当前模拟时间 | **代码单位** |
-| `domain` | 可读写的 Domain | fields, species, particles, mesh |
+| Parameter | Meaning | Note |
+|-----------|---------|------|
+| `step` | Current step index (0-based) | Used for `step % N` frequency control |
+| `time` | Current simulation time | **Code units** |
+| `domain` | Read-write Domain | fields, species, particles, mesh |
 
-### Domain 可访问的内容
+### What Domain Provides Access To
 
-- `domain.fields.em` — 电磁场数组（Kokkos View）
-- `domain.species[s]` — 第 s 个物种的粒子数据
-- `domain.species[s].particles` — 粒子容器（i1, dx1, tag, ux1, ux2, ux3, ...）
-- `domain.species[s].rangeActiveParticles()` — 活粒子的 Kokkos 遍历范围
-- `domain.mesh` — 网格元数据
-- `domain.mesh.metric` — metric 对象
+- `domain.fields.em` — EM field arrays (Kokkos View)
+- `domain.species[s]` — Particle data for species s
+- `domain.species[s].particles` — Particle container (i1, dx1, tag, ux1, ux2, ux3, ...)
+- `domain.species[s].rangeActiveParticles()` — Kokkos iteration range for active particles
+- `domain.mesh` — Mesh metadata
+- `domain.mesh.metric` — Metric object
 
-### 单位系统
+### Unit System
 
-**CustomPostStep 中使用代码单位。**这与 InitPrtls 的物理单位不同。
+**CustomPostStep uses code units.** This differs from InitPrtls which uses physical units.
 
-- `domain.fields.em(i, j, em::ex1)` → 代码单位电场
-- `species.particles.ux1(p)` → 代码单位四速
-- `time` → 代码单位时间
+- `domain.fields.em(i, j, em::ex1)` → electric field in code units
+- `species.particles.ux1(p)` → four-velocity in code units
+- `time` → time in code units
 
 ---
 
-## 子模式 1：Replenish 补充注入
+## Sub-pattern 1: Replenish Injection
 
-**来源**：reconnection, shock, accretion, replenish examples
+**Source**: reconnection, shock, accretion, replenish examples
 
-保持某个区域的目标密度，每 N 步补充不足的粒子：
+Maintain a target density in a region, replenishing insufficient particles every N steps:
 
 ```cpp
 void CustomPostStep(timestep_t step, simtime_t time, Domain<S, M>& domain) {
     const int replenish_interval = 100;
     if (step % replenish_interval != 0) return;
 
-    // 1. 计算当前密度
+    // 1. Compute current density
     ndfield_t<M::Dim, 3> buff("density", domain.mesh.rangeActiveCells());
     arch::ComputeMomentWithSpecies<S, M, FldsID::N, 3>(
         params, domain, { 1, 2 }, buff, {}, 0u, 0u);
@@ -61,38 +61,38 @@ void CustomPostStep(timestep_t step, simtime_t time, Domain<S, M>& domain) {
     arch::spatial_dist::ReplenishUniform<M, 3> sdist(
         domain.mesh.metric, buff, 0u, target_density);
 
-    // 3. 注入
+    // 3. Inject
     arch::InjectNonUniform<S, M, ED1, ED2, decltype(sdist)>(
         params, domain,
-        { 1, 2 },              // 物种
-        { edist1, edist2 },    // 能量分布
-        sdist,                  // 补充分布
+        { 1, 2 },              // species
+        { edist1, edist2 },    // energy distributions
+        sdist,                  // replenishment distribution
         target_density,
         false                   // use_weights
     );
 }
 ```
 
-详细说明见 `03-particle-injection.md` 的"补充注入"部分。
+See the "Replenish Injection" section in `03-particle-injection.md` for details.
 
 ---
 
-## 子模式 2：Moving Injector 移动注入器
+## Sub-pattern 2: Moving Injector
 
-**来源**：shock pgen
+**Source**: shock pgen
 
-注入器以固定速度扫过模拟区域，清除旧区域粒子、重置场、注入新粒子：
+The injector sweeps through the simulation domain at a fixed velocity, clearing old-region particles, resetting fields, and injecting new particles:
 
 ```cpp
 void CustomPostStep(timestep_t step, simtime_t time, Domain<S, M>& domain) {
     if (step % injection_frequency != 0) return;
 
-    // 1. 计算注入区域
+    // 1. Compute injection region
     real_t x_init = global_xmin + filling_fraction * (global_xmax - global_xmin);
     real_t xmax = x_init + injector_velocity * (std::max(time - injection_start, ZERO) + dt);
     real_t xmin = xmax - injection_frequency * dt;
 
-    // 2. 构建清除区域 box
+    // 2. Build purge region box
     boundaries_t<bool> incl_ghosts;
     for (auto d = 0; d < M::Dim; ++d) {
         incl_ghosts.emplace_back(false, false);
@@ -104,7 +104,7 @@ void CustomPostStep(timestep_t step, simtime_t time, Domain<S, M>& domain) {
     }
     auto extent = domain.mesh.ExtentToRange(purge_box, incl_ghosts);
 
-    // 3. 重置清除区域的场
+    // 3. Reset fields in purge region
     tuple_t<ncells_t, M::Dim> x_min, x_max;
     for (auto d = 0; d < M::Dim; ++d) {
         x_min[d] = extent[d].first;
@@ -119,7 +119,7 @@ void CustomPostStep(timestep_t step, simtime_t time, Domain<S, M>& domain) {
     );
     metadomain.CommunicateFields(domain, Comm::E | Comm::B);
 
-    // 4. 标记清除区域的粒子为 dead
+    // 4. Mark particles in purge region as dead
     for (auto s = 0u; s < 2; ++s) {
         auto& species = domain.species[s];
         auto i1  = species.i1;
@@ -138,7 +138,7 @@ void CustomPostStep(timestep_t step, simtime_t time, Domain<S, M>& domain) {
         );
     }
 
-    // 5. 在新区域注入
+    // 5. Inject in new region
     boundaries_t<real_t> inj_box;
     inj_box.emplace_back(xmin, xmax);
     for (auto d = 1u; d < M::Dim; ++d) inj_box.push_back(Range::All);
@@ -151,11 +151,11 @@ void CustomPostStep(timestep_t step, simtime_t time, Domain<S, M>& domain) {
 
 ---
 
-## 子模式 3：Dynamic BC 动态边界切换
+## Sub-pattern 3: Dynamic BC Switching
 
-**来源**：reconnection pgen
+**Source**: reconnection pgen
 
-在指定时间后打开边界：
+Open boundaries after a specified time:
 
 ```cpp
 void CustomPostStep(timestep_t step, simtime_t time, Domain<S, M>& domain) {
@@ -171,36 +171,36 @@ void CustomPostStep(timestep_t step, simtime_t time, Domain<S, M>& domain) {
 }
 ```
 
-**前置条件**：PGen 的 constructor 必须用 non-const `Metadomain<S, M>&`（不是 `const Metadomain<S, M>&`）
+**Prerequisite**: The PGen constructor must accept a non-const `Metadomain<S, M>&` (not `const Metadomain<S, M>&`).
 
 ---
 
-## 子模式 4：Moving Window 移动窗口
+## Sub-pattern 4: Moving Window
 
-**来源**：moving_window example
+**Source**: moving_window example
 
 ```cpp
-// 在 PGen 中定义一个 MovingWindow 内部 struct
+// Define a MovingWindow inner struct in PGen
 struct MovingWindow {
-    real_t pos_i;     // 整数格点位置
-    real_t pos_di;    // 分数部分
-    real_t v;         // 窗口速度
+    real_t pos_i;     // integer cell position
+    real_t pos_di;    // fractional part
+    real_t v;         // window velocity
 
     void init(const M& metric, real_t global_x) {
-        // 物理坐标 → 计算坐标
+        // Physical coordinate → computational coordinate
         pos_i = metric.template convert<1, Crd::Ph, Crd::Cd>(global_x);
         pos_di = ZERO;
     }
 
     void update(real_t dt, ncells_t N_GHOSTS,
                 Metadomain<S, M>& metadomain, Domain<S, M>& domain) {
-        // 累加位移
+        // Accumulate displacement
         pos_di += v * dt / domain.mesh.template dx<1>();
         real_t shift = math::floor(pos_di);
         pos_i += shift;
         pos_di -= shift;
 
-        // 触发窗口移动
+        // Trigger window shift
         while (pos_i >= static_cast<real_t>(N_GHOSTS)) {
             arch::MoveWindow<M, in::x1>(domain, metadomain, N_GHOSTS);
             pos_i -= N_GHOSTS;
@@ -210,13 +210,13 @@ struct MovingWindow {
 
 MovingWindow moving_window;
 
-// InitPrtls 中初始化
+// Initialize in InitPrtls
 void InitPrtls(Domain<S, M>& domain) {
     moving_window.init(domain.mesh.metric, global_xmin);
-    // ... 粒子注入 ...
+    // ... particle injection ...
 }
 
-// CustomPostStep 中每步调用
+// Call every step in CustomPostStep
 void CustomPostStep(timestep_t step, simtime_t time, Domain<S, M>& domain) {
     moving_window.update(dt, N_GHOSTS, metadomain, domain);
 }
@@ -224,26 +224,26 @@ void CustomPostStep(timestep_t step, simtime_t time, Domain<S, M>& domain) {
 
 ---
 
-## 子模式 5：CustomParticleUpdate / Piston
+## Sub-pattern 5: CustomParticleUpdate / Piston
 
-**注意**：这是一个**独立的 trait**（不是 CustomPostStep 的一部分），在这里一并说明。
+**Note**: This is a **separate trait** (not part of CustomPostStep), documented here for convenience.
 
-### 签名
+### Signature
 
 ```cpp
 auto CustomParticleUpdate(simtime_t time, spidx_t sp, const Domain<S, M>& domain) const -> UpdateFunctor;
 ```
 
-返回一个 functor，在 pusher 循环内对每个粒子调用：
+Returns a functor called for each particle inside the pusher loop:
 
 ```cpp
 struct PistonUpdate {
     real_t x_piston, v_piston, global_xmax;
 
     Inline void operator()(
-        spidx_t           p,       // 粒子索引
-        const kernel::sr::PusherContext& ctx,      // ctx.dt 可用
-        const kernel::sr::PusherBoundaries<D>&,    // 暂时忽略（活塞用自定义逻辑）
+        spidx_t           p,       // particle index
+        const kernel::sr::PusherContext& ctx,      // ctx.dt available
+        const kernel::sr::PusherBoundaries<D>&,    // ignore for now (piston uses custom logic)
         const ParticleArrays& particles,
         const M& metric
     ) const {
@@ -259,7 +259,7 @@ auto CustomParticleUpdate(simtime_t time, spidx_t sp,
 }
 ```
 
-### TOML 参数
+### TOML Parameters
 
 ```toml
 [setup]
@@ -268,12 +268,12 @@ auto CustomParticleUpdate(simtime_t time, spidx_t sp,
 
 ---
 
-## 场重置工具模式
+## Field Reset Utility Pattern
 
-在任何需要手动设置场的场景中：
+In any scenario requiring manual field setting:
 
 ```cpp
-// 1. 内核调用
+// 1. Kernel call
 Kokkos::parallel_for(
     "SetFields",
     CreateRangePolicy<M::Dim>(x_min, x_max),
@@ -282,19 +282,19 @@ Kokkos::parallel_for(
     }
 );
 
-// 2. 必须后跟通信（同步 ghost cells）
+// 2. Must follow with communication (sync ghost cells)
 metadomain.CommunicateFields(domain, Comm::E | Comm::B);
 ```
 
-**忘记 `CommunicateFields` 是最常见的场重置 bug**。
+**Forgetting `CommunicateFields` is the most common field-reset bug.**
 
 ---
 
-## 所需 Includes
+## Required Includes
 
 ```cpp
 #include "archetypes/field_setter.h"       // SetEMFields_kernel
-#include "archetypes/particle_injector.h"  // Inject* 函数
+#include "archetypes/particle_injector.h"  // Inject* functions
 #include "archetypes/spatial_dist.h"       // ReplenishUniform, Replenish
 #include "archetypes/utils.h"              // ComputeMomentWithSpecies
 #include "archetypes/moving_window.h"      // MoveWindow
@@ -303,22 +303,22 @@ metadomain.CommunicateFields(domain, Comm::E | Comm::B);
 
 ---
 
-## 约束与不兼容
+## Constraints and Incompatibilities
 
-| 约束 | 说明 |
-|------|------|
-| 死粒子删除破坏 charge conservation | 移除带电粒子后必须重置 E 场或通过注入补偿 |
-| GPU 非 bitwise 可重复 | Kokkos parallel_for/reduce 在不同运行中顺序可能不同 |
-| `raise::KernelError()` in kernel / `raise::Error()` in host | 不要在 `Kokkos::parallel_for` 的 Lambda 中调用 `raise::Error()` |
-| MovingWindow + Dynamic BC | 两者都需要 non-const Metadomain，可以共存 |
+| Constraint | Description |
+|------------|-------------|
+| Dead particle removal breaks charge conservation | After removing charged particles, you must reset the E-field or compensate via injection |
+| GPU not bitwise reproducible | Kokkos parallel_for/reduce ordering may differ across runs |
+| `raise::KernelError()` in kernel / `raise::Error()` in host | Do not call `raise::Error()` inside a `Kokkos::parallel_for` Lambda |
+| MovingWindow + Dynamic BC | Both require non-const Metadomain; they can coexist |
 
 ---
 
-## 常见陷阱
+## Common Pitfalls
 
-1. **单位混淆** — `domain.fields.em` 是代码单位，`time` 是代码单位。和 InitPrtls 的物理单位不一样
-2. **CommunicateFields 遗忘** — 手动设置场后不调用 `CommunicateFields` → ghost cells 值不同步 → 边界处场异常
-3. **step % N 守卫遗忘** — 每步执行昂贵的注入/计算 → 性能大幅下降
-4. **static 变量配合 multi-domain** — MPI 运行时 static 变量只影响当前 rank 的 domain 列表中的一个
-5. **particle tag 没检查 dead** — 在 `rangeActiveParticles()` 遍历中粒子可能已被标记 dead，需要先检查 `tag(p) == ParticleTag::dead` 并跳过
-6. **没有频控的无限注入** — 每步注入粒子但不清除 → 粒子数爆炸 → maxnpart 超限
+1. **Unit confusion** — `domain.fields.em` is in code units, `time` is in code units. These differ from InitPrtls physical units
+2. **Forgotten CommunicateFields** — Not calling `CommunicateFields` after manually setting fields → ghost cell values out of sync → anomalous fields at boundaries
+3. **Forgotten step % N guard** — Running expensive injection/computation every step → severe performance degradation
+4. **static variables with multi-domain** — When running under MPI, static variables only affect one domain in the current rank's domain list
+5. **Not checking particle tag for dead** — In `rangeActiveParticles()` iterations, particles may already be marked dead; always check `tag(p) == ParticleTag::dead` and skip
+6. **Unbounded injection with no frequency control** — Injecting particles every step without cleanup → particle count explosion → maxnpart exceeded

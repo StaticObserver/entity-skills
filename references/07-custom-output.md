@@ -1,49 +1,49 @@
-# 07 — 自定义输出（CustomFieldOutput + CustomStat）
+# 07 — Custom Output (CustomFieldOutput + CustomStat)
 
-> 基于 Entity v1.4.4
+> Based on Entity v1.4.4
 
-## 何时使用
+## When to Use
 
-需要在标准场量（E, B, J, Rho, T00 等）之外输出自定义诊断量时。触发关键词：自定义场、derived field、标量诊断量、CustomFieldOutput、CustomStat、额外输出量。
+When you need to output custom diagnostics beyond the standard field quantities (E, B, J, Rho, T00, etc.). Trigger keywords: custom field, derived field, scalar diagnostics, CustomFieldOutput, CustomStat, extra output quantities.
 
-**如果标准输出量（[output.fields] quantities）已经够用，跳过此 reference。**
+**If the standard output quantities (`[output.fields] quantities`) are sufficient, skip this reference.**
 
 ---
 
-## CustomFieldOutput（自定义场量）
+## CustomFieldOutput (Custom Field Quantities)
 
-### 签名
+### Signature
 
 ```cpp
 void CustomFieldOutput(
-    const std::string& name,      // 场量名称（来自 TOML custom 列表）
-    double*             buffer,   // 输出缓冲区
-    int                 index,    // 当前网格点的 buffer 索引
-    std::size_t         step,     // 当前时间步
-    long double         time,     // 当前模拟时间
-    Domain<S, M>&       domain    // Domain（可读 fields.em, species）
+    const std::string& name,      // Field quantity name (from TOML custom list)
+    double*             buffer,   // Output buffer
+    int                 index,    // Buffer index for the current grid point
+    std::size_t         step,     // Current timestep
+    long double         time,     // Current simulation time
+    Domain<S, M>&       domain    // Domain (can read fields.em, species)
 );
 ```
 
-### 参数说明
+### Parameter Description
 
-| 参数 | 含义 |
-|------|------|
-| `name` | TOML `[output.fields] custom = ["my_field"]` 中定义的名字 |
-| `buffer` | 输出数据缓冲区（1D，按网格点展平） |
-| `index` | buffer[index] = 当前网格点的值 |
-| `step` | 当前时间步序号 |
-| `time` | 当前时间（代码单位） |
-| `domain` | 可访问 `domain.fields.em`, `domain.species` 等 |
+| Parameter | Meaning |
+|-----------|---------|
+| `name` | Name defined in TOML `[output.fields] custom = ["my_field"]` |
+| `buffer` | Output data buffer (1D, flattened by grid points) |
+| `index` | buffer[index] = value at current grid point |
+| `step` | Current timestep index |
+| `time` | Current time (code units) |
+| `domain` | Can access `domain.fields.em`, `domain.species`, etc. |
 
-### TOML 配置
+### TOML Configuration
 
 ```toml
 [output.fields]
   custom = ["my_field_1", "my_field_2"]
 ```
 
-### 代码示例
+### Code Example
 
 ```cpp
 void CustomFieldOutput(
@@ -60,7 +60,7 @@ void CustomFieldOutput(
             SQR(em(em::ex1)) + SQR(em(em::ex2)) + SQR(em(em::ex3))
         );
     } else if (name == "axion_charge") {
-        // 自定义物理量
+        // Custom physical quantity
         auto& em = domain.fields.em;
         buffer[index] = static_cast<double>(
             epsilon * k * em(em::bx1) * math::sin(k * x - omega * time)
@@ -69,40 +69,40 @@ void CustomFieldOutput(
 }
 ```
 
-**重要**：返回值写入前确保是 `double` 类型（显式 cast）。
+**Important**: Ensure the return value is written as `double` type (explicit cast).
 
 ---
 
-## CustomStat（自定义标量统计量）
+## CustomStat (Custom Scalar Statistics)
 
-### 签名
+### Signature
 
 ```cpp
 auto CustomStat(
-    const std::string& name,   // 统计量名称（来自 TOML custom 列表）
+    const std::string& name,   // Statistics name (from TOML custom list)
     Domain<S, M>&       domain // Domain
 ) -> real_t;
 ```
 
-### 参数说明
+### Parameter Description
 
-| 参数 | 含义 |
-|------|------|
-| `name` | TOML `[output.stats] custom = ["my_stat"]` 中定义的名字 |
-| `domain` | Domain（与 CustomFieldOutput 相同） |
-| 返回值 | 标量值。引擎自动跨 meshblock **求和** |
+| Parameter | Meaning |
+|-----------|---------|
+| `name` | Name defined in TOML `[output.stats] custom = ["my_stat"]` |
+| `domain` | Domain (same as CustomFieldOutput) |
+| Return value | Scalar value. The engine automatically **sums** across meshblocks |
 
-### TOML 配置
+### TOML Configuration
 
 ```toml
 [output.stats]
   enable     = true
   interval   = 100
-  quantities = ["B^2", "E^2", "ExB"]  # 标准量
+  quantities = ["B^2", "E^2", "ExB"]  # Standard quantities
   custom     = ["total_axion_energy"]
 ```
 
-### 代码示例
+### Code Example
 
 ```cpp
 auto CustomStat(const std::string& name, Domain<S, M>& domain) -> real_t {
@@ -126,16 +126,16 @@ auto CustomStat(const std::string& name, Domain<S, M>& domain) -> real_t {
 
 ---
 
-## 替代方案：CustomPostStep 预计算
+## Alternative: CustomPostStep Precomputation
 
-对于复杂的诊断量，在 CustomPostStep 中预计算到 buffer，然后在 CustomFieldOutput 中只做 deep-copy：
+For complex diagnostics, precompute into a buffer in CustomPostStep, then only deep-copy in CustomFieldOutput:
 
 ```cpp
-// 在 PGen 中维护一个 ndfield_t buffer 成员
+// Maintain an ndfield_t buffer member in PGen
 ndfield_t<M::Dim, 3> my_buffer;
 
 void CustomPostStep(timestep_t step, simtime_t time, Domain<S, M>& domain) {
-    // 每步预先计算
+    // Precompute each step
     auto& em = domain.fields.em;
     auto range = domain.mesh.rangeActiveCells();
     Kokkos::parallel_for("precompute", range,
@@ -151,35 +151,35 @@ void CustomFieldOutput(...) {
 }
 ```
 
-这样复杂计算只在 CustomPostStep 做一次，不在每个输出时间步重复。
+This way heavy computation is only done once in CustomPostStep, not repeated at each output timestep.
 
 ---
 
-## 所需 Includes
+## Required Includes
 
 ```cpp
 #include "framework/domain/domain.h"
 ```
 
-不需要额外 archetype。`Kokkos::parallel_for` 和 `Kokkos::parallel_reduce` 可以直接使用。
+No additional archetype needed. `Kokkos::parallel_for` and `Kokkos::parallel_reduce` can be used directly.
 
 ---
 
-## 约束与不兼容
+## Constraints and Incompatibilities
 
-| 约束 | 说明 |
-|------|------|
-| CustomStat 返回值自动求和 | 跨 meshblock 自动 reduce by sum。如果要做平均值 → 在 TOML 外面除 meshblock 数量 |
-| 输出数据是 double | buffer 是 `double*`，而从 `em(i,j,em::ex1)` 读出的 `real_t` 可能是 float。必须显式 cast |
-| TOML custom 名字必须匹配 | `custom = ["my_field"]` 和代码中的 `name == "my_field"` 必须字符级一致 |
-| CustomStat 的输出频率 | 由 `[output.stats] interval` 控制，不是 `CustomPostStep` 的频率 |
+| Constraint | Description |
+|------------|-------------|
+| CustomStat return value is auto-summed | Automatically reduces by sum across meshblocks. To get an average → divide by meshblock count outside TOML |
+| Output data is double | buffer is `double*`, but `real_t` read from `em(i,j,em::ex1)` may be float. Must explicitly cast |
+| TOML custom names must match | `custom = ["my_field"]` and `name == "my_field"` in code must be character-for-character identical |
+| CustomStat output frequency | Controlled by `[output.stats] interval`, not `CustomPostStep` frequency |
 
 ---
 
-## 常见陷阱
+## Common Pitfalls
 
-1. **未注册到 TOML** — 代码中实现了 `CustomFieldOutput` 但没有在 TOML 的 `custom = [...]` 中列出 → 方法不被调用
-2. **double vs real_t** — `real_t` 可能是 `float`（单精度）。在写入 `buffer` 前 cast 到 `double`
-3. **CustomStat reduce 语义误解** — 引擎**求和**不是平均。如果想输出平均值，自己除 meshblock 数量
-4. **在 kernel 外读 em** — `domain.fields.em(i,j,comp)` 只能在 Kokkos kernel（parallel_for/parallel_reduce）中使用。Host 端操作需要不同的路径
-5. **复杂计算在每个输出步重复** — 如果计算量大但输出频率低，用 CustomPostStep 预计算 + buffer 方案
+1. **Not registered in TOML** — implemented `CustomFieldOutput` in code but not listed in TOML's `custom = [...]` → method is not called
+2. **double vs real_t** — `real_t` may be `float` (single precision). Cast to `double` before writing to `buffer`
+3. **Misunderstanding CustomStat reduce semantics** — the engine **sums**, not averages. To output an average, divide by meshblock count yourself
+4. **Reading em outside kernel** — `domain.fields.em(i,j,comp)` can only be used inside Kokkos kernels (parallel_for/parallel_reduce). Host-side operations need a different path
+5. **Heavy computation repeated at each output step** — if computation is expensive but output frequency is low, use the CustomPostStep precompute + buffer approach

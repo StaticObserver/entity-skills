@@ -1,73 +1,73 @@
-# 03 — 粒子注入（InitPrtls + Replenish）
+# 03 — Particle Injection (InitPrtls + Replenish)
 
-> 基于 Entity v1.4.4
+> Based on Entity v1.4.4
 
-## 何时使用
+## When to Use
 
-当模拟需要包含粒子时。触发关键词：等离子体、粒子初始化、电子/离子注入、Maxwellian 分布、空间分布、补充注入、粒子 replenish、pair plasma。
+When the simulation needs to include particles. Trigger keywords: plasma, particle initialization, electron/ion injection, Maxwellian distribution, spatial distribution, replenishment injection, particle replenish, pair plasma.
 
-**如果只是真空模拟（无粒子），跳过此 reference。**
+**If this is a vacuum simulation (no particles), skip this reference.**
 
 ---
 
-## 注入阶段
+## Injection Phases
 
-粒子注入有两个阶段，代码入口不同：
+Particle injection has two phases, with different code entry points:
 
-| 阶段 | 入口方法 | 使用单位 | 时机 |
+| Phase | Entry Method | Units Used | Timing |
 |------|---------|---------|------|
-| 初始注入 | `InitPrtls(Domain<S,M>&)` | **物理单位** | 模拟开始时调用一次 |
-| 补充注入 | `CustomPostStep(...)` | **代码单位** | 每个时间步调用 |
+| Initial Injection | `InitPrtls(Domain<S,M>&)` | **Physical units** | Called once at simulation start |
+| Replenishment Injection | `CustomPostStep(...)` | **Code units** | Called every timestep |
 
 ---
 
-## 初始化注入（InitPrtls 中）
+## Initial Injection (in InitPrtls)
 
-### 签名
+### Signature
 
 ```cpp
 void InitPrtls(Domain<S, M>& domain);
 ```
 
-### InjectUniformMaxwellians（最常用）
+### InjectUniformMaxwellians (Most Common)
 
-配对物种（如 e-/e+）均匀注入 + 麦克斯韦分布：
+Paired species (e.g., e-/e+) uniform injection + Maxwellian distribution:
 
 ```cpp
 void InitPrtls(Domain<S, M>& domain) {
-    // 定义温度和漂移速度
+    // Define temperatures and drift velocities
     auto temperatures = std::make_pair(T_e, T_p);  // {species1, species2}
     auto drifts = std::make_pair(
-        std::vector<real_t>{ ux1, uy1, uz1 },       // species1 四速
-        std::vector<real_t>{ ux2, uy2, uz2 }        // species2 四速
+        std::vector<real_t>{ ux1, uy1, uz1 },       // species1 four-velocity
+        std::vector<real_t>{ ux2, uy2, uz2 }        // species2 four-velocity
     );
 
     arch::InjectUniformMaxwellians<S, M>(
         params,                         // SimulationParams
         domain,                         // Domain ref
-        1.0,                            // 总密度（单位 n0）
+        1.0,                            // Total density (in units of n0)
         temperatures,                   // std::pair<real_t, real_t>
-        { 1, 2 },                       // 物种索引（1-based）
-        drifts,                         // 漂移速度
-        false,                          // use_weights（PGen 注入必须 false，TOML 处理）
-        box                             // optional: boundaries_t<real_t> 注入区域
+        { 1, 2 },                       // Species indices (1-based)
+        drifts,                         // Drift velocities
+        false,                          // use_weights (must be false for PGen injection; TOML handles it)
+        box                             // optional: boundaries_t<real_t> injection region
     );
 }
 ```
 
-### InjectUniformMaxwellian（单温度）
+### InjectUniformMaxwellian (Single Temperature)
 
 ```cpp
 arch::InjectUniformMaxwellian<S, M>(
     params, domain,
-    1.0,              // 密度
-    0.01,             // 统一温度
-    { 1, 2 },         // 物种
+    1.0,              // Density
+    0.01,             // Uniform temperature
+    { 1, 2 },         // Species
     drifts, use_weights, box
 );
 ```
 
-### InjectUniform（自定义能量分布）
+### InjectUniform (Custom Energy Distribution)
 
 ```cpp
 auto edist1 = arch::energy_dist::Maxwellian<D, Coord::Cartesian>(
@@ -77,74 +77,74 @@ auto edist2 = arch::energy_dist::Maxwellian<D, Coord::Cartesian>(
 
 arch::InjectUniform<S, M>(
     params, domain,
-    { 1, 2 },                       // 物种
-    { edist1, edist2 },            // 能量分布 pair
+    { 1, 2 },                       // Species
+    { edist1, edist2 },            // Energy distribution pair
     1.0, false, box
 );
 ```
 
-### InjectNonUniform（自定义空间分布）
+### InjectNonUniform (Custom Spatial Distribution)
 
 ```cpp
 auto sdist = MySpatialDistribution<D>(params);
 
 arch::InjectNonUniform<S, M>(
     params, domain,
-    { 1, 2 },                       // 物种
-    { edist1, edist2 },            // 能量分布
-    sdist,                          // 空间分布
-    1.0,                            // 密度因子
+    { 1, 2 },                       // Species
+    { edist1, edist2 },            // Energy distributions
+    sdist,                          // Spatial distribution
+    1.0,                            // Density factor
     false, box
 );
 ```
 
-### InjectGlobally（预计算粒子数据）
+### InjectGlobally (Pre-computed Particle Data)
 
-从 TOML 中的数组数据注入单个粒子：
+Inject individual particles from array data in the TOML:
 
 ```cpp
 void InitPrtls(Domain<S, M>& domain) {
     // TOML: [[setup.prtls]]
     //   x1 = [...]  x2 = [...]  ux1 = [...]  ux2 = [...]  ux3 = [...]
     // [[setup.prtl_species]]
-    //   species = [0, 1, 0, ...]   // 每个粒子的物种索引
+    //   species = [0, 1, 0, ...]   // Species index for each particle
 
     auto prtls_data = params.template get<std::map<std::string,
         std::vector<real_t>>>("setup.prtls");
 
     arch::InjectGlobally<S, M>(
         metadomain, domain,
-        0,                  // 物种索引
+        0,                  // Species index
         prtls_data,
         false
     );
 }
 ```
 
-数据 map 的 key 支持：`"x1"`, `"x2"`, `"x3"`, `"ux1"`, `"ux2"`, `"ux3"`
+Supported data map keys: `"x1"`, `"x2"`, `"x3"`, `"ux1"`, `"ux2"`, `"ux3"`
 
 ---
 
-## 补充注入（CustomPostStep 中）
+## Replenishment Injection (in CustomPostStep)
 
-### Replenish 模式（最常用）
+### Replenish Pattern (Most Common)
 
-先计算当前密度，不够才注入：
+First compute the current density and inject only where deficient:
 
 ```cpp
 void CustomPostStep(timestep_t step, simtime_t time, Domain<S, M>& domain) {
-    if (step % 100 != 0) return;  // 每 100 步注入一次
+    if (step % 100 != 0) return;  // Inject every 100 steps
 
-    // Step 1: 计算当前密度到 buffer
+    // Step 1: Compute current density into buffer
     ndfield_t<M::Dim, 3> density_buffer("density", domain.mesh.rangeActiveCells());
     arch::ComputeMomentWithSpecies<S, M, FldsID::N, 3>(
         params, domain, { 1, 2 }, density_buffer, {}, 0u, 0u);
 
-    // Step 2: 构建 replenish 空间分布
+    // Step 2: Build replenish spatial distribution
     arch::spatial_dist::ReplenishUniform<M, 3> sdist(
         domain.mesh.metric, density_buffer, 0u, target_density);
 
-    // Step 3: 注入不足的部分
+    // Step 3: Inject the deficit
     arch::InjectNonUniform<S, M>(
         params, domain,
         { 1, 2 },
@@ -155,15 +155,15 @@ void CustomPostStep(timestep_t step, simtime_t time, Domain<S, M>& domain) {
 }
 ```
 
-**ReplenishUniform 原理**：
-- 对比当前密度和目标密度
-- `(0.9 * target > current)` → 注入 `(target - current) / target_max`
-- 否则返回 0（不需要注入）
+**ReplenishUniform Principle**:
+- Compares current density against target density
+- `(0.9 * target > current)` → inject `(target - current) / target_max`
+- Otherwise returns 0 (no injection needed)
 
-### 非均匀目标 Replenish
+### Non-Uniform Target Replenish
 
 ```cpp
-// 自定义目标密度 profile
+// Custom target density profile
 struct TargetProfile {
     Inline auto operator()(const coord_t<Dim::_2D>& x) const -> real_t {
         return 1.0 * math::exp(-SQR(x[0]) / SQR(sigma));
@@ -177,27 +177,27 @@ arch::spatial_dist::Replenish<M, 3, TargetProfile> sdist(
 
 ---
 
-## 能量分布 Archetypes
+## Energy Distribution Archetypes
 
-| Archetype | 构造 | 说明 |
+| Archetype | Construction | Description |
 |-----------|------|------|
-| `Maxwellian<D, C>(pool, T, drift)` | (random_pool, 温度, 漂移四速) | 漂移麦克斯韦，最常用 |
+| `Maxwellian<D, C>(pool, T, drift)` | (random_pool, temperature, drift four-velocity) | Drifting Maxwellian, most commonly used |
 | `Cold<D>` | () | v = 0 |
-| `Powerlaw<D>(pool, gmin, gmax, index)` | (random_pool, gamma_min, gamma_max, 幂律指数) | 相对论幂律 |
-| `JuttnerSynge(v, T, pool)` | 自由函数，非 archetype | 相对论 Juttner-Synge 分布 |
+| `Powerlaw<D>(pool, gmin, gmax, index)` | (random_pool, gamma_min, gamma_max, power-law index) | Relativistic power-law |
+| `JuttnerSynge(v, T, pool)` | Free function, not an archetype | Relativistic Juttner-Synge distribution |
 
-### 自定义能量分布接口
+### Custom Energy Distribution Interface
 
 ```cpp
 template <Dimension D>
 struct MyEnergyDist {
     random_number_pool_t& pool;
 
-    // 必须：设置速度（local tetrad basis）
+    // Required: set velocity (local tetrad basis)
     Inline void operator()(const coord_t<D>& x, vec_t<Dim::_3D>& v) const {
-        // 可以使用内置辅助函数
+        // Can use built-in helper functions
         JuttnerSynge(v, temperature, pool);
-        // 或手动设置
+        // Or set manually
         v[0] = drift_ux;
         v[1] = ZERO;
         v[2] = ZERO;
@@ -207,35 +207,35 @@ struct MyEnergyDist {
 
 ---
 
-## 空间分布接口
+## Spatial Distribution Interface
 
-### InjectNonUniform 用的空间分布
+### Spatial Distribution for InjectNonUniform
 
 ```cpp
 template <Dimension D>
 struct MySpatialDist {
-    // 返回 { 密度分数(0~1), 采样/排序权重 }
+    // Returns { density fraction (0~1), sampling/sorting weight }
     Inline auto operator()(const coord_t<D>& x) const
         -> Kokkos::pair<real_t, real_t> {
         real_t density = math::exp(-SQR(x[0]) / SQR(sigma));
-        return { density, density };  // { 注入概率, 采样权重 }
+        return { density, density };  // { injection probability, sampling weight }
     }
 };
 ```
 
-### PointDistribution 模式（访问 EM 场）
+### PointDistribution Pattern (Accessing EM Fields)
 
-某些 PGen（如 accretion）的空间分布需要读取当前 EM 场：
+Some PGens (e.g., accretion) need to read the current EM field in their spatial distribution:
 
 ```cpp
 template <class M>
 struct PointDistribution {
-    // 在构造时通过 Domain* 读取场和密度
+    // Read fields and density at construction time via Domain*
     PointDistribution(const SimulationParams& p, const M& metric,
                       Domain<SimEngine::GRPIC, M>* domain_ptr) {
-        // 预计算 sigma_crit，读取 fields.em, fields.buff
+        // Pre-compute sigma_crit, read fields.em, fields.buff
         auto& em = domain_ptr->fields.em;
-        // ... 使用 em(i1, i2, em::bx1) 等读取场值
+        // ... use em(i1, i2, em::bx1) etc. to read field values
     }
 
     Inline auto operator()(const coord_t<M::Dim>& x) const
@@ -246,27 +246,27 @@ struct PointDistribution {
 };
 ```
 
-**Key**: PointDistribution 的构造在 `InitPrtls` 中（Host 端），读取场在构造时完成（非 kernel 内），`operator()` 只做查找。
+**Key**: PointDistribution is constructed in `InitPrtls` (on the Host side), field reading happens at construction time (not inside the kernel), and `operator()` only does lookup.
 
 ---
 
-## 注入 Box 定义
+## Injection Box Definition
 
 ```cpp
-// 全区域注入
+// Full-domain injection
 boundaries_t<real_t> box;
 for (auto d = 0u; d < M::Dim; ++d) {
     box.push_back(Range::All);
 }
 
-// 部分区域注入（x1 方向 [xmin, xmax]）
+// Partial-region injection (x1 direction [xmin, xmax])
 boundaries_t<real_t> box;
 box.emplace_back(xmin, xmax);
 for (auto d = 1u; d < M::Dim; ++d) {
     box.push_back(Range::All);
 }
 
-// 使用 if constexpr 处理不同维度的 box
+// Use if constexpr for dimension-dependent box
 boundaries_t<real_t> box;
 if constexpr (M::Dim == Dim::_2D) {
     box.emplace_back(xmin, xmax);
@@ -278,35 +278,35 @@ if constexpr (M::Dim == Dim::_2D) {
 
 ---
 
-## 所需 Includes
+## Required Includes
 
 ```cpp
 #include "archetypes/particle_injector.h"  // InjectUniform*, InjectNonUniform, InjectGlobally
-#include "archetypes/energy_dist.h"        // Maxwellian, Cold, Powerlaw, JuttnerSinge
+#include "archetypes/energy_dist.h"        // Maxwellian, Cold, Powerlaw, JuttnerSynge
 #include "archetypes/spatial_dist.h"       // ReplenishUniform, Replenish
 #include "archetypes/utils.h"              // ComputeMomentWithSpecies
 ```
 
 ---
 
-## 约束与不兼容
+## Constraints and Incompatibilities
 
-| 约束 | 说明 |
+| Constraint | Description |
 |------|------|
-| 1-based species 索引 | `arch::InjectUniform` 等用 `{1, 2}` 不是 `{0, 1}`，对应 TOML 第 1、2 个 species |
-| use_weights | PGen 中注入时传 `false`，TOML 单独设 `use_weights = true` |
-| ppc0 和 density 的关系 | 总粒子数 ≈ ppc0 × density × N_cells。ppc0 不够 → NaN |
-| Replenish 的 buffer 维度 | `ComputeMomentWithSpecies` 的模板参数 N 是 buffer 的最后一维大小 |
-| Cold 分布 + 漂移 | 不能直接设漂移。需要自定义 EnergyDistribution 或直接用 Maxwellian 配合低温 |
+| 1-based species indices | `arch::InjectUniform` etc. use `{1, 2}` not `{0, 1}`, corresponding to the 1st and 2nd species in the TOML |
+| use_weights | Pass `false` during injection in PGen; set `use_weights = true` separately in TOML |
+| Relationship of ppc0 and density | Total particle count ≈ ppc0 × density × N_cells. Insufficient ppc0 → NaN |
+| Replenish buffer dimension | The template parameter N of `ComputeMomentWithSpecies` is the size of the buffer's last dimension |
+| Cold distribution + drift | Cannot set drift directly. Need a custom EnergyDistribution or use Maxwellian with low temperature |
 
 ---
 
-## 常见陷阱
+## Common Pitfalls
 
-1. **0-based vs 1-based species 索引** — `arch::InjectUniform` 等用 1-based 索引（TOML species 顺序），不是 C++ 的 0-based
-2. **ppc0 不够** — 粒子数太少 → 统计噪声 → NaN 传播。建议 ppc0 >= 16，高精度用 128+
-3. **maxnpart 超限** — 增加 species 的 maxnpart 或降低 ppc0/密度
-4. **Replenish 忘记 step % N 控制** — 每步都补充会大幅拖慢性能
-5. **死粒子不清理** — `clear_interval` 控制清理频率。死粒子太多 → 浪费内存但不会破坏物理
-6. **死粒子删除破坏 charge conservation** — 移除带电粒子后需要重置 E 场或通过注入补偿
-7. **InjectGlobally 的 data key 错误** — key 必须是 `"x1"` `"ux1"` 等全小写带下标的格式
+1. **0-based vs 1-based species indices** — `arch::InjectUniform` etc. use 1-based indices (TOML species order), not C++ 0-based
+2. **Insufficient ppc0** — Too few particles → statistical noise → NaN propagation. Recommend ppc0 >= 16, use 128+ for high precision
+3. **maxnpart exceeded** — Increase species' maxnpart or reduce ppc0/density
+4. **Forgetting step % N control in Replenish** — Replenishing every step significantly degrades performance
+5. **Dead particles not cleaned** — `clear_interval` controls cleaning frequency. Too many dead particles → wasted memory but does not break physics
+6. **Dead particle removal breaks charge conservation** — After removing charged particles, need to reset E-field or compensate via injection
+7. **Wrong data keys in InjectGlobally** — Keys must be `"x1"`, `"ux1"` etc. in all lowercase with subscript format

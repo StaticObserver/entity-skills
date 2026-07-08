@@ -1,175 +1,175 @@
-# 09 — TOML 配置参考
+# 09 — TOML Configuration Reference
 
-> 基于 Entity v1.4.4
+> Based on Entity v1.4.4
 
-## 何时使用
+## When to Use
 
-**必读**。每一个 PGen 都需要一个匹配的 TOML 文件。这份参考覆盖 Entity 支持的所有 TOML section 和参数。
+**Required reading**. Every PGen needs a matching TOML file. This reference covers all TOML sections and parameters supported by Entity.
 
-用于：新建 TOML、验证已有 TOML 的正确性、理解 TOML 参数如何映射到 C++ 代码。
-
----
-
-## TOML 语法约定
-
-Entity 使用标准 TOML v1.0 格式，但有以下约定：
-
-| 约定 | 说明 |
-|------|------|
-| 字符串值 **PascalCase** | `"SRPIC"` 而非 `"srpic"`, `"Minkowski"`, `"PERIODIC"`, `"Boris"` |
-| bool 值 **小写** | `true` / `false`（TOML 标准） |
-| 数组 | 方括号：`resolution = [256, 256]` |
-| 数组 of 数组 | `extent = [[0.0, 10.0], [0.0, 10.0]]`（2D 需要 2 对内括号） |
-| 嵌套表 | `[grid.metric]` 或平铺 `[grid]` + 缩进 `metric = "..."` 两种写法都行 |
-| Array of Tables | `[[particles.species]]`（两对方括号）用于重复 section |
+Use for: creating a new TOML, validating existing TOML correctness, understanding how TOML parameters map to C++ code.
 
 ---
 
-## 必选 Section
+## TOML Syntax Conventions
+
+Entity uses standard TOML v1.0 format with the following conventions:
+
+| Convention | Description |
+|------------|-------------|
+| String values **PascalCase** | `"SRPIC"` not `"srpic"`, `"Minkowski"`, `"PERIODIC"`, `"Boris"` |
+| bool values **lowercase** | `true` / `false` (TOML standard) |
+| Arrays | Square brackets: `resolution = [256, 256]` |
+| Arrays of arrays | `extent = [[0.0, 10.0], [0.0, 10.0]]` (2D requires 2 inner bracket pairs) |
+| Nested tables | `[grid.metric]` or flattened `[grid]` + indented `metric = "..."` — both styles work |
+| Array of Tables | `[[particles.species]]` (double square brackets) for repeating sections |
+
+---
+
+## Required Sections
 
 ### `[simulation]`
 
-| 参数 | 类型 | 说明 | 默认值 |
-|------|------|------|--------|
-| `name` | string | 输出文件名前缀 | **必选** |
-| `engine` | string | `"SRPIC"` 或 `"GRPIC"` | **必选** |
-| `runtime` | float (>0) | 最大运行时间（代码单位） | **必选** |
-| `number` | int | MPI domain 数量 | `1`（无 MPI）; `MPI_SIZE`（MPI） |
-| `decomposition` | array<int> (1-3) | MPI 分解; `-1` = auto | `[-1, -1, -1]` |
+| Parameter | Type | Description | Default |
+|-----------|------|-------------|---------|
+| `name` | string | Output filename prefix | **Required** |
+| `engine` | string | `"SRPIC"` or `"GRPIC"` | **Required** |
+| `runtime` | float (>0) | Maximum runtime (code units) | **Required** |
+| `number` | int | Number of MPI domains | `1` (no MPI); `MPI_SIZE` (MPI) |
+| `decomposition` | array<int> (1-3) | MPI decomposition; `-1` = auto | `[-1, -1, -1]` |
 
 ### `[grid]`
 
-| 参数 | 类型 | 说明 | 默认值 |
-|------|------|------|--------|
-| `resolution` | array<uint> (1-3) | 每维网格分辨率 | **必选** |
-| `extent` | array<[float,float]> (1-3) | 每维物理范围 [min, max] | **必选** |
-| `dim` | short (1,2,3) | 维数 | 从 resolution 推断 |
+| Parameter | Type | Description | Default |
+|-----------|------|-------------|---------|
+| `resolution` | array<uint> (1-3) | Grid resolution per dimension | **Required** |
+| `extent` | array<[float,float]> (1-3) | Physical extent per dimension [min, max] | **Required** |
+| `dim` | short (1,2,3) | Number of dimensions | Inferred from resolution |
 
 ### `[grid.metric]`
 
-| 参数 | 类型 | 说明 | 默认值 |
-|------|------|------|--------|
-| `metric` | string | 见 Metrics 枚举表 | — |
+| Parameter | Type | Description | Default |
+|-----------|------|-------------|---------|
+| `metric` | string | See Metrics enum table | — |
 | `coord` | string | `"cartesian"`, `"spherical"`, `"qspherical"` | — |
 
-#### 球坐标专用
-| 参数 | 类型 | 说明 | 默认值 |
-|------|------|------|--------|
-| `qsph_r0` | float | QSpherical 的 r0（负值 → 近均匀网格） | `0.0` |
-| `qsph_h` | float (-1→1) | 角坐标映射参数 | `0.0` |
+#### Spherical Coordinate Specific
+| Parameter | Type | Description | Default |
+|-----------|------|-------------|---------|
+| `qsph_r0` | float | r0 for QSpherical (negative → nearly uniform grid) | `0.0` |
+| `qsph_h` | float (-1→1) | Angular coordinate mapping parameter | `0.0` |
 
-#### Kerr-Schild 专用 (GRPIC)
-| 参数 | 类型 | 说明 | 默认值 |
-|------|------|------|--------|
-| `ks_a` | float (0→1) | 黑洞自旋参数 | `0.0` |
-| `ks_rh` | float | 视界半径 | 推断 |
+#### Kerr-Schild Specific (GRPIC)
+| Parameter | Type | Description | Default |
+|-----------|------|-------------|---------|
+| `ks_a` | float (0→1) | Black hole spin parameter | `0.0` |
+| `ks_rh` | float | Horizon radius | Inferred |
 
 ### `[particles]`
 
-| 参数 | 类型 | 说明 | 默认值 |
-|------|------|------|--------|
-| `ppc0` | float (>0) | Fiducial 每网格粒子数 | **必选** |
-| `nspec` | uint | 物种数量 | **必选** |
-| `use_weights` | bool | 使用粒子权重（PGen 有注入时必设为 true） | `false` |
-| `clear_interval` | uint | 死粒子清理间隔（步数） | `100` |
-| `spatial_sorting_interval` | uint | 空间排序间隔 | `0`（禁用） |
+| Parameter | Type | Description | Default |
+|-----------|------|-------------|---------|
+| `ppc0` | float (>0) | Fiducial particles per cell | **Required** |
+| `nspec` | uint | Number of species | **Required** |
+| `use_weights` | bool | Use particle weights (must be true when PGen has injection) | `false` |
+| `clear_interval` | uint | Dead particle cleanup interval (steps) | `100` |
+| `spatial_sorting_interval` | uint | Spatial sorting interval | `0` (disabled) |
 
-### `[[particles.species]]`（Array of Tables — 每个物种一个）
+### `[[particles.species]]` (Array of Tables — one per species)
 
-| 参数 | 类型 | 说明 | 默认值 |
-|------|------|------|--------|
-| `label` | string | 物种标签 | `"s<INDEX>"` |
-| `mass` | float (>=0) | 质量（fiducial 单位，m0） | **必选** |
-| `charge` | float | 电荷（fiducial 单位，q0） | **必选** |
-| `maxnpart` | uint (>0) | 每个 MPI task 最大粒子数 | **必选** |
-| `pusher` | string | `"Boris"`, `"Vay"`, `"Boris,GCA"`, `"Vay,GCA"`, `"Photon"`, `"None"` | 有质量: Boris，无质量: Photon |
-| `n_payloads_real` | ushort | 额外实值 payload | `0` |
-| `n_payloads_int` | ushort | 额外整值 payload | `0` |
-| `tracking` | bool | 启用粒子追踪（需要编译期 TRACKING=ON） | `false` |
+| Parameter | Type | Description | Default |
+|-----------|------|-------------|---------|
+| `label` | string | Species label | `"s<INDEX>"` |
+| `mass` | float (>=0) | Mass (fiducial units, m0) | **Required** |
+| `charge` | float | Charge (fiducial units, q0) | **Required** |
+| `maxnpart` | uint (>0) | Maximum particles per MPI task | **Required** |
+| `pusher` | string | `"Boris"`, `"Vay"`, `"Boris,GCA"`, `"Vay,GCA"`, `"Photon"`, `"None"` | Massive: Boris, Massless: Photon |
+| `n_payloads_real` | ushort | Extra real-valued payload slots | `0` |
+| `n_payloads_int` | ushort | Extra integer-valued payload slots | `0` |
+| `tracking` | bool | Enable particle tracking (requires compile-time TRACKING=ON) | `false` |
 | `radiative_drag` | string | `"None"`, `"Synchrotron"`, `"Compton"` | `"None"` |
 | `emission` | string | `"None"`, `"Synchrotron"`, `"Compton"` | `"None"` |
 
 ---
 
-## 常用可选 Section
+## Common Optional Sections
 
 ### `[scales]`
 
-**参见 `00-normalization.md`**。
+**See `00-normalization.md`**.
 
-| 参数 | 类型 | 说明 |
-|------|------|------|
-| `larmor0` | float | Fiducial Larmor 半径（B0 = 1/larmor0） |
-| `skindepth0` | float | Fiducial 趋肤深度（n0 = 1/(larmor0·skindepth0²)） |
-| `n0` | float | Fiducial 数密度 |
-| `B0` | float | Fiducial 磁场（引擎内置 = 1/larmor0） |
-| `sigma0` | float | Fiducial 磁化参数 |
-| `omegaB0` | float | Fiducial 回旋频率 |
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `larmor0` | float | Fiducial Larmor radius (B0 = 1/larmor0) |
+| `skindepth0` | float | Fiducial skin depth (n0 = 1/(larmor0·skindepth0²)) |
+| `n0` | float | Fiducial number density |
+| `B0` | float | Fiducial magnetic field (engine built-in = 1/larmor0) |
+| `sigma0` | float | Fiducial magnetization parameter |
+| `omegaB0` | float | Fiducial cyclotron frequency |
 
 ### `[boundaries]`
 
-| 参数 | 类型 | 说明 |
-|------|------|------|
-| `fields` | array<string> (1-3) | 每维场 BC: `"PERIODIC"`, `"MATCH"`, `"FIXED"`, `"ATMOSPHERE"`, `"CUSTOM"`, `"HORIZON"`, `"CONDUCTOR"` |
-| `particles` | array<string> (1-3) | 每维粒子 BC: `"PERIODIC"`, `"ABSORB"`, `"ATMOSPHERE"`, `"CUSTOM"`, `"REFLECT"`, `"HORIZON"` |
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `fields` | array<string> (1-3) | Field BC per dimension: `"PERIODIC"`, `"MATCH"`, `"FIXED"`, `"ATMOSPHERE"`, `"CUSTOM"`, `"HORIZON"`, `"CONDUCTOR"` |
+| `particles` | array<string> (1-3) | Particle BC per dimension: `"PERIODIC"`, `"ABSORB"`, `"ATMOSPHERE"`, `"CUSTOM"`, `"REFLECT"`, `"HORIZON"` |
 
-**简化写法**：
+**Shorthand syntax**:
 ```toml
-# 所有维使用相同 BC
+# Same BC for all dimensions
 boundaries = { fields = ["PERIODIC"], particles = ["PERIODIC"] }
 
-# 2D 逐维指定
+# 2D per-dimension specification
 [boundaries]
   fields = [["PERIODIC"], ["PERIODIC"]]
   particles = [["PERIODIC"], ["PERIODIC"]]
 ```
 
-**配对约束**：`CONDUCTOR` 场 BC 必须与 `REFLECT` 粒子 BC 配对。`HORIZON` 只在 GR 中有效。
+**Pairing constraint**: `CONDUCTOR` field BC must pair with `REFLECT` particle BC. `HORIZON` is only valid in GR.
 
 #### `[boundaries.match]` / `[boundaries.absorb]` / `[boundaries.atmosphere]`
-参见 `06-boundary.md`。
+See `06-boundary.md`.
 
 ### `[algorithms]`
 
-| 参数 | 类型 | 说明 | 默认值 |
-|------|------|------|--------|
-| `current_filters` | ushort | 电流平滑遍数（电荷守恒需要时设 0） | `0` |
+| Parameter | Type | Description | Default |
+|-----------|------|-------------|---------|
+| `current_filters` | ushort | Current smoothing passes (set to 0 when charge conservation is needed) | `0` |
 
 #### `[algorithms.timestep]`
-| 参数 | 类型 | 说明 | 默认值 |
-|------|------|------|--------|
-| `CFL` | float (0→1) | CFL 数 | `0.95` |
-| `correction` | float | 光速修正因子 | `1.0` |
-| `dt` | float | 固定时间步长 | 从 CFL 推断 |
+| Parameter | Type | Description | Default |
+|-----------|------|-------------|---------|
+| `CFL` | float (0→1) | CFL number | `0.95` |
+| `correction` | float | Speed-of-light correction factor | `1.0` |
+| `dt` | float | Fixed timestep | Inferred from CFL |
 
 #### `[algorithms.deposit]`
-| 参数 | 类型 | 说明 | 默认值 |
-|------|------|------|--------|
-| `enable` | bool | 启用电流沉积 | `true` |
-| `order` | ushort (0→10) | 粒子形状函数阶数 | — |
+| Parameter | Type | Description | Default |
+|-----------|------|-------------|---------|
+| `enable` | bool | Enable current deposition | `true` |
+| `order` | ushort (0→10) | Particle shape function order | — |
 
 #### `[algorithms.fieldsolver]`
-| 参数 | 类型 | 说明 | 默认值 |
-|------|------|------|--------|
-| `enable` | bool | 启用电场求解器 | `true` |
-| `delta_x/y/z` | float | 高阶模板系数（二阶） | `0.0` |
-| `beta_xy/yx/xz/zx/yz/zy` | float | 非对角修正系数 | `0.0` |
+| Parameter | Type | Description | Default |
+|-----------|------|-------------|---------|
+| `enable` | bool | Enable electric field solver | `true` |
+| `delta_x/y/z` | float | Higher-order stencil coefficients (second-order) | `0.0` |
+| `beta_xy/yx/xz/zx/yz/zy` | float | Off-diagonal correction coefficients | `0.0` |
 
-#### `[algorithms.gr]`（仅 GRPIC）
-| 参数 | 类型 | 说明 | 默认值 |
-|------|------|------|--------|
-| `pusher_eps` | float (>0) | 数值微分步长 | `1e-6` |
-| `pusher_niter` | ushort (>0) | Newton-Raphson 迭代次数 | `10` |
+#### `[algorithms.gr]` (GRPIC only)
+| Parameter | Type | Description | Default |
+|-----------|------|-------------|---------|
+| `pusher_eps` | float (>0) | Numerical differentiation step size | `1e-6` |
+| `pusher_niter` | ushort (>0) | Newton-Raphson iteration count | `10` |
 
-#### `[algorithms.gca]`（Guiding Center）
-| 参数 | 类型 | 说明 | 默认值 |
-|------|------|------|--------|
-| `e_ovr_b_max` | float (0→1) | GCA 有效性的最大 E/B | `0.9` |
-| `larmor_max` | float | GCA 最大 Larmor 半径 | `0.0` |
+#### `[algorithms.gca]` (Guiding Center)
+| Parameter | Type | Description | Default |
+|-----------|------|-------------|---------|
+| `e_ovr_b_max` | float (0→1) | Maximum E/B for GCA validity | `0.9` |
+| `larmor_max` | float | Maximum Larmor radius for GCA | `0.0` |
 
-### `[setup]` — PGen 专属参数
+### `[setup]` — PGen-Specific Parameters
 
-**这是 PGen 开发的核心 section**。所有自定义参数在此定义：
+**This is the core section for PGen development**. All custom parameters are defined here:
 
 ```toml
 [setup]
@@ -181,81 +181,81 @@ boundaries = { fields = ["PERIODIC"], particles = ["PERIODIC"] }
   injection_frequency = 100
 ```
 
-在 pgen.hpp 中通过 `params.template get<T>("setup.key")` 读取。参数类型可以是 `real_t`, `int`, `std::string`, `std::vector<real_t>`。
+Read in pgen.hpp via `params.template get<T>("setup.key")`. Parameter types can be `real_t`, `int`, `std::string`, `std::vector<real_t>`.
 
 ### `[output]`
 
-| 参数 | 类型 | 说明 | 默认值 |
-|------|------|------|--------|
+| Parameter | Type | Description | Default |
+|-----------|------|-------------|---------|
 | `format` | string | `"disabled"`, `"hdf5"`, `"BPFile"` | `"hdf5"` |
-| `interval` | uint (>0) | 输出间隔（步数） | `1` |
-| `interval_time` | float | 输出间隔（时间），-1 禁用 | `-1.0` |
-| `separate_files` | bool | 每个时间步单独文件 | `true` |
+| `interval` | uint (>0) | Output interval (steps) | `1` |
+| `interval_time` | float | Output interval (time), -1 disables | `-1.0` |
+| `separate_files` | bool | Separate file per timestep | `true` |
 
 #### `[output.fields]`
-| 参数 | 类型 | 说明 | 默认值 |
-|------|------|------|--------|
+| Parameter | Type | Description | Default |
+|-----------|------|-------------|---------|
 | `enable` | bool | | `true` |
 | `quantities` | array<string> | `"E"`, `"B"`, `"J"`, `"divE"`, `"Rho"`, `"Charge"`, `"N"`, `"Nppc"`, `"T0i"`, `"Tij"`, `"Vi"`, `"D"`, `"H"`, `"divD"`, `"A"` | `[]` |
-| `custom` | array<string> | 自定义场量（见 07-custom-output.md） | `[]` |
-| `mom_smooth` | ushort | 矩平滑窗口 | `0` |
-| `interval` / `interval_time` | | 覆盖全局 | |
-| `downsampling` | array<uint> (1-3) | 下采样 | `[1,1,1]` |
+| `custom` | array<string> | Custom field quantities (see 07-custom-output.md) | `[]` |
+| `mom_smooth` | ushort | Moment smoothing window | `0` |
+| `interval` / `interval_time` | | Override global | |
+| `downsampling` | array<uint> (1-3) | Downsampling | `[1,1,1]` |
 
 #### `[output.particles]`
-| 参数 | 类型 | 说明 | 默认值 |
-|------|------|------|--------|
+| Parameter | Type | Description | Default |
+|-----------|------|-------------|---------|
 | `enable` | bool | | `true` |
-| `species` | array<int> | 输出的物种（空=全部） | `[]` |
-| `stride` | uint (>1) | 每 N 个粒子输出 1 个 | `100` |
+| `species` | array<int> | Species to output (empty = all) | `[]` |
+| `stride` | uint (>1) | Output 1 out of every N particles | `100` |
 
 #### `[output.spectra]`
-| 参数 | 类型 | 说明 | 默认值 |
-|------|------|------|--------|
+| Parameter | Type | Description | Default |
+|-----------|------|-------------|---------|
 | `enable` | bool | | `true` |
-| `e_min` / `e_max` | float | 能量范围 | `1e-3` / `1e3` |
-| `log_bins` | bool | 对数分 bin | `true` |
-| `n_bins` | uint | bin 数量 | `200` |
+| `e_min` / `e_max` | float | Energy range | `1e-3` / `1e3` |
+| `log_bins` | bool | Logarithmic binning | `true` |
+| `n_bins` | uint | Number of bins | `200` |
 
 #### `[output.stats]`
-| 参数 | 类型 | 说明 | 默认值 |
-|------|------|------|--------|
+| Parameter | Type | Description | Default |
+|-----------|------|-------------|---------|
 | `enable` | bool | | `true` |
-| `interval` | uint | 统计输出间隔 | `100` |
-| `quantities` | array<string> | `"B^2"`, `"E^2"`, `"T00"` 等 | `["B^2","E^2","T00"]` |
-| `custom` | array<string> | 自定义统计量（见 07-custom-output.md） | `[]` |
+| `interval` | uint | Stats output interval | `100` |
+| `quantities` | array<string> | `"B^2"`, `"E^2"`, `"T00"`, etc. | `["B^2","E^2","T00"]` |
+| `custom` | array<string> | Custom statistics quantities (see 07-custom-output.md) | `[]` |
 
 #### `[output.checkpoint]`
-| 参数 | 类型 | 说明 | 默认值 |
-|------|------|------|--------|
-| `interval` | uint | checkpoint 间隔 | `1000` |
-| `keep` | int | 保留几个（0=关，-1=无限） | `2` |
-| `walltime` | string | 超时前强制 checkpoint（`"HH:MM:SS"`） | `"00:00:00"` |
-| `write_path` / `read_path` | string | checkpoint 路径 | |
-| `is_resuming` | bool | 从 checkpoint 恢复 | 推断 |
+| Parameter | Type | Description | Default |
+|-----------|------|-------------|---------|
+| `interval` | uint | Checkpoint interval | `1000` |
+| `keep` | int | How many to keep (0=off, -1=unlimited) | `2` |
+| `walltime` | string | Force checkpoint before timeout (`"HH:MM:SS"`) | `"00:00:00"` |
+| `write_path` / `read_path` | string | Checkpoint path | |
+| `is_resuming` | bool | Resume from checkpoint | Inferred |
 
 #### `[output.debug]`
-| 参数 | 类型 | 说明 | 默认值 |
-|------|------|------|--------|
-| `as_is` | bool | 输出未经转换的原始场 | `false` |
-| `ghosts` | bool | 包含 ghost cells | `false` |
+| Parameter | Type | Description | Default |
+|-----------|------|-------------|---------|
+| `as_is` | bool | Output raw fields without conversion | `false` |
+| `ghosts` | bool | Include ghost cells | `false` |
 
 ### `[diagnostics]`
 
-| 参数 | 类型 | 说明 | 默认值 |
-|------|------|------|--------|
-| `interval` | int (>0) | 日志间隔 | `1` |
-| `blocking_timers` | bool | 分阶段阻塞计时 | `false` |
-| `colored_stdout` | bool | 彩色输出 | `true` |
+| Parameter | Type | Description | Default |
+|-----------|------|-------------|---------|
+| `interval` | int (>0) | Logging interval | `1` |
+| `blocking_timers` | bool | Per-phase blocking timers | `false` |
+| `colored_stdout` | bool | Colored output | `true` |
 | `log_level` | string | `"VERBOSE"`, `"WARNING"`, `"ERROR"` | `"VERBOSE"` |
 
-### `[radiation]`（如需要）
+### `[radiation]` (if needed)
 
-参见 `input.example.toml` 中的完整辐射参数（drag 和 emission）。
+See `input.example.toml` for complete radiation parameters (drag and emission).
 
 ---
 
-## 最简可用 TOML 骨架
+## Minimal Working TOML Skeleton
 
 ```toml
 [simulation]
@@ -314,11 +314,11 @@ boundaries = { fields = ["PERIODIC"], particles = ["PERIODIC"] }
 
 ---
 
-## 常见陷阱
+## Common Pitfalls
 
-1. **数组 of 数组嵌套错误** — 2D boundary 需要 `[["PERIODIC"], ["PERIODIC"]]`，不是 `["PERIODIC", "PERIODIC"]`
-2. **bool 大写** — `True` / `False` 不是合法 TOML
-3. **PascalCase 写成了 lowercase** — `engine = "srpic"` 不被识别
-4. **species label 和 PGen 代码不对应** — PGen 中用 1-based 索引注入但 TOML 顺序不同
-5. **use_weights 忘了设为 true** — 有粒子注入的 PGen 必须设置，否则权重逻辑异常
-6. **[setup] 参数名有 typo** — TOML 和 `params.get()` 中的 key 必须字符级匹配
+1. **Incorrect array-of-arrays nesting** — 2D boundary requires `[["PERIODIC"], ["PERIODIC"]]`, not `["PERIODIC", "PERIODIC"]`
+2. **Capitalized boolean** — `True` / `False` are not valid TOML
+3. **PascalCase written as lowercase** — `engine = "srpic"` is not recognized
+4. **Species label mismatch with PGen code** — PGen injects using 1-based indices but TOML ordering differs
+5. **Forgot to set use_weights = true** — PGens with particle injection must set this, otherwise weight logic is broken
+6. **Typo in [setup] parameter names** — Keys in TOML and `params.get()` must match character-for-character

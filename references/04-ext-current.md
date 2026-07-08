@@ -1,80 +1,80 @@
-# 04 — 外部电流源（ext_current）
+# 04 — External Current Source (ext_current)
 
-> 基于 Entity v1.4.4
+> Based on Entity v1.4.4
 
-## 何时使用
+## When to Use
 
-需要在 Ampere 定律中添加外部源电流时。触发关键词：外部电流、天线驱动、axion current、Wald current、J_ext、电流源项。
+When you need to add an external source current to Ampere's law. Trigger keywords: external current, antenna drive, axion current, Wald current, J_ext, current source term.
 
-**仅适用于 Minkowski 度量（SRPIC）。GRPIC 不支持 ext_current。**
+**Only applies to Minkowski metric (SRPIC). GRPIC does not support ext_current.**
 
 ---
 
-## API 签名
+## API Signature
 
-### 官方 API（只能访问坐标）
+### Official API (coordinate-only access)
 
 ```cpp
 struct ExtCurrent {
-    // 所有三个分量都必须定义
+    // All three components must be defined
     Inline auto jx1(const coord_t<D>& x) const -> real_t;
     Inline auto jx2(const coord_t<D>& x) const -> real_t;
     Inline auto jx3(const coord_t<D>& x) const -> real_t;
 
-    // 内部参数
+    // Internal parameters
     real_t coeff, k, omega, B0;
 };
 ```
 
-**实例名 `ext_current` 强制**，引擎通过 C++20 concept 检测。
+**Instance name `ext_current` is mandatory** — the engine detects it via C++20 concept.
 
-### 引擎修改 API（可访问 EM 场和时间）
+### Engine-Modified API (access to EM fields and time)
 
 ```cpp
-// 需要修改 Entity 引擎源码（ampere_mink.hpp）来扩展 Context
+// Requires modifying Entity engine source (ampere_mink.hpp) to extend Context
 struct ExtCurrent {
     template <class Context>
     Inline auto jx1(const Context& ctx) const -> real_t {
-        // ctx.x_Ph  — 物理坐标
-        // ctx.em(i1, i2, em::bx1)  — 读取当前 EM 场（引擎修改后可用）
-        // ctx.time  — 当前模拟时间
-        // ctx.dx    — 网格间距
+        // ctx.x_Ph  — physical coordinates
+        // ctx.em(i1, i2, em::bx1)  — read current EM field (available after engine modification)
+        // ctx.time  — current simulation time
+        // ctx.dx    — grid spacing
     }
 };
 ```
 
-**重要**：Context 扩展需要修改 `src/engines/srpic/ampere_mink.hpp`。这是**引擎修改**，路由到 entity-core-dev。
+**Important**: Context extension requires modifying `src/engines/srpic/ampere_mink.hpp`. This is an **engine modification** — route to entity-core-dev.
 
 ---
 
-## 参数说明
+## Parameter Description
 
-| 参数 | 含义 | 单位 |
-|------|------|------|
-| `coord_t<D> x` | 当前网格点的物理坐标 | 代码单位 |
-| `real_t` 返回值 | 外部电流密度分量 | j₀ = n₀·q₀·c（需补偿归一化） |
-| `coeff = skindepth0² / larmor0` | Ampere 归一化补偿系数 | — |
+| Parameter | Meaning | Units |
+|-----------|---------|-------|
+| `coord_t<D> x` | Physical coordinates of the current grid point | code units |
+| `real_t` return value | External current density component | j0 = n0 * q0 * c (requires normalization compensation) |
+| `coeff = skindepth0^2 / larmor0` | Ampere normalization compensation coefficient | — |
 
 ---
 
-## 归一化补偿（关键！）
+## Normalization Compensation (Critical!)
 
-**参见 `00-normalization.md` 的完整推导。**
+**See `00-normalization.md` for the full derivation.**
 
-Ampere 离散化公式：
+Ampere discretization formula:
 ```
-dE/dt = - (larmor0 / (ppc0 · skindepth0²)) × (J_deposited + J_external)
+dE/dt = - (larmor0 / (ppc0 * skindepth0^2)) x (J_deposited + J_external)
 ```
 
-**ext_current 中返回的每个电流分量必须预先乘以 `skindepth0² / larmor0`**：
+**Every current component returned in ext_current must be pre-multiplied by `skindepth0^2 / larmor0`**:
 
 ```cpp
 struct ExtCurrent {
     real_t larmor0, skindepth0;
-    real_t coeff;  // = skindepth0² / larmor0（在构造函数中计算）
+    real_t coeff;  // = skindepth0^2 / larmor0 (computed in constructor)
 
     Inline auto jx1(const coord_t<D>& x) const -> real_t {
-        // 物理电流 × 归一化补偿
+        // Physical current x normalization compensation
         return coeff * epsilon * omega * B0 * math::sin(k * x[0] - omega * time);
     }
 };
@@ -82,19 +82,19 @@ struct ExtCurrent {
 
 ---
 
-## 所需 Includes
+## Required Includes
 
 ```cpp
 #include "utils/numeric.h"  // ZERO, ONE, SQR, math::
 ```
 
-不需要额外 archetype — ext_current 被引擎内核直接调用。
+No additional archetype needed — ext_current is called directly by the engine kernel.
 
 ---
 
-## 代码示例
+## Code Examples
 
-### 示例 1: 静态电流源（Wald vacuum 概念验证）
+### Example 1: Static Current Source (Wald vacuum proof of concept)
 
 ```cpp
 struct ExtCurrent {
@@ -110,18 +110,18 @@ struct ExtCurrent {
     Inline auto jx3(const coord_t<D>&) const -> real_t { return ZERO; }
 };
 
-// 在 PGen 中
+// In PGen
 ExtCurrent ext_current;
 
 PGen(...) : ext_current { larmor0, skindepth0, amplitude } {}
 ```
 
-### 示例 2: 行波电流源（axion-PIC 模式）
+### Example 2: Traveling Wave Current Source (axion-PIC mode)
 
 ```cpp
 struct ExtCurrent {
     real_t coeff, epsilon, omega, k, B0;
-    real_t time;  // 需要在 CustomPostStep 或外部更新
+    real_t time;  // Must be updated in CustomPostStep or externally
 
     Inline auto jx1(const coord_t<D>& x) const -> real_t {
         return coeff * epsilon * omega * B0
@@ -132,27 +132,27 @@ struct ExtCurrent {
 };
 ```
 
-**问题**：官方 ext_current 只能访问坐标，无法访问 `time`。time 依赖的电流源需要：
-1. 在 `CustomPostStep` 中更新 ext_current 的时间成员（如果 ext_current 不是 const）
-2. 或者修改引擎让 Context 包含 time → entity-core-dev
+**Issue**: The official ext_current can only access coordinates, not `time`. Time-dependent current sources require:
+1. Updating the ext_current's time member in `CustomPostStep` (if ext_current is not const)
+2. Or modifying the engine so Context includes time → entity-core-dev
 
 ---
 
-## 约束与不兼容
+## Constraints and Incompatibilities
 
-| 约束 | 说明 |
-|------|------|
-| **仅 Minkowski** | ext_current 只在 SRPIC 引擎中有效。GRPIC 不支持 |
-| **三个分量都必须定义** | 即使不需要的也要返回 ZERO。未定义的分量 = 未定义行为 |
-| **不能访问实时 EM 场（官方 API）** | 只能读坐标。需要读场的用 Context 扩展（引擎修改） |
-| **不能直接读 time** | 需要在 CustomPostStep 中通过 ext_current 的成员变量传 time（如果不是 const） |
+| Constraint | Description |
+|------------|-------------|
+| **Minkowski only** | ext_current is only valid in the SRPIC engine. GRPIC does not support it |
+| **All three components must be defined** | Even unused ones must return ZERO. Undefined components = undefined behavior |
+| **Cannot access real-time EM fields (official API)** | Only coordinates are readable. Use Context extension for field access (engine modification) |
+| **Cannot directly read time** | Must pass time through ext_current's member variable in CustomPostStep (if not const) |
 
 ---
 
-## 常见陷阱
+## Common Pitfalls
 
-1. **忘记乘以 skindepth0²/larmor0** — ext_current 返回的值直接进入 Ampere 内核被 larmor0/skindepth0² 缩放。不补偿 → 电流强度数量级错误。**这是最常见的 ext_current bug**
-2. **GRPIC 中尝试用 ext_current** — 编译失败或运行时未定义行为。GR 中需要修改 Ampere 求解器
-3. **时间依赖电流源无 time 访问** — 官方 API 没有时间参数。需要通过成员变量传递并在 CustomPostStep 中更新
-4. **EM 场访问的限制** — Context 中的 EM 场访问是引擎修改，不在标准 API 中。如果 PGen 需要读实时 B/E 来算电流 → 标记为引擎修改
-5. **三个分量全部定义** — 漏掉一个未被检测的 jx 方法可能导致该分量行为异常（取决于 trait 检测逻辑）
+1. **Forgetting to multiply by skindepth0^2/larmor0** — values returned by ext_current go directly into the Ampere kernel and are scaled by larmor0/skindepth0^2. No compensation → wrong order-of-magnitude current strength. **This is the most common ext_current bug**
+2. **Attempting to use ext_current in GRPIC** — compilation failure or undefined behavior at runtime. The Ampere solver must be modified for GR
+3. **Time-dependent current source without time access** — the official API has no time parameter. Must pass via member variable and update in CustomPostStep
+4. **EM field access limitations** — EM field access in Context is an engine modification, not part of the standard API. If PGen needs to read real-time B/E to compute current → mark as engine modification
+5. **All three components defined** — missing one undetected jx method may cause anomalous behavior for that component (depends on trait detection logic)

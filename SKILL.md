@@ -7,110 +7,110 @@ description: Design, write, and debug Entity problem generators (pgen.hpp + TOML
 
 ## Mission
 
-帮助 Agent 将用户的物理需求转化为正确的、可编译的 Entity Problem Generator（pgen.hpp + TOML config）。本 skill 将 PGen 开发的每个能力拆成独立 reference，Agent 按需匹配、组合。
+Help the Agent translate the user's physics requirements into a correct, compilable Entity Problem Generator (pgen.hpp + TOML config). This skill breaks down each PGen development capability into an independent reference, which the Agent matches and combines on demand.
 
-核心工作流：
+Core workflow:
 
 ```
-需求澄清 → 需求文档 → 匹配 references → 设计文档 → 用户确认 → 构建代码+TOML → 三向审计 → 修复 → 交付
+Requirement Clarification → Requirements Document → Match References → Design Document → User Confirmation → Build Code + TOML → Three-Way Audit → Fix → Deliver
 ```
 
 ## Boundaries
 
-**Handle**: 需求引出、PGen 代码编写、TOML 配置、归一化约定、结构完整性检查、代码-TOML 一致性审计。
+**Handle**: Requirement elicitation, PGen code writing, TOML configuration, normalization conventions, structural integrity checks, code-TOML consistency audit.
 
 **Route to other skills**:
-- 编译环境、CMake 配置、编译执行 → `entity-env-build`
-- Entity 引擎源码修改（Ampere 内核、Context 扩展等）→ `entity-core-dev`
-- 数据分析/可视化 → `entity-analysis` 或 `nt2py`
+- Build environment, CMake configuration, compilation execution → `entity-env-build`
+- Entity engine source modifications (Ampere kernel, Context extensions, etc.) → `entity-core-dev`
+- Data analysis/visualization → `entity-analysis` or `nt2py`
 
 ## Hard Rules
 
-1. **归一化**：InitFields 返回的场值是 code normalized 单位，直接写入 EM 数组即可，不需要额外考虑归一化系数。ext_current 需乘以 skindepth0²/larmor0 补偿（详见 `references/00-normalization.md`）
-2. **坐标基**：SRPIC → local tetrad (orthonormal) basis。GRPIC → coordinate basis。不可混用
-3. **单位域**：InitPrtls = 物理单位。CustomPostStep / ext_current = 代码单位
-4. **实例名强制**：`init_flds`、`ext_force`、`ext_current` 的名字由 C++20 concept 检测，不可改变
-5. **写代码前有确认门**：Step 2 产出 design.md 后，必须取得用户明确确认
-6. **审计后才交付**：Step 5-6 的三向审计必须通过，不可跳过
-7. **species 索引 1-based**：arch::InjectUniform* 的 species 参数从 1 开始
+1. **Normalization**: Field values returned by InitFields are in code normalized units and can be written directly into EM arrays; no additional normalization coefficients are needed. ext_current must be multiplied by skindepth0²/larmor0 as compensation (see `references/00-normalization.md` for details)
+2. **Coordinate Basis**: SRPIC → local tetrad (orthonormal) basis. GRPIC → coordinate basis. Do not mix them
+3. **Unit Domain**: InitPrtls = physical units. CustomPostStep / ext_current = code units
+4. **Instance Name Enforced**: The names `init_flds`, `ext_force`, `ext_current` are detected by C++20 concepts and must not be changed
+5. **Confirmation Gate Before Writing Code**: After Step 2 produces design.md, explicit user confirmation must be obtained
+6. **Audit Before Delivery**: The three-way audit in Steps 5-6 must pass; it cannot be skipped
+7. **species index is 1-based**: The species parameter of arch::InjectUniform* starts from 1
 
-## Reference 索引
+## Reference Index
 
-> 所有 reference 基于 **Entity v1.4.4** 编写。
+> All references are written based on **Entity v1.4.4**.
 
-### 背景知识（Step 1 加载）
+### Background Knowledge (Loaded in Step 1)
 
-| Reference | 内容概要 |
+| Reference | Summary |
 |-----------|---------|
-| `00-normalization.md` | 归一化约定，code normalized 单位系统，InitFields/ext_current 的数值规范 |
-| `01-skeleton.md` | PGen 骨架模板、最小可运行 PGen、traits 声明、参数读取、所需 includes |
+| `00-normalization.md` | Normalization conventions, code normalized unit system, numerical specifications for InitFields/ext_current |
+| `01-skeleton.md` | PGen skeleton template, minimal runnable PGen, traits declaration, parameter reading, required includes |
 
-### 按功能加载（匹配用户需求）
+### Load by Functionality (Matched to User Needs)
 
-> `09-toml-config.md` 在构建 TOML 时（Step 4）加载。`pgens-index.md` 在不确定 API 用法或需要参考实现时加载。
+> `09-toml-config.md` is loaded when building the TOML (Step 4). `pgens-index.md` is loaded when API usage is uncertain or a reference implementation is needed.
 
-| Reference | 何时需要 | 触发关键词 |
-|-----------|---------|-----------|
-| `02-init-fields.md` | 需要初始电磁场 | 磁场、电场、Bx/By/Bz、Ex/Ey/Ez、Wald、dipole、Harris sheet |
-| `03-particle-injection.md` | 需要粒子 | 等离子体、粒子、电子、离子、注入、Maxwellian、密度分布、pair plasma |
-| `04-ext-current.md` | Ampere 源项（仅 Minkowski） | 外部电流、天线、axion current、J_ext、源项 |
-| `05-ext-force.md` | 粒子外力 | 外力、外部加速度、辐射力、external B/E field |
-| `06-boundary.md` | 非 PERIODIC 边界 | open boundary、吸收边界、固定边界、大气层、conductor |
-| `07-custom-output.md` | 自定义诊断量 | 自定义输出、额外诊断量、derived field |
-| `08-custom-post-step.md` | 时间步钩子 | 补充注入、移动窗口、动态边界、piston、周期性注入 |
-| `09-toml-config.md` | 生成/验证 TOML 配置 | 写 TOML、配置参数、section 语法、TOML 骨架 |
-| `10-higher-order.md` | 自定义 field stencil 或高阶 shape | stencil、Cherenkov、数值色散、高阶形状、shape_order、esirkepov、delta_x、beta_xy |
-| `pgens-index.md` | 不确定 API 用法或实现模式时 | 参考实现、官方例子、Entity 自带的 pgen、模板参考 |
+| Reference | When Needed | Trigger Keywords |
+|-----------|-------------|------------------|
+| `02-init-fields.md` | Initial EM fields needed | magnetic field, electric field, Bx/By/Bz, Ex/Ey/Ez, Wald, dipole, Harris sheet |
+| `03-particle-injection.md` | Particles needed | plasma, particle, electron, ion, injection, Maxwellian, density distribution, pair plasma |
+| `04-ext-current.md` | Ampere source term (Minkowski only) | external current, antenna, axion current, J_ext, source term |
+| `05-ext-force.md` | External force on particles | external force, external acceleration, radiation force, external B/E field |
+| `06-boundary.md` | Non-PERIODIC boundaries | open boundary, absorbing boundary, fixed boundary, atmosphere, conductor |
+| `07-custom-output.md` | Custom diagnostic quantities | custom output, extra diagnostics, derived field |
+| `08-custom-post-step.md` | Timestep hooks | replenish injection, moving window, dynamic boundary, piston, periodic injection |
+| `09-toml-config.md` | Generate/validate TOML config | write TOML, config parameters, section syntax, TOML skeleton |
+| `10-higher-order.md` | Custom field stencil or high-order shape | stencil, Cherenkov, numerical dispersion, high-order shape, shape_order, esirkepov, delta_x, beta_xy |
+| `pgens-index.md` | Uncertain about API usage or implementation patterns | reference implementation, official examples, Entity built-in pgen, template reference |
 
-## 开发工作流（7 步）
+## Development Workflow (7 Steps)
 
-### Step 1: 需求澄清 → user_requirements.md
+### Step 1: Requirement Clarification → user_requirements.md
 
-加载 `00-normalization.md` 和 `01-skeleton.md` 作为背景知识。
+Load `00-normalization.md` and `01-skeleton.md` as background knowledge.
 
-分 **3 轮**向用户收集需求。每轮确认完后展示中间结果。按顺序轮询，不要跳到下一轮。
+Collect requirements from the user in **3 rounds**. After each round, present intermediate results. Poll in order; do not jump to the next round.
 
-**第 1 轮 — 基础信息**：
+**Round 1 — Basic Information**:
 
-| # | 问题 | 选项/说明 | 默认值 |
-|---|------|----------|--------|
-| 1 | PGen 名称 | 英文小写+下划线 | **必填** |
-| 2 | 物理问题描述 | 自由文本：模拟什么现象？ | **必填** |
+| # | Question | Options/Notes | Default |
+|---|----------|---------------|---------|
+| 1 | PGen name | Lowercase English + underscores | **Required** |
+| 2 | Physics problem description | Free text: what phenomenon is being simulated? | **Required** |
 | 3 | Simulation engine | `SRPIC` / `GRPIC` | `SRPIC` |
 | 4 | Metric | `Minkowski` / `Spherical` / `QSpherical` / `Kerr_Schild` / `QKerr_Schild` / `Kerr_Schild_0` | `Minkowski` |
-| 5 | 空间维度 | 1D / 2D / 3D | 根据问题推断 |
-| 6 | 网格分辨率 + 物理范围 | 每维 [N, extent_min, extent_max] | **必填** |
+| 5 | Spatial dimensions | 1D / 2D / 3D | Inferred from the problem |
+| 6 | Grid resolution + physical extent | Per dimension [N, extent_min, extent_max] | **Required** |
 
-**第 2 轮 — 物理配置**：
+**Round 2 — Physics Configuration**:
 
-| # | 问题 | 选项/说明 | 默认值 |
-|---|------|----------|--------|
-| 7 | 初始场配置 | B 场？E 场？空间分布？均匀/非均匀？ | 无（真空） |
-| 8 | 粒子物种数 + 每个物种的 label/mass/charge | 列表 | 无粒子 |
-| 9 | 粒子初始分布 | Uniform / NonUniform？温度？漂移速度？密度？ | — |
-| 10 | 边界条件 | PERIODIC / MATCH / FIXED / ABSORB / ... | PERIODIC |
+| # | Question | Options/Notes | Default |
+|---|----------|---------------|---------|
+| 7 | Initial field configuration | B field? E field? Spatial distribution? Uniform/non-uniform? | None (vacuum) |
+| 8 | Number of particle species + label/mass/charge per species | List | No particles |
+| 9 | Initial particle distribution | Uniform / NonUniform? Temperature? Drift velocity? Density? | — |
+| 10 | Boundary conditions | PERIODIC / MATCH / FIXED / ABSORB / ... | PERIODIC |
 
-**第 3 轮 — 高级功能 + 运行时**：
+**Round 3 — Advanced Features + Runtime**:
 
-| # | 问题 | 选项/说明 | 默认值 |
-|---|------|----------|--------|
-| 11 | 是否需要外部电流/力？ | 描述物理机制 | 无 |
-| 12 | 是否需要时间步钩子？ | 补充注入/移动窗口/动态边界/... | 无 |
-| 13 | 是否需要自定义输出？ | 额外场量/统计量 | 无 |
+| # | Question | Options/Notes | Default |
+|---|----------|---------------|---------|
+| 11 | External current/force needed? | Describe the physical mechanism | None |
+| 12 | Timestep hooks needed? | Replenish injection / moving window / dynamic boundary / ... | None |
+| 13 | Custom output needed? | Extra fields / statistics | None |
 | 14 | Fiducial scales | larmor0, skindepth0 | larmor0=1.0, skindepth0=1.0 |
-| 15 | 运行时参数 | `runtime`、`ppc0`、`CFL`、`output interval` | runtime=100.0, ppc0=32, CFL=0.45 |
+| 15 | Runtime parameters | `runtime`, `ppc0`, `CFL`, `output interval` | runtime=100.0, ppc0=32, CFL=0.45 |
 
-三轮收集完成后，将结果写入 `user_requirements.md`（保留 `<描述>` 占位符，不填入示例数据）：
+After all three rounds are complete, write the results to `user_requirements.md` (keep `<description>` placeholders, do not fill in example data):
 
 ```markdown
 # User Requirements — <pgen_name>
 
-## 物理问题
-<描述>
+## Physics Problem
+<description>
 
-## 模拟参数
-| 参数 | 值 |
-|------|-----|
+## Simulation Parameters
+| Parameter | Value |
+|-----------|-------|
 | Engine | ... |
 | Metric | ... |
 | Dimensions | ... |
@@ -122,238 +122,238 @@ description: Design, write, and debug Entity problem generators (pgen.hpp + TOML
 | skindepth0 | ... |
 | CFL | ... |
 
-## 场配置
-<描述初始 E/B 场>
+## Field Configuration
+<describe initial E/B fields>
 
-## 物种列表
+## Species List
 | # | Label | Mass | Charge | Pusher | maxnpart |
 |---|-------|------|--------|--------|----------|
 
-## 粒子初始分布
-<温度、漂移速度、密度、分布类型>
+## Initial Particle Distribution
+<temperature, drift velocity, density, distribution type>
 
-## 外部电流/力
-<如适用>
+## External Current/Force
+<if applicable>
 
-## 时间步钩子
-<如适用>
+## Timestep Hooks
+<if applicable>
 
-## 自定义输出
-<如适用>
+## Custom Output
+<if applicable>
 
-## 特殊注意事项
-<用户特别提到的约束>
+## Special Considerations
+<constraints specifically mentioned by the user>
 ```
 
-向用户展示 `user_requirements.md`，确认无误后进入 Step 2。
+Present `user_requirements.md` to the user. After confirmation, proceed to Step 2.
 
-### Step 2: 匹配 References → 设计文档 → design.md
+### Step 2: Match References → Design Document → design.md
 
-**design.md 记录 HOW**：基于用户需求，给出具体的代码实现方案——PGen 结构、InitFields 公式、注入 archetype 选择、TOML 参数表等。这是从物理需求到代码设计的转换。
+**design.md documents HOW**: Based on user requirements, provide a concrete code implementation plan — PGen structure, InitFields formulas, injection archetype selection, TOML parameter table, etc. This is the translation from physics requirements to code design.
 
-**子步骤 2a: 匹配 references**
+**Sub-step 2a: Match references**
 
-对照上文「按功能加载」索引表，根据 user_requirements.md 匹配对应的 reference 文件。额外规则：
-- 总是加载 `00-normalization.md`, `01-skeleton.md`
-- 有粒子注入时的 replenish 依赖 `03` + `08`
-- 不确定 API 用法时加载 `pgens-index.md`
-- `09-toml-config.md` 在 Step 4 加载
+Cross-reference the "Load by Functionality" index table above and match the corresponding reference files based on user_requirements.md. Additional rules:
+- Always load `00-normalization.md`, `01-skeleton.md`
+- When particle injection is present, replenish depends on `03` + `08`
+- When API usage is uncertain, load `pgens-index.md`
+- `09-toml-config.md` is loaded in Step 4
 
-加载匹配的 references 后，仔细阅读 API 签名、约束和陷阱。
+After loading the matched references, carefully read the API signatures, constraints, and pitfalls.
 
-**子步骤 2b: 编写 design.md**
+**Sub-step 2b: Write design.md**
 
-基于需求文档和 references，编写设计文档：
+Based on the requirements document and references, write the design document:
 
 ```markdown
 # Design — <pgen_name>
 
-## 参考的 References
+## Referenced References
 - 00-normalization.md
 - 01-skeleton.md
-- 02-init-fields.md  ← 需要初始 B 场
-- 03-particle-injection.md  ← 需要粒子注入
+- 02-init-fields.md  ← initial B field needed
+- 03-particle-injection.md  ← particle injection needed
 - 09-toml-config.md
 
-## PGen 结构
-### Traits 声明
+## PGen Structure
+### Traits Declaration
 - engines: { SRPIC }
 - metrics: { Minkowski }
 - dimensions: { _2D }
 
-### 成员列表
-| 成员 | 类型 | 来源 Reference |
-|------|------|---------------|
+### Member List
+| Member | Type | Source Reference |
+|--------|------|------------------|
 | params | const SimulationParams& | skeleton |
 | metadomain | Metadomain<S,M>& | skeleton |
 | init_flds | InitFields<D> | 02-init-fields |
 | B0, theta | real_t (from [setup]) | 02-init-fields |
 
-### 定义的方法
-| 方法 | 作用 | 来源 Reference |
-|------|------|---------------|
-| PGen(...) | 构造，从 TOML 读取参数 | skeleton |
-| InitPrtls(...) | 初始粒子注入 | 03-particle-injection |
+### Defined Methods
+| Method | Purpose | Source Reference |
+|--------|--------|------------------|
+| PGen(...) | Constructor, reads parameters from TOML | skeleton |
+| InitPrtls(...) | Initial particle injection | 03-particle-injection |
 
-## InitFields 设计
-<描述 InitFields 的 struct 结构，每个方法的返回值公式>
+## InitFields Design
+<describe the InitFields struct structure and return value formulas for each method>
 
-## InitPrtls 设计
-<描述注入方式、使用的 archetype、参数值>
+## InitPrtls Design
+<describe the injection method, archetype used, parameter values>
 
-## TOML [setup] 参数
-| 参数 | 类型 | 默认值 | 说明 |
-|------|------|--------|------|
-| B0 | real_t | 1.0 | 磁场强度 |
-| temperature | real_t | 0.01 | 等离子体温度 |
+## TOML [setup] Parameters
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| B0 | real_t | 1.0 | Magnetic field strength |
+| temperature | real_t | 0.01 | Plasma temperature |
 
-## 边界条件
+## Boundary Conditions
 - Fields: PERIODIC × 2
 - Particles: PERIODIC × 2
 
-## 归一化检查清单
-- [ ] InitFields 场值是 code normalized 单位，无需额外系数
-- [ ] ext_current 乘以 skindepth0²/larmor0（如适用）
-- [ ] InitPrtls 使用物理单位
-- [ ] CustomPostStep 使用代码单位（如适用）
+## Normalization Checklist
+- [ ] InitFields field values are in code normalized units, no extra coefficients needed
+- [ ] ext_current multiplied by skindepth0²/larmor0 (if applicable)
+- [ ] InitPrtls uses physical units
+- [ ] CustomPostStep uses code units (if applicable)
 ```
 
-### Step 3: 用户确认设计
+### Step 3: User Confirms Design
 
-将 design.md 完整呈现给用户。**必须等待用户明确确认**后才能进入 Step 4。
+Present design.md in full to the user. **Must wait for explicit user confirmation** before proceeding to Step 4.
 
-如果用户提出修改意见，回到 Step 2 修改设计文档，重新确认。
+If the user proposes modifications, return to Step 2 to revise the design document and re-confirm.
 
-确认话术："以上是完整的设计方案。确认后我将开始编写代码和 TOML。是否需要调整？"
+Confirmation prompt: "Above is the complete design. After confirmation, I will begin writing the code and TOML. Any adjustments needed?"
 
-### Step 4: 构建代码
+### Step 4: Build Code
 
-基于 design.md，生成两个文件：
+Based on design.md, generate two files:
 
-**4a. 生成 `pgen.hpp`**
+**4a. Generate `pgen.hpp`**
 
-按以下顺序组装：
-1. Include guards + headers（来自 01-skeleton）
-2. namespace + using（来自 01-skeleton）
-3. InitFields struct（来自 02-init-fields，如设计需要）
-4. ext_current struct（来自 04，如设计需要）
-5. ext_force struct / ExtFields（来自 05，如设计需要。ext_force 与 ExternalFields 方法二选一）
-6. PGen struct（来自 01-skeleton）：
-   - traits 声明
-   - 成员变量
-   - 构造函数（params.get 读取 [setup] 参数）
-   - InitPrtls()（来自 03，如设计需要）
-   - MatchFields / FixFieldsConst / AtmFields（来自 06，如设计需要）
-   - ExternalFields()（来自 05，如设计需要。返回 ExtFields functor）
-   - CustomPostStep()（来自 08，如设计需要）
-   - CustomParticleUpdate()（来自 08，如设计需要。返回 UpdateFunctor）
-   - CustomFieldOutput() / CustomStat()（来自 07，如设计需要）
+Assemble in the following order:
+1. Include guards + headers (from 01-skeleton)
+2. namespace + using (from 01-skeleton)
+3. InitFields struct (from 02-init-fields, if needed by design)
+4. ext_current struct (from 04, if needed by design)
+5. ext_force struct / ExtFields (from 05, if needed by design. ext_force and ExternalFields method are mutually exclusive — pick one)
+6. PGen struct (from 01-skeleton):
+   - traits declaration
+   - member variables
+   - constructor (params.get reads [setup] parameters)
+   - InitPrtls() (from 03, if needed by design)
+   - MatchFields / FixFieldsConst / AtmFields (from 06, if needed by design)
+   - ExternalFields() (from 05, if needed by design. Returns ExtFields functor)
+   - CustomPostStep() (from 08, if needed by design)
+   - CustomParticleUpdate() (from 08, if needed by design. Returns UpdateFunctor)
+   - CustomFieldOutput() / CustomStat() (from 07, if needed by design)
 
-每个方法加注释标注使用的是物理单位还是代码单位。
+Add comments on each method indicating whether physical units or code units are used.
 
-**4b. 生成 `<name>.toml`**
+**4b. Generate `<name>.toml`**
 
-基于 09-toml-config.md 和 design.md 中的参数：
-1. 填入用户确认的 simulation、grid、metric、boundaries
-2. 填入 scales（larmor0, skindepth0）
-3. 填入 particles + species（如有粒子）
-4. 填入 [setup] section（PGen 专属参数）
-5. 填入 output 配置
-6. 设置 `current_filters = 0`
+Based on 09-toml-config.md and the parameters in design.md:
+1. Fill in user-confirmed simulation, grid, metric, boundaries
+2. Fill in scales (larmor0, skindepth0)
+3. Fill in particles + species (if particles present)
+4. Fill in [setup] section (PGen-specific parameters)
+5. Fill in output configuration
+6. Set `current_filters = 0`
 
-### Step 5: 三向审计
+### Step 5: Three-Way Audit
 
-**并行启动 3 个审计子 Agent**（均使用 `general-purpose` 类型，`subagent_type`="general-purpose"）。每个 Agent 先读取 `references/` 下对应文件，再读取生成的 pgen.hpp、TOML、user_requirements.md 和 design.md 进行审计。若某个 Agent 失败/超时，fallback 到主 Agent 串行完成该审计。
+**Launch 3 audit sub-Agents in parallel** (all using `general-purpose` type, `subagent_type`="general-purpose"). Each Agent first reads the corresponding files under `references/`, then reads the generated pgen.hpp, TOML, user_requirements.md, and design.md to perform the audit. If an Agent fails/times out, fall back to the main Agent completing that audit serially.
 
-**Agent 1 — 代码正确性**：检查语法、traits 匹配、API 签名（对照 references）、单位标记、归一化约定、常见陷阱（1-based/0-based 索引、CommunicateFields 遗忘、死粒子电荷守恒）、性能问题。输出严重/警告问题列表 + 修复建议。
+**Agent 1 — Code Correctness**: Check syntax, traits matching, API signatures (against references), unit annotations, normalization conventions, common pitfalls (1-based/0-based indexing, forgotten CommunicateFields, dead particle charge conservation), performance issues. Output a list of critical/warning issues + fix suggestions.
 
-**Agent 2 — 需求满足度**：逐项对照 user_requirements.md 检查：场配置、粒子物种+注入、边界条件+对应方法、[setup] 参数、自定义输出。输出 ✓/✗/⚠ 检查表。
+**Agent 2 — Requirements Satisfaction**: Check item by item against user_requirements.md: field configuration, particle species + injection, boundary conditions + corresponding methods, [setup] parameters, custom output. Output a ✓/✗/⚠ checklist.
 
-**Agent 3 — 代码-TOML 一致性**：检查 params.get 与 TOML [setup] 双向匹配、species 索引一致、traits×TOML 兼容、BC 方法对应、custom output 名字匹配。输出不一致项列表。
+**Agent 3 — Code-TOML Consistency**: Check bidirectional matching of params.get and TOML [setup], species index consistency, traits × TOML compatibility, BC method correspondence, custom output name matching. Output a list of inconsistencies.
 
-冲突裁决优先级：代码正确性 > 需求满足度 > 一致性。
+Conflict resolution priority: Code Correctness > Requirements Satisfaction > Consistency.
 
-### Step 6: 收集审计结果并修复
+### Step 6: Collect Audit Results and Fix
 
-1. 汇总三个审计报告，按严重程度排序所有发现的问题
-2. 逐个修复，每修复一个在报告中标记 ✓
-3. 对于需要用户权衡的问题（如性能 vs 精度），列出选项并询问用户
-4. 修复完成后，如果改动较大（≥3 处修改），重新运行审计 Agent 1 做回归检查
-5. 如果连续 2 轮修复后审计仍不通过，回退到 Step 2 重新设计（不修改原始 user_requirements.md）
-6. 编译失败时：先自行排查语法/include 错误，无法解决时回退到 Step 4 重新生成
+1. Aggregate the three audit reports, sort all discovered issues by severity
+2. Fix one by one, marking each as fixed ✓ in the report
+3. For issues requiring user trade-off decisions (e.g., performance vs. precision), list the options and ask the user
+4. After fixes are complete, if changes are substantial (≥3 modifications), re-run audit Agent 1 for regression check
+5. If the audit still does not pass after 2 consecutive rounds of fixes, fall back to Step 2 to redesign (do not modify the original user_requirements.md)
+6. On compilation failure: first self-diagnose syntax/include errors; if unresolvable, fall back to Step 4 to regenerate
 
-审计结果汇总格式：
+Audit result summary format:
 
 ```markdown
 # Audit Summary — <pgen_name>
 
-## Agent 1: 代码正确性
-- [ ] 问题 1（严重/警告）: <描述> → 已修复 ✓
-- [ ] 问题 2（警告）: <描述> → 需要用户确认...
+## Agent 1: Code Correctness
+- [ ] Issue 1 (Critical/Warning): <description> → Fixed ✓
+- [ ] Issue 2 (Warning): <description> → Needs user confirmation...
 
-## Agent 2: 需求满足度
-| 需求项 | 状态 | 备注 |
-|--------|------|------|
-| 初始 B 场 | ✓ | |
-| e-/e+ 注入 | ✓ | |
+## Agent 2: Requirements Satisfaction
+| Requirement Item | Status | Notes |
+|------------------|--------|-------|
+| Initial B field | ✓ | |
+| e-/e+ injection | ✓ | |
 | ... | | |
 
-## Agent 3: 代码-TOML 一致性
-- [ ] 不一致 1: <描述> → 已修复 ✓
-- [ ] 不一致 2: <描述> → 已修复 ✓
+## Agent 3: Code-TOML Consistency
+- [ ] Inconsistency 1: <description> → Fixed ✓
+- [ ] Inconsistency 2: <description> → Fixed ✓
 ```
 
-### Step 7: 交付
+### Step 7: Deliver
 
-交付前最终检查：
-- [ ] pgen.hpp 已通过审计
-- [ ] `<name>.toml` 已通过审计
-- [ ] 归一化约定已验证（参考 00-normalization.md）
-- [ ] 代码注释标注了单位系统
+Final checks before delivery:
+- [ ] pgen.hpp has passed audit
+- [ ] `<name>.toml` has passed audit
+- [ ] Normalization conventions verified (refer to 00-normalization.md)
+- [ ] Code comments annotate the unit system
 
-交付内容：
+Deliverables:
 ```
 pgens/<name>/
-├── pgen.hpp          # 最终代码
-├── <name>.toml       # 最终 TOML
-├── design.md         # 设计文档（供后续参考）
-├── user_requirements.md  # 需求文档（供后续参考）
-└── audit_summary.md  # 审计报告
+├── pgen.hpp              # Final code
+├── <name>.toml           # Final TOML
+├── design.md             # Design document (for future reference)
+├── user_requirements.md  # Requirements document (for future reference)
+└── audit_summary.md      # Audit report
 ```
 
-向用户报告交付物清单，并提示：
-- "代码已就绪，下一步：使用 entity-env-build skill 编译和运行"
-- "编译命令：`cmake -B build -D pgen=<name>`"
+Report the deliverable list to the user, and prompt:
+- "Code is ready. Next step: use the entity-env-build skill to compile and run."
+- "Compile command: `cmake -B build -D pgen=<name>`"
 
-## 引用决策表
+## Reference Decision Table
 
-部分 reference 之间有互斥或前置依赖：
+Some references have mutual exclusion or prerequisite dependencies:
 
-| 场景 | 决策 |
-|------|------|
-| ext_current 仅 Minkowski | GR 用户不需要 04。GR + 电流源 → 需要引擎修改 |
-| GR init-fields | 需要 dx1/dx2/dx3 + 势方法。参考 02 的 GR 部分 |
-| ExternalFields vs ext_force | 选一个即可。ExternalFields 是超集。简单力 → ext_force |
-| Replenish 依赖 | 需要 03 (ComputeMomentWithSpecies) + 08 (CustomPostStep) |
-| Moving Injector | 需要 03 (注入) + 02 (场重置) + 08 (CustomPostStep) |
-| Dynamic BC | PGen 需要 non-const Metadomain。与 MovingWindow 兼容 |
-| 无 init_flds 的 PGen | 真空模拟。fields 保持为零 |
+| Scenario | Decision |
+|----------|----------|
+| ext_current is Minkowski-only | GR users do not need 04. GR + current source → engine modification needed |
+| GR init-fields | Requires dx1/dx2/dx3 + potential method. See the GR section of 02 |
+| ExternalFields vs ext_force | Pick one. ExternalFields is the superset. Simple force → ext_force |
+| Replenish dependency | Requires 03 (ComputeMomentWithSpecies) + 08 (CustomPostStep) |
+| Moving Injector | Requires 03 (injection) + 02 (field reset) + 08 (CustomPostStep) |
+| Dynamic BC | PGen needs non-const Metadomain. Compatible with MovingWindow |
+| PGen without init_flds | Vacuum simulation. Fields remain zero |
 
-## 常用 Agent 操作
+## Common Agent Operations
 
-### 更新已有 PGen
+### Updating an Existing PGen
 
-当用户要求修改已有 PGen 时：
-1. 读取现有的 pgen.hpp + TOML + design.md（如有）
-2. 修改 user_requirements.md（标记变更项）
-3. 进入 Step 2 → 只加载新增功能对应的 references
-4. 后续流程同标准工作流
+When the user asks to modify an existing PGen:
+1. Read the existing pgen.hpp + TOML + design.md (if available)
+2. Modify user_requirements.md (mark changed items)
+3. Enter Step 2 → only load references corresponding to new functionality
+4. Subsequent flow follows the standard workflow
 
-### Debug 已有 PGen
+### Debugging an Existing PGen
 
-当用户报告 bug/错误时：
-1. 加载对应功能的 reference，查 "常见陷阱" section
-2. 加载 `00-normalization.md`（最隐蔽的 bug 来源）
-3. 如果与 TOML 相关，加载 `09-toml-config.md` 验证参数
-4. 启动审计 Agent 1（代码正确性）做针对性审计
-5. 输出诊断报告 + 修复建议
+When the user reports a bug/error:
+1. Load the corresponding functionality reference, check the "Common Pitfalls" section
+2. Load `00-normalization.md` (the most subtle source of bugs)
+3. If TOML-related, load `09-toml-config.md` to validate parameters
+4. Launch audit Agent 1 (Code Correctness) for targeted auditing
+5. Output a diagnostic report + fix suggestions
