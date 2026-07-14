@@ -32,8 +32,20 @@ entity-skills/
 
 当前整体设计见 `design/architecture.md`，workspace 和状态细节见 `design/workspace-and-state.md`。`design/` 和 `legacy/` 不属于 Router 运行时上下文。
 
+## 仓库与发布
+
+四个 skill 由本仓库统一开发、测试和发布。`skills/` 下不使用嵌套 Git 仓库或 submodule；跨 skill 的契约修改应在同一个分支和 pull request 中完成。
+
+- `main` 保存可用的整包状态；
+- 开发使用短期分支，不为单个 skill 维护长期分支；
+- release tag（例如 `v0.1.0`）固定一组经过联合验证的四个 skill；
+- 旧的单 skill 仓库只保留历史，不再作为开发或发布入口。
+
+详细协作约定见 `CONTRIBUTING.md`。
+
 本地验证：
 
 ```bash
 python3 -m unittest discover -s tests -v
+python3 -m unittest discover -s skills/entity-env-build/tests -v
 ```
