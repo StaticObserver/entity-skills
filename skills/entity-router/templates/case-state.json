@@ -1,0 +1,54 @@
+{
+  "schema_version": 2,
+  "revision": 0,
+  "case_id": "",
+  "case_status": "active",
+  "created_at": "",
+  "updated_at": "",
+  "last_opened_at": "",
+  "identity": {
+    "name": "",
+    "summary": "",
+    "tags": []
+  },
+  "memory": {
+    "goal": "",
+    "done_when": [],
+    "confirmed_decisions": [],
+    "open_questions": [],
+    "constraints": [],
+    "out_of_scope": [],
+    "last_summary": ""
+  },
+  "scope": {
+    "entity_workdir": "",
+    "case_dir": "",
+    "entity_checkout": "",
+    "entity_commit": "",
+    "pgen": "",
+    "pgen_path": "",
+    "toml_path": "",
+    "design_doc": "",
+    "active_run": "",
+    "protected_paths": []
+  },
+  "workflow": {
+    "workflow_id": "",
+    "type": "",
+    "status": "active",
+    "phase": "orient",
+    "owner": "router",
+    "active_action_id": "",
+    "allowed_actions": [],
+    "next_action": "",
+    "blockers": []
+  },
+  "readiness": {
+    "orientation": {"status": "unresolved", "evidence": []},
+    "pgen": {"status": "absent", "evidence": []},
+    "build": {"status": "absent", "evidence": []},
+    "run": {"status": "none", "evidence": []},
+    "data": {"status": "absent", "evidence": []},
+    "analysis": {"status": "none", "evidence": []}
+  }
+}

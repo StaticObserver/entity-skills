@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "case_id": "",
+  "workflow_id": "",
+  "action_id": "",
+  "action_type": "",
+  "owner": "",
+  "status": "completed",
+  "outputs": [],
+  "verification": [],
+  "blockers": [],
+  "diagnosis": "",
+  "suggested_owner": "",
+  "started_at": "",
+  "finished_at": ""
+}

@@ -1,0 +1,21 @@
+{
+  "schema_version": 1,
+  "case_revision": 0,
+  "case_id": "",
+  "workflow_id": "",
+  "action_id": "",
+  "action_type": "",
+  "owner": "",
+  "execution_domain": "",
+  "goal": "",
+  "playbook": "",
+  "inputs": [],
+  "read_roots": [],
+  "write_roots": [],
+  "protected_paths": [],
+  "constraints": [],
+  "expected_outputs": [],
+  "acceptance_checks": [],
+  "failure_evidence": [],
+  "started_at": ""
+}

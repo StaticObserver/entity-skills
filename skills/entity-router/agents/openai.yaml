@@ -1,0 +1,4 @@
+interface:
+  display_name: "Entity Router"
+  short_description: "Orchestrate gated Entity simulation cases"
+  default_prompt: "Use $entity-router to recover or execute this Entity simulation workflow with Case state and isolated workers."
