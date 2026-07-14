@@ -1,0 +1,12 @@
+.DS_Store
+__pycache__/
+*.py[cod]
+generated/
+logs/
+build/
+deps/
+*.local.json
+requirements.json
+env.sh
+entity-build.sh
+CLAUDE.md
