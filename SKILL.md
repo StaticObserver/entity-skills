@@ -1,359 +1,159 @@
 ---
 name: entity-pgen
-description: Design, write, and debug Entity problem generators (pgen.hpp + TOML). Use when the user needs to create a new PGen, modify existing PGen code, write matching TOML configs, debug compile/runtime/physics errors in PGen code, or understand Entity's API and normalization conventions for PGen development.
+description: Design, implement, review, and modify Entity problem generators together with their matching TOML configurations and docs/design.md. Use for new or existing PGen work involving initial fields, initial particles, boundaries, custom timestep behavior, external current or force, custom output, PGen-specific parameters, normalization, or PGen-TOML consistency. Handle only problems attributed to the PGen or its TOML; route environment builds, untriaged runtime failures, Entity core changes, and result analysis to their owning skills.
 ---
 
-# Entity-PGen
+# Entity PGen
 
-## Mission
+## Purpose
 
-Help the Agent translate the user's physics requirements into a correct, compilable Entity Problem Generator (pgen.hpp + TOML config). This skill breaks down each PGen development capability into an independent reference, which the Agent matches and combines on demand.
+Develop `pgen.hpp` and its TOML configuration as one design unit. Keep `docs/design.md` as the authoritative design and current completion record. Preserve consistency among the design, PGen implementation, and TOML without forcing every task through a rigid pipeline.
 
-Core workflow:
+Use the bundled references as an on-demand knowledge base. Load only what the current task needs and verify version-sensitive details against the active Entity checkout.
 
-```
-Requirement Clarification → Requirements Document → Match References → Design Document → User Confirmation → Build Code + TOML → Three-Way Audit → Fix → Deliver
-```
+## Scope
 
-## Boundaries
+Handle:
 
-**Handle**: Requirement elicitation, PGen code writing, TOML configuration, normalization conventions, structural integrity checks, code-TOML consistency audit.
+- designing a new PGen and matching TOML;
+- modifying or reviewing an existing PGen/TOML pair;
+- maintaining `docs/design.md` alongside implementation changes;
+- checking normalization, coordinate basis, API usage, and PGen-TOML consistency;
+- fixing a problem already attributed to PGen code or configuration.
 
-**Route to other skills**:
-- Build environment, CMake configuration, compilation execution → `entity-env-build`
-- Entity engine source modifications (Ampere kernel, Context extensions, etc.) → `entity-core-dev`
-- Data analysis/visualization → `entity-analysis` or `nt2py`
+Route elsewhere:
 
-## Hard Rules
+- dependency setup, CMake configuration, and compilation execution -> `entity-env-build`;
+- failures whose owner is still unclear -> return evidence to the package Router;
+- Entity engine or framework changes -> return a scoped handoff to the package Router;
+- simulation output access and visualization -> `entity-nt2py`; scientific analysis remains in the Router playbook.
 
-1. **Normalization**: Field values returned by InitFields are in code normalized units and can be written directly into EM arrays; no additional normalization coefficients are needed. ext_current must be multiplied by skindepth0²/larmor0 as compensation (see `references/00-normalization.md` for details)
-2. **Coordinate Basis**: SRPIC → local tetrad (orthonormal) basis. GRPIC → coordinate basis. Do not mix them
-3. **Unit Domain**: InitPrtls = physical units. CustomPostStep / ext_current = code units
-4. **Instance Name Enforced**: The names `init_flds`, `ext_force`, `ext_current` are detected by C++20 concepts and must not be changed
-5. **Confirmation Gate Before Writing Code**: After Step 2 produces design.md, explicit user confirmation must be obtained
-6. **Audit Before Delivery**: The three-way audit in Steps 5-6 must pass; it cannot be skipped
-7. **species index is 1-based**: The species parameter of arch::InjectUniform* starts from 1
+Do not add platform-specific metadata or invocation configuration to the core skill.
 
-## Reference Index
+## Core Rules
 
-> All references are written based on **Entity v1.4.4**.
+1. Treat `docs/design.md`, `pgen.hpp`, and the matching TOML as one maintained unit.
+2. Read the current design and implementation before changing either PGen or TOML. If no design exists, reconstruct a minimal one from the current files and label inferred decisions as inferred.
+3. Cover every core PGen component in the design: basic configuration, initial electromagnetic fields, initial particles, boundaries, custom behavior, and custom output. Mark unused components as `not-used` instead of omitting them.
+4. Keep the design concise. Record intent, relevant TOML mapping, and current state; add formulas or implementation detail only when they are needed to make the design unambiguous.
+5. Confirm decisions that materially change the physical model, normalization, or implementation direction. Continue with safe local work when open questions do not block it.
+6. Verify Entity version, API signatures, normalization, and coordinate-basis conventions from the active checkout when available. The bundled references target Entity v1.4.4 and are secondary to current source evidence.
+7. Modify PGen and TOML together when the change affects their shared contract, then update the corresponding design section and current status.
 
-### Background Knowledge (Loaded in Step 1)
+## Working Method
 
-| Reference | Summary |
-|-----------|---------|
-| `00-normalization.md` | Normalization conventions, code normalized unit system, numerical specifications for InitFields/ext_current |
-| `01-skeleton.md` | PGen skeleton template, minimal runnable PGen, traits declaration, parameter reading, required includes |
+Adapt the depth of work to the request:
 
-### Load by Functionality (Matched to User Needs)
+1. **Orient**: locate the active Entity checkout, PGen, TOML, and `docs/design.md`; inspect only the evidence relevant to the task.
+2. **Identify the affected design**: determine which core components and TOML keys are involved. Resolve blocking physics decisions before implementation.
+3. **Load references**: read the relevant reference files below and compare version-sensitive claims with the active checkout.
+4. **Design and implement**: create or update `docs/design.md`, then make the corresponding PGen and TOML changes. For a local correction, update the design and implementation in the same pass.
+5. **Verify**: check the affected design-PGen-TOML contract and run available static, compile, smoke, or physics checks appropriate to the task.
+6. **Record state**: update the design's current status and report what is implemented, verified, open, or handed off.
 
-> `09-toml-config.md` is loaded when building the TOML (Step 4). `pgens-index.md` is loaded when API usage is uncertain or a reference implementation is needed.
+For explanation-only requests, read and explain the existing design and implementation without creating process artifacts. For reviews, report concrete conflicts and evidence; do not expand the task into a full redesign unless required.
 
-| Reference | When Needed | Trigger Keywords |
-|-----------|-------------|------------------|
-| `02-init-fields.md` | Initial EM fields needed | magnetic field, electric field, Bx/By/Bz, Ex/Ey/Ez, Wald, dipole, Harris sheet |
-| `03-particle-injection.md` | Particles needed | plasma, particle, electron, ion, injection, Maxwellian, density distribution, pair plasma |
-| `04-ext-current.md` | Ampere source term (Minkowski only) | external current, antenna, axion current, J_ext, source term |
-| `05-ext-force.md` | External force on particles | external force, external acceleration, radiation force, external B/E field |
-| `06-boundary.md` | Non-PERIODIC boundaries | open boundary, absorbing boundary, fixed boundary, atmosphere, conductor |
-| `07-custom-output.md` | Custom diagnostic quantities | custom output, extra diagnostics, derived field |
-| `08-custom-post-step.md` | Timestep hooks | replenish injection, moving window, dynamic boundary, piston, periodic injection |
-| `09-toml-config.md` | Generate/validate TOML config | write TOML, config parameters, section syntax, TOML skeleton |
-| `10-higher-order.md` | Custom field stencil or high-order shape | stencil, Cherenkov, numerical dispersion, high-order shape, shape_order, esirkepov, delta_x, beta_xy |
-| `pgens-index.md` | Uncertain about API usage or implementation patterns | reference implementation, official examples, Entity built-in pgen, template reference |
+## Design Document
 
-## Development Workflow (7 Steps)
+Store all PGen design material under `docs/`. Use one `docs/design.md` by default; add supporting documents only when the PGen genuinely needs them.
 
-### Step 1: Requirement Clarification → user_requirements.md
-
-Load `00-normalization.md` and `01-skeleton.md` as background knowledge.
-
-Collect requirements from the user in **3 rounds**. After each round, present intermediate results. Poll in order; do not jump to the next round.
-
-**Round 1 — Basic Information**:
-
-| # | Question | Options/Notes | Default |
-|---|----------|---------------|---------|
-| 1 | PGen name | Lowercase English + underscores | **Required** |
-| 2 | Physics problem description | Free text: what phenomenon is being simulated? | **Required** |
-| 3 | Simulation engine | `SRPIC` / `GRPIC` | `SRPIC` |
-| 4 | Metric | `Minkowski` / `Spherical` / `QSpherical` / `Kerr_Schild` / `QKerr_Schild` / `Kerr_Schild_0` | `Minkowski` |
-| 5 | Spatial dimensions | 1D / 2D / 3D | Inferred from the problem |
-| 6 | Grid resolution + physical extent | Per dimension [N, extent_min, extent_max] | **Required** |
-
-**Round 2 — Physics Configuration**:
-
-| # | Question | Options/Notes | Default |
-|---|----------|---------------|---------|
-| 7 | Initial field configuration | B field? E field? Spatial distribution? Uniform/non-uniform? | None (vacuum) |
-| 8 | Number of particle species + label/mass/charge per species | List | No particles |
-| 9 | Initial particle distribution | Uniform / NonUniform? Temperature? Drift velocity? Density? | — |
-| 10 | Boundary conditions | PERIODIC / MATCH / FIXED / ABSORB / ... | PERIODIC |
-
-**Round 3 — Advanced Features + Runtime**:
-
-| # | Question | Options/Notes | Default |
-|---|----------|---------------|---------|
-| 11 | External current/force needed? | Describe the physical mechanism | None |
-| 12 | Timestep hooks needed? | Replenish injection / moving window / dynamic boundary / ... | None |
-| 13 | Custom output needed? | Extra fields / statistics | None |
-| 14 | Fiducial scales | larmor0, skindepth0 | larmor0=1.0, skindepth0=1.0 |
-| 15 | Runtime parameters | `runtime`, `ppc0`, `CFL`, `output interval` | runtime=100.0, ppc0=32, CFL=0.45 |
-
-After all three rounds are complete, write the results to `user_requirements.md` (keep `<description>` placeholders, do not fill in example data):
+Use this compact structure:
 
 ```markdown
-# User Requirements — <pgen_name>
+# <name> Design
 
-## Physics Problem
-<description>
+## 1. Goal
+State the physical problem, intended behavior, and important exclusions.
 
-## Simulation Parameters
-| Parameter | Value |
-|-----------|-------|
-| Engine | ... |
-| Metric | ... |
-| Dimensions | ... |
-| Resolution | ... |
-| Extent | ... |
-| Boundaries | ... |
-| Runtime | ... |
-| larmor0 | ... |
-| skindepth0 | ... |
-| CFL | ... |
+## 2. Basic Configuration
+Record the Entity version, engine, metric, dimensions, normalization/basis, and special build or data requirements.
 
-## Field Configuration
-<describe initial E/B fields>
+## 3. Initial Electromagnetic Fields
+State: not-used | planned | implemented | verified
+Describe the intended fields and matching TOML parameters.
 
-## Species List
-| # | Label | Mass | Charge | Pusher | maxnpart |
-|---|-------|------|--------|--------|----------|
+## 4. Initial Particles
+State: not-used | planned | implemented | verified
+Describe species, distributions, and matching TOML parameters.
 
-## Initial Particle Distribution
-<temperature, drift velocity, density, distribution type>
+## 5. Boundaries
+State: not-used | planned | implemented | verified
+Describe field and particle boundaries and matching TOML parameters.
 
-## External Current/Force
-<if applicable>
+## 6. Custom Behavior
+State: not-used | planned | implemented | verified
+Describe any ext_current, ext_force/ExternalFields, CustomPostStep, CustomParticleUpdate, or other hooks and their TOML parameters.
 
-## Timestep Hooks
-<if applicable>
+## 7. Custom Output
+State: not-used | planned | implemented | verified
+Describe CustomFieldOutput, CustomStat, and matching TOML names.
 
-## Custom Output
-<if applicable>
+## 8. PGen-TOML Contract
+Record only the key mappings and constraints that must remain synchronized.
 
-## Special Considerations
-<constraints specifically mentioned by the user>
+## 9. Current Status
+List completed, pending, open, and verified work.
+
+## 10. Important Changes
+Record only changes that alter the physical model, interfaces, or TOML contract.
 ```
 
-Present `user_requirements.md` to the user. After confirmation, proceed to Step 2.
+The Agent may expand, merge, or shorten subsections when the problem requires it, but must retain the core component coverage and current-state record.
 
-### Step 2: Match References → Design Document → design.md
+## Reference Router
 
-**design.md documents HOW**: Based on user requirements, provide a concrete code implementation plan — PGen structure, InitFields formulas, injection archetype selection, TOML parameter table, etc. This is the translation from physics requirements to code design.
+All references describe Entity v1.4.4. Read only the files relevant to the affected design.
 
-**Sub-step 2a: Match references**
+| Need | References |
+|---|---|
+| Normalization, units, or coordinate basis | `references/00-normalization.md` |
+| PGen structure, traits, constructors, or parameters | `references/01-skeleton.md` |
+| Initial electromagnetic fields | `references/02-init-fields.md` |
+| Initial or replenished particles | `references/03-particle-injection.md` |
+| External current | `references/04-ext-current.md` |
+| External force or external fields | `references/05-ext-force.md` |
+| Boundary conditions | `references/06-boundary.md` |
+| Custom field output or statistics | `references/07-custom-output.md` |
+| Custom timestep or particle updates | `references/08-custom-post-step.md` |
+| TOML structure and parameters | `references/09-toml-config.md` |
+| Higher-order field or particle algorithms | `references/10-higher-order.md` |
+| Existing Entity PGen patterns | `references/pgens-index.md` |
 
-Cross-reference the "Load by Functionality" index table above and match the corresponding reference files based on user_requirements.md. Additional rules:
-- Always load `00-normalization.md`, `01-skeleton.md`
-- When particle injection is present, replenish depends on `03` + `08`
-- When API usage is uncertain, load `pgens-index.md`
-- `09-toml-config.md` is loaded in Step 4
+For a new PGen, begin with `00`, `01`, and `09`, then load the feature references selected by the design. For an existing PGen, begin with its current files and load only the references needed for the affected components. Use `pgens-index.md` when an API pattern is uncertain, then inspect the referenced implementation in the active checkout.
 
-After loading the matched references, carefully read the API signatures, constraints, and pitfalls.
+## Consistency and Verification
 
-**Sub-step 2b: Write design.md**
+Check three relationships over the affected scope:
 
-Based on the requirements document and references, write the design document:
+1. `docs/design.md` <-> `pgen.hpp`;
+2. `docs/design.md` <-> TOML;
+3. `pgen.hpp` <-> TOML.
 
-```markdown
-# Design — <pgen_name>
+Include the relevant checks:
 
-## Referenced References
-- 00-normalization.md
-- 01-skeleton.md
-- 02-init-fields.md  ← initial B field needed
-- 03-particle-injection.md  ← particle injection needed
-- 09-toml-config.md
+- PGen traits match TOML engine, metric, and dimensions;
+- `params.get()` keys match TOML `[setup]` names and types;
+- species count, order, properties, and indexing agree;
+- field and particle boundary settings match implemented hooks;
+- custom output names match TOML requests;
+- normalization and coordinate basis are explicit and consistent;
+- special algorithms, build options, and external data required by the design are declared;
+- the design status reflects the evidence actually obtained.
 
-## PGen Structure
-### Traits Declaration
-- engines: { SRPIC }
-- metrics: { Minkowski }
-- dimensions: { _2D }
+Do not claim compilation, smoke testing, or physics validation unless it was performed. A local modification does not require rechecking unrelated parts of the case.
 
-### Member List
-| Member | Type | Source Reference |
-|--------|------|------------------|
-| params | const SimulationParams& | skeleton |
-| metadomain | Metadomain<S,M>& | skeleton |
-| init_flds | InitFields<D> | 02-init-fields |
-| B0, theta | real_t (from [setup]) | 02-init-fields |
+## Deliverables
 
-### Defined Methods
-| Method | Purpose | Source Reference |
-|--------|--------|------------------|
-| PGen(...) | Constructor, reads parameters from TOML | skeleton |
-| InitPrtls(...) | Initial particle injection | 03-particle-injection |
+For a new PGen, produce:
 
-## InitFields Design
-<describe the InitFields struct structure and return value formulas for each method>
-
-## InitPrtls Design
-<describe the injection method, archetype used, parameter values>
-
-## TOML [setup] Parameters
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| B0 | real_t | 1.0 | Magnetic field strength |
-| temperature | real_t | 0.01 | Plasma temperature |
-
-## Boundary Conditions
-- Fields: PERIODIC × 2
-- Particles: PERIODIC × 2
-
-## Normalization Checklist
-- [ ] InitFields field values are in code normalized units, no extra coefficients needed
-- [ ] ext_current multiplied by skindepth0²/larmor0 (if applicable)
-- [ ] InitPrtls uses physical units
-- [ ] CustomPostStep uses code units (if applicable)
-```
-
-### Step 3: User Confirms Design
-
-Present design.md in full to the user. **Must wait for explicit user confirmation** before proceeding to Step 4.
-
-If the user proposes modifications, return to Step 2 to revise the design document and re-confirm.
-
-Confirmation prompt: "Above is the complete design. After confirmation, I will begin writing the code and TOML. Any adjustments needed?"
-
-### Step 4: Build Code
-
-Based on design.md, generate two files:
-
-**4a. Generate `pgen.hpp`**
-
-Assemble in the following order:
-1. Include guards + headers (from 01-skeleton)
-2. namespace + using (from 01-skeleton)
-3. InitFields struct (from 02-init-fields, if needed by design)
-4. ext_current struct (from 04, if needed by design)
-5. ext_force struct / ExtFields (from 05, if needed by design. ext_force and ExternalFields method are mutually exclusive — pick one)
-6. PGen struct (from 01-skeleton):
-   - traits declaration
-   - member variables
-   - constructor (params.get reads [setup] parameters)
-   - InitPrtls() (from 03, if needed by design)
-   - MatchFields / FixFieldsConst / AtmFields (from 06, if needed by design)
-   - ExternalFields() (from 05, if needed by design. Returns ExtFields functor)
-   - CustomPostStep() (from 08, if needed by design)
-   - CustomParticleUpdate() (from 08, if needed by design. Returns UpdateFunctor)
-   - CustomFieldOutput() / CustomStat() (from 07, if needed by design)
-
-Add comments on each method indicating whether physical units or code units are used.
-
-**4b. Generate `<name>.toml`**
-
-Based on 09-toml-config.md and the parameters in design.md:
-1. Fill in user-confirmed simulation, grid, metric, boundaries
-2. Fill in scales (larmor0, skindepth0)
-3. Fill in particles + species (if particles present)
-4. Fill in [setup] section (PGen-specific parameters)
-5. Fill in output configuration
-6. Set `current_filters = 0`
-
-### Step 5: Three-Way Audit
-
-**Launch 3 audit sub-Agents in parallel** (all using `general-purpose` type, `subagent_type`="general-purpose"). Each Agent first reads the corresponding files under `references/`, then reads the generated pgen.hpp, TOML, user_requirements.md, and design.md to perform the audit. If an Agent fails/times out, fall back to the main Agent completing that audit serially.
-
-**Agent 1 — Code Correctness**: Check syntax, traits matching, API signatures (against references), unit annotations, normalization conventions, common pitfalls (1-based/0-based indexing, forgotten CommunicateFields, dead particle charge conservation), performance issues. Output a list of critical/warning issues + fix suggestions.
-
-**Agent 2 — Requirements Satisfaction**: Check item by item against user_requirements.md: field configuration, particle species + injection, boundary conditions + corresponding methods, [setup] parameters, custom output. Output a ✓/✗/⚠ checklist.
-
-**Agent 3 — Code-TOML Consistency**: Check bidirectional matching of params.get and TOML [setup], species index consistency, traits × TOML compatibility, BC method correspondence, custom output name matching. Output a list of inconsistencies.
-
-Conflict resolution priority: Code Correctness > Requirements Satisfaction > Consistency.
-
-### Step 6: Collect Audit Results and Fix
-
-1. Aggregate the three audit reports, sort all discovered issues by severity
-2. Fix one by one, marking each as fixed ✓ in the report
-3. For issues requiring user trade-off decisions (e.g., performance vs. precision), list the options and ask the user
-4. After fixes are complete, if changes are substantial (≥3 modifications), re-run audit Agent 1 for regression check
-5. If the audit still does not pass after 2 consecutive rounds of fixes, fall back to Step 2 to redesign (do not modify the original user_requirements.md)
-6. On compilation failure: first self-diagnose syntax/include errors; if unresolvable, fall back to Step 4 to regenerate
-
-Audit result summary format:
-
-```markdown
-# Audit Summary — <pgen_name>
-
-## Agent 1: Code Correctness
-- [ ] Issue 1 (Critical/Warning): <description> → Fixed ✓
-- [ ] Issue 2 (Warning): <description> → Needs user confirmation...
-
-## Agent 2: Requirements Satisfaction
-| Requirement Item | Status | Notes |
-|------------------|--------|-------|
-| Initial B field | ✓ | |
-| e-/e+ injection | ✓ | |
-| ... | | |
-
-## Agent 3: Code-TOML Consistency
-- [ ] Inconsistency 1: <description> → Fixed ✓
-- [ ] Inconsistency 2: <description> → Fixed ✓
-```
-
-### Step 7: Deliver
-
-Final checks before delivery:
-- [ ] pgen.hpp has passed audit
-- [ ] `<name>.toml` has passed audit
-- [ ] Normalization conventions verified (refer to 00-normalization.md)
-- [ ] Code comments annotate the unit system
-
-Deliverables:
-```
+```text
 pgens/<name>/
-├── pgen.hpp              # Final code
-├── <name>.toml           # Final TOML
-├── design.md             # Design document (for future reference)
-├── user_requirements.md  # Requirements document (for future reference)
-└── audit_summary.md      # Audit report
+|-- pgen.hpp
+|-- <name>.toml
+`-- docs/
+    `-- design.md
 ```
 
-Report the deliverable list to the user, and prompt:
-- "Code is ready. Next step: use the entity-env-build skill to compile and run."
-- "Compile command: `cmake -B build -D pgen=<name>`"
+Keep additional design notes, figures, or validation records under `docs/` only when needed. Keep runtime data tables outside `docs/` in an appropriate data directory.
 
-## Reference Decision Table
-
-Some references have mutual exclusion or prerequisite dependencies:
-
-| Scenario | Decision |
-|----------|----------|
-| ext_current is Minkowski-only | GR users do not need 04. GR + current source → engine modification needed |
-| GR init-fields | Requires dx1/dx2/dx3 + potential method. See the GR section of 02 |
-| ExternalFields vs ext_force | Pick one. ExternalFields is the superset. Simple force → ext_force |
-| Replenish dependency | Requires 03 (ComputeMomentWithSpecies) + 08 (CustomPostStep) |
-| Moving Injector | Requires 03 (injection) + 02 (field reset) + 08 (CustomPostStep) |
-| Dynamic BC | PGen needs non-const Metadomain. Compatible with MovingWindow |
-| PGen without init_flds | Vacuum simulation. Fields remain zero |
-
-## Common Agent Operations
-
-### Updating an Existing PGen
-
-When the user asks to modify an existing PGen:
-1. Read the existing pgen.hpp + TOML + design.md (if available)
-2. Modify user_requirements.md (mark changed items)
-3. Enter Step 2 → only load references corresponding to new functionality
-4. Subsequent flow follows the standard workflow
-
-### Debugging an Existing PGen
-
-When the user reports a bug/error:
-1. Load the corresponding functionality reference, check the "Common Pitfalls" section
-2. Load `00-normalization.md` (the most subtle source of bugs)
-3. If TOML-related, load `09-toml-config.md` to validate parameters
-4. Launch audit Agent 1 (Code Correctness) for targeted auditing
-5. Output a diagnostic report + fix suggestions
+When build or run verification is required, hand off the current checkout identity, PGen/TOML paths, design requirements, and unresolved constraints to the owning skill.
