@@ -83,6 +83,104 @@ class HardGateTests(unittest.TestCase):
             self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
             self.assertIn('"status": "partial"', proc.stdout)
 
+    def test_validate_rejects_unsupported_entity_versions_and_profiles(self):
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            cases = [
+                ("1.3.3", "modern", "20", "minimum supported version is 1.4.0"),
+                ("1.4.0", "legacy", "20", "only modern is supported"),
+                ("1.4.0", "modern", "17", "Entity >=1.4.0 requires 20"),
+            ]
+            for index, (version, profile, cxx_standard, message) in enumerate(cases):
+                with self.subTest(version=version, profile=profile, cxx_standard=cxx_standard):
+                    case_dir = tmp / str(index)
+                    case_dir.mkdir()
+                    req = self.base_requirements(case_dir)
+                    req["entity"]["version_bucket"] = version
+                    req["entity"]["dependency_profile"] = profile
+                    req["compile"]["cxx_standard"] = cxx_standard
+                    req_path = case_dir / "requirements.json"
+                    self.write_json(req_path, req)
+
+                    proc = run_cmd("scripts/entity_checkpoint.py", "validate", str(req_path))
+
+                    self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+                    self.assertIn('"status": "fail"', proc.stdout)
+                    self.assertIn(message, proc.stdout)
+
+    def test_create_rejects_entity_1_3(self):
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            req = self.base_requirements(tmp)
+            req["entity"]["version_bucket"] = "1.3.3"
+            req_path = tmp / "requirements.json"
+            self.write_json(req_path, req)
+
+            proc = run_cmd(
+                "scripts/entity_checkpoint.py",
+                "create",
+                str(req_path),
+                "--output",
+                str(tmp / "entity-deps.local.json"),
+            )
+
+            self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertFalse((tmp / "entity-deps.local.json").exists())
+            self.assertIn("minimum supported version is 1.4.0", proc.stderr)
+
+    def test_validate_rejects_cuda_before_entity_1_4_3(self):
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            req = self.base_requirements(tmp)
+            req["entity"]["version_bucket"] = "1.4.2"
+            req["environment"]["backend"] = "cuda"
+            req["environment"]["gpu_arch"] = "AMPERE80"
+            req_path = tmp / "requirements.json"
+            self.write_json(req_path, req)
+
+            proc = run_cmd("scripts/entity_checkpoint.py", "validate", str(req_path))
+
+            self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn('"status": "fail"', proc.stdout)
+            self.assertIn("CUDA requires Entity >=1.4.3", proc.stdout)
+
+    def test_build_and_runner_reject_entity_1_3(self):
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            req = self.base_requirements(tmp)
+            req["entity"]["version_bucket"] = "1.3.3"
+            req_path = tmp / "requirements.json"
+            env_path = tmp / "env.sh"
+            script_path = tmp / "entity-build.sh"
+            self.write_json(req_path, req)
+            env_path.write_text("#!/usr/bin/env bash\n", encoding="utf-8")
+            script_path.write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
+            script_path.chmod(0o755)
+
+            generate_proc = run_cmd(
+                "scripts/entity_generate.py",
+                "build",
+                str(req_path),
+                "--env",
+                str(env_path),
+                "--output",
+                str(tmp / "generated-build.sh"),
+            )
+            run_proc = run_cmd(
+                "scripts/entity_run.py",
+                "build",
+                str(req_path),
+                "--script",
+                str(script_path),
+                "--quiet",
+                env={"HOME": str(tmp / "home")},
+            )
+
+            self.assertNotEqual(generate_proc.returncode, 0)
+            self.assertNotEqual(run_proc.returncode, 0)
+            self.assertIn("minimum supported version is 1.4.0", generate_proc.stderr)
+            self.assertIn("minimum supported version is 1.4.0", run_proc.stderr)
+
     def test_env_blocks_warn_by_default(self):
         with tempfile.TemporaryDirectory() as td:
             tmp = Path(td)

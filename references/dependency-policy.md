@@ -37,11 +37,11 @@ These are always required:
 
 ## Profile Matching
 
-Entity version determines the dependency profile:
+Entity `1.4.0` and newer use one supported dependency profile:
 
 | Profile | Entity Version | C++ Standard | Kokkos | ADIOS2 | ADIOS2 Kokkos Support |
 |---------|---------------|--------------|--------|--------|-----------------------|
-| `legacy` | < 1.4.0 | 17 | 4.x | 2.10.x | OFF |
 | `modern` | >= 1.4.0 | 20 | 5.x | 2.11.x | ON |
 
-Only the `modern` profile builds ADIOS2 with Kokkos support. Other profiles must not add Kokkos as an ADIOS2 dependency unless the user explicitly overrides the profile.
+Entity versions before `1.4.0` are unsupported.
+Entity `1.4.0`–`1.4.2` are CPU-only; CUDA requires Entity `1.4.3` or newer.

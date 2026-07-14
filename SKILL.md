@@ -43,7 +43,8 @@ Do not handle:
 - output analysis;
 - Entity core source changes.
 
-Route those tasks to `entity-case`, `entity-analysis`, or `entity-core-dev`.
+Route PGen/TOML work to `entity-pgen`, output data access to `entity-nt2py`, and
+untriaged runtime or Entity-core work back to the package Router.
 
 ## Hard Rules
 
@@ -52,7 +53,7 @@ Route those tasks to `entity-case`, `entity-analysis`, or `entity-core-dev`.
 - Write the current request to `requirements.json` before using or repairing environment checkpoints.
 - Core dependencies are always `CMake`, a C++ compiler, and `Kokkos`. Add `MPI` only when the current request requires parallel/multi-process builds; add `ADIOS2 + HDF5` only when `output=true` (the default).
 - Unless the user explicitly accepts the risk, all dependencies must use one consistent, non-conflicting compiler/toolchain.
-- Entity `1.4.0` and newer require `C++20`, `Kokkos 5.x`, and `ADIOS2 2.11.x`; versions before `1.4.0` use `C++17`, `Kokkos 4.x`, and `ADIOS2 2.10.x`. Entity versions before `1.4.3` are not compatible with CUDA backend — upgrade to ≥1.4.3. Full profile and compatibility details are in `references/json-contracts.md`, `references/compatibility-check.md`, and `references/dependency-policy.md`.
+- Support Entity `1.4.0` and newer only, using `C++20`, `Kokkos 5.x`, and `ADIOS2 2.11.x`. Reject older checkouts. Entity `1.4.0`–`1.4.2` are CPU-only; use ≥`1.4.3` for CUDA. Full compatibility details are in `references/json-contracts.md`, `references/compatibility-check.md`, and `references/dependency-policy.md`.
 - Do not enter Entity source compilation until compatibility is `pass` and `env.sh` is generated from `entity-deps.local.json`.
 - Do not hand-write the Entity configure/build commands. Generate `entity-build.sh` from `requirements.json` and `env.sh`, then execute it.
 - On clusters: never compile on login nodes. Submit Entity builds through the scheduler (SLURM/PBS), or ask the user if no scheduler is available. For GPU backends, login-node builds require two explicit confirmations: (1) `libcuda.so.1` is absent on login nodes; (2) the build may not be runnable there. Show the login-vs-compute difference before asking.
@@ -205,7 +206,7 @@ Example summary format:
 
 ```
 Build Configuration Summary:
-  ENTITY_CHECKOUT:  /path/to/entity/1.3.3
+  ENTITY_CHECKOUT:  /path/to/entity/1.4.3
   ENTITY_WORKDIR:   /home/user                    ← ROOT
   PGen:             reconnection
   Backend:          HIP (ROCm)
@@ -219,7 +220,7 @@ Build Configuration Summary:
   Optimization:     -O2 (production) — note: may need -O1 for ROCm/Clang
   Debug:            OFF
   Tests:            OFF
-  C++ Standard:     17 (legacy profile)
+  C++ Standard:     20
   Dependency policy: reuse-existing
 
 Proceed with these settings?
@@ -231,8 +232,8 @@ After collecting all answers, write `requirements.json` following the schema in 
 
 Defaults that don't need asking unless the user overrides:
 
-- `entity.dependency_profile`: derived from Entity version — `legacy` for <1.4.0, `modern` for ≥1.4.0
-- `compile.cxx_standard`: derived from profile — `17` for legacy, `20` for modern
+- `entity.dependency_profile`: `modern`; Entity versions before `1.4.0` are unsupported
+- `compile.cxx_standard`: `20`
 - `environment.dependency_versions`: leave empty; fill after probing if source builds are needed
 
 Validate before proceeding:
@@ -349,8 +350,7 @@ Selection rules:
 - Prefer one consistent compiler/toolchain across all selected dependencies.
 - Reject mixed compiler/toolchain combinations unless the user explicitly approves.
 - For CUDA, select Kokkos `nvcc_wrapper` as `compiler.cxx` and record the host compiler.
-- Match the Entity version profile: `legacy` means C++17 + Kokkos 4.x + ADIOS2 2.10.x; `modern` means C++20 + Kokkos 5.x + ADIOS2 2.11.x.
-- Build ADIOS2 with Kokkos support only for the `modern` profile.
+- Use the supported dependency profile: C++20 + Kokkos 5.x + ADIOS2 2.11.x, with ADIOS2 Kokkos support enabled.
 - For MPI, keep `mpicxx`, `mpirun`, Kokkos, ADIOS2, HDF5, and Entity in one MPI/compiler context.
 - For output, keep ADIOS2 and HDF5 serial/MPI context consistent with the MPI requirement.
 - If local source builds are needed, read `references/dependency-build-scripts.md`.
@@ -522,8 +522,8 @@ When the build fails, do NOT blindly retry. Diagnose using this decision tree:
 | `PHI node entries do not match` | Same compiler optimization bug | Same as above — reduce optimization level |
 | `undefined reference to ...` | ABI mismatch or missing link library | Check all pre-built deps use same compiler family; verify `LD_LIBRARY_PATH` |
 | `error: invalid target ID 'gfxXXX'` | GPU architecture mismatch | Kokkos was built for different GPU arch than current node. Check `Kokkos_ARCH_*` vs node GPU |
-| `constraints on a non-templated function` | Entity < 1.4.3 + CUDA backend (NVCC EDG frontend does not support C++20 `requires` constraints) | Upgrade Entity to >= 1.4.3. Entity 1.4.3 (PR #210) replaces `requires` with `static_assert`. Do NOT attempt to fix with compiler flags — no flag workaround exists for this EDG limitation |
-| `call to consteval function "std::source_location::current" did not produce a valid constant expression` | TOML11 + GCC 12.x host + NVCC EDG (bundled toml11 uses `std::source_location::current()` which EDG rejects as non-constexpr) | Add `-DCMAKE_CXX_FLAGS="-UTOML11_HAS_STD_SOURCE_LOCATION"`. But note this alone is insufficient — the `constraints on a non-templated function` bug (above) also blocks Entity < 1.4.3 with CUDA. Upgrade Entity to >= 1.4.3 to fix both |
+| `constraints on a non-templated function` | Entity 1.4.0–1.4.2 + CUDA backend (NVCC EDG frontend does not support C++20 `requires` constraints) | Upgrade Entity to >= 1.4.3. Entity 1.4.3 (PR #210) replaces `requires` with `static_assert`. Do NOT attempt to fix with compiler flags — no flag workaround exists for this EDG limitation |
+| `call to consteval function "std::source_location::current" did not produce a valid constant expression` | TOML11 + GCC 12.x host + NVCC EDG (bundled toml11 uses `std::source_location::current()` which EDG rejects as non-constexpr) | Add `-DCMAKE_CXX_FLAGS="-UTOML11_HAS_STD_SOURCE_LOCATION"`. But note this alone is insufficient — the `constraints on a non-templated function` bug (above) also blocks Entity 1.4.0–1.4.2 with CUDA. Upgrade Entity to >= 1.4.3 to fix both |
 
 **SLURM/job failures:**
 

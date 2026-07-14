@@ -14,12 +14,6 @@ from typing import Any, Dict, List, Tuple
 # ---------------------------------------------------------------------------
 
 PROFILES: Dict[str, Dict[str, Any]] = {
-    "legacy": {
-        "cxx_standard": "17",
-        "kokkos": "4.",
-        "adios2": "2.10.",
-        "adios2_uses_kokkos": False,
-    },
     "modern": {
         "cxx_standard": "20",
         "kokkos": "5.",
@@ -29,15 +23,6 @@ PROFILES: Dict[str, Dict[str, Any]] = {
 }
 
 DEFAULT_VERSION_PROFILES: Dict[str, Dict[str, Any]] = {
-    "legacy": {
-        "name": "legacy",
-        "cxx_standard": "17",
-        "kokkos_family": "4.x",
-        "kokkos_default": "",
-        "adios2_family": "2.10.x",
-        "adios2": "2.10.2",
-        "adios2_uses_kokkos": False,
-    },
     "modern": {
         "name": "modern",
         "cxx_standard": "20",
@@ -163,15 +148,12 @@ CompilerMinVersions = Dict[str, Dict[str, Dict[str, Any]]]
 COMPILER_MIN_VERSIONS: CompilerMinVersions = {
     "cpu": {
         "modern": {"gcc": (10, 4), "clang": (12, 0)},
-        "legacy": {"gcc": (8, 0), "clang": (10, 0)},
     },
     "cuda": {
         "modern": {"gcc": (10, 4), "nvcc": (12, 2), "clang": (12, 0)},
-        "legacy": {"gcc": (8, 0), "nvcc": (11, 0), "clang": (10, 0)},
     },
     "hip": {
         "modern": {"gcc": (10, 4), "rocm": (5, 4), "clang": (14, 0)},
-        "legacy": {"gcc": (8, 0), "rocm": (5, 0), "clang": (12, 0)},
     },
 }
 

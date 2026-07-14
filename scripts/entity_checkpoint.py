@@ -116,9 +116,19 @@ def run_validation(req: Dict[str, Any]) -> Dict[str, Any]:
     build_missing = check_required(req, REQUIRED_BUILD, "build")
     missing_fields = always_missing + build_missing
     consistency_issues = check_consistency(req)
+    unsupported_version = False
+    try:
+        detect_version_profile(req)
+    except (ValueError, SystemExit) as exc:
+        unsupported_version = True
+        consistency_issues.append({
+            "rule": "entity.version.supported",
+            "message": str(exc),
+            "fields": ["entity.version_bucket", "entity.dependency_profile"],
+        })
 
     status = "pass"
-    if missing_fields:
+    if missing_fields or unsupported_version:
         status = "fail"
     elif consistency_issues:
         status = "partial"
@@ -211,10 +221,7 @@ def build_checkpoint(
     else:
         decisions = {}
 
-    try:
-        profile = detect_version_profile(req)
-    except (ValueError, SystemExit):
-        profile = {"name": "unknown", "cxx_standard": "17"}
+    profile = detect_version_profile(req)
 
     checkout_root = str(entity.get("checkout_root", "")) if isinstance(entity, dict) else ""
     version_bucket = str(entity.get("version_bucket", "")) if isinstance(entity, dict) else ""

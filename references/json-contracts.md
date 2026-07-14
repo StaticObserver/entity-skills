@@ -60,7 +60,7 @@ Required shape:
   "entity": {
     "checkout_root": "",
     "version_bucket": "",
-    "dependency_profile": "legacy|modern",
+    "dependency_profile": "modern",
     "workdir": ""
   },
   "environment": {
@@ -77,7 +77,7 @@ Required shape:
     "dependency_policy": "reuse-existing|allow-local-build|unspecified"
   },
   "compile": {
-    "cxx_standard": "17|20",
+    "cxx_standard": "20",
     "pgen": "",
     "pgens": "",
     "precision": "single",
@@ -114,16 +114,16 @@ Completion rules:
 
 - `entity.checkout_root` is required before generating `entity-build.sh`.
 - `entity.workdir` is required before writing artifacts.
-- `entity.dependency_profile` is derived from the Entity version unless explicitly set. Use `legacy` for Entity versions before `1.4.0`, and `modern` for `1.4.0` and newer.
-- `compile.cxx_standard` must be `17` for `legacy` and `20` for `modern`.
-- `environment.dependency_versions` may pin exact source-build tags. If omitted, generated source-build scripts must choose and record profile-compatible concrete tags; for `legacy`, Kokkos must be explicitly pinned to a Kokkos 4.x tag.
+- Entity versions before `1.4.0` are unsupported. `entity.dependency_profile`, when present, must be `modern`.
+- Entity `1.4.0`–`1.4.2` support CPU builds only; `environment.backend=cuda` requires Entity `1.4.3` or newer.
+- `compile.cxx_standard` must be `20`.
+- `environment.dependency_versions` may pin exact source-build tags. If omitted, generated source-build scripts use and record the supported defaults.
 - `compile.pgen` or `compile.pgens` is required before generating `entity-build.sh`. Use one, not both.
 - `compile.build_dir` may be generated if omitted, but must be written back before script generation.
 - `environment.output=true` must align with `compile` output option in generated CMake.
 - `environment.mpi` and `environment.gpu_aware_mpi` must align with generated CMake.
 - `environment.backend` must align with generated Kokkos backend options.
-- `modern` profile requires Kokkos `5.x`, ADIOS2 `2.11.x`, and ADIOS2 built with Kokkos support.
-- `legacy` profile requires Kokkos `4.x`, ADIOS2 `2.10.x`, and ADIOS2 without Kokkos support unless explicitly overridden.
+- The supported profile requires Kokkos `5.x`, ADIOS2 `2.11.x`, and ADIOS2 built with Kokkos support.
 
 ## entity-deps.local.json
 

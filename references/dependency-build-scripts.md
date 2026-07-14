@@ -9,8 +9,8 @@ The build scripts should follow the same decision model as Entity's `dependencie
 - Prefer existing system/module `MPI` and `HDF5` when available.
 - Use source builds as a last resort.
 - Keep compiler/toolchain consistent across Kokkos, HDF5, ADIOS2, MPI, and Entity.
-- Match the Entity version profile: `legacy` uses C++17 + Kokkos 4.x + ADIOS2 2.10.x; `modern` uses C++20 + Kokkos 5.x + ADIOS2 2.11.x.
-- Build ADIOS2 with Kokkos support only for the `modern` profile.
+- Use the supported Entity profile: C++20 + Kokkos 5.x + ADIOS2 2.11.x.
+- Build ADIOS2 with Kokkos support.
 - For CUDA builds, use Kokkos `nvcc_wrapper` after Kokkos is installed.
 - Keep generated dependency scripts in `ENTITY_WORKDIR/deps/scripts/`.
 
@@ -43,7 +43,6 @@ Current generator scope:
 - every script writes configure/build/install logs under `$ENTITY_WORKDIR/build-logs`.
 - Kokkos and ADIOS2 scripts include the official baseline switches such as `CMAKE_CXX_EXTENSIONS=OFF`, position-independent code, disabled ADIOS2 Python/Fortran/ZeroMQ, disabled ADIOS2 tests, and disabled ADIOS2 examples.
 - exact Kokkos/ADIOS2/HDF5 source tags can be pinned through `requirements.environment.dependency_versions`.
-- for the `legacy` profile, `requirements.environment.dependency_versions.kokkos` must pin an exact Kokkos 4.x tag before generating a Kokkos source-build script.
 
 ## Dependency Order
 

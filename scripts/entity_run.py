@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any, Dict
 
 from _json_io import add_json_flag, ensure_harness_home, load_json, log_event, protocol_ok, write_json_atomic
+from _version_profile import version_profile as validate_entity_version
 from entity_state import record_step
 
 
@@ -45,6 +46,7 @@ def _set_build_result(req: Dict[str, Any], result: Dict[str, Any]) -> None:
 
 def cmd_build(args: argparse.Namespace) -> None:
     req = load_json(args.requirements_json)
+    validate_entity_version(req)
     script = args.script
     if not script.is_file():
         raise SystemExit(f"entity-build.sh not found: {script}")

@@ -15,10 +15,9 @@
 - Reuse local/system dependencies by default; do not use Spack or Docker unless explicitly requested.
 - Keep all dependencies on one consistent compiler/toolchain unless the user accepts the risk.
 - CUDA builds use Kokkos `nvcc_wrapper`.
-- Entity versions before `1.4.0` use `C++17 + Kokkos 4.x + ADIOS2 2.10.x`.
-- Entity `1.4.0` and newer use `C++20 + Kokkos 5.x + ADIOS2 2.11.x`.
-- Entity versions **before `1.4.3` are incompatible with CUDA backend + modern profile (C++20)**. NVCC's EDG frontend rejects C++20 `requires` constraints (`constraints on a non-templated function`) and TOML11's `std::source_location::current` consteval. Entity `1.4.3` (PR #210) replaced `requires` with `static_assert`, fixing this.
-- Enable ADIOS2 Kokkos support only for the `Kokkos 5.x + ADIOS2 2.11.x` profile.
+- Support Entity `1.4.0` and newer only, using `C++20 + Kokkos 5.x + ADIOS2 2.11.x`.
+- Entity `1.4.0`–`1.4.2` are CPU-only; CUDA requires `1.4.3` or newer.
+- Enable ADIOS2 Kokkos support.
 - Generate `env.sh` only after compatibility checks pass.
 
 ## Main Scripts

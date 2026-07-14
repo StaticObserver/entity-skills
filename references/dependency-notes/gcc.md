@@ -11,13 +11,13 @@
 
 ## C++ Standards Support
 
-| GCC Version | C++17 | C++20 | Notes |
-|-------------|-------|-------|-------|
-| 8.x | Yes | Partial | `std::source_location` support incomplete |
-| 10.4+ | Yes | Yes | Minimum for modern profile |
-| 11.x | Yes | Yes | Safe choice |
-| 12.x | Yes | Yes | **Known ICE with if constexpr** |
-| 13.3+ | Yes | Yes | Recommended for Entity >= 1.4.0 |
+| GCC Version | C++20 | Notes |
+|-------------|-------|-------|
+| 8.x | Partial | Unsupported |
+| 10.4+ | Yes | Minimum supported version |
+| 11.x | Yes | Safe choice |
+| 12.x | Yes | **Known ICE with if constexpr** |
+| 13.3+ | Yes | Recommended for Entity >= 1.4.0 |
 
 ## SDK Compatibility
 

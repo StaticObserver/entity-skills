@@ -27,14 +27,14 @@ Boolean CMake options use `ON` or `OFF`.
 | `pgen` | Problem generator | built-in name, `pgens/...`, or path containing `pgen.hpp` | required | Changing `pgen` requires a new configure/build. |
 | `pgens` | Multiple problem generators | comma-separated generator names/paths | optional | Added in Entity 1.4.0. Use only when the request explicitly needs multiple generators. |
 | `precision` | Floating point precision | `single`, `double` | `single` | Build-time numerical type. |
-| `deposit` | Current deposit scheme | `zigzag`, `esirkepov` | `zigzag` | Added in Entity 1.3.0. |
-| `shape_order` | Interpolation order for deposit and pusher | `1` to `11` | `1` | Added in Entity 1.3.0. |
+| `deposit` | Current deposit scheme | `zigzag`, `esirkepov` | `zigzag` | |
+| `shape_order` | Interpolation order for deposit and pusher | `1` to `11` | `1` | |
 | `output` | Enable output | `ON`, `OFF` | `ON` | Default means the dependency environment normally needs ADIOS2/HDF5 support. |
 | `mpi` | Enable multi-node support | `ON`, `OFF` | `OFF` | Only enable when the current requirements need MPI. |
-| `gpu_aware_mpi` | Enable GPU-aware MPI communications | `ON`, `OFF` | `ON` | Added in Entity 1.2.0. In this skill, keep the conservative environment default `OFF` unless confirmed. |
+| `gpu_aware_mpi` | Enable GPU-aware MPI communications | `ON`, `OFF` | `ON` | Keep the conservative environment default `OFF` unless confirmed. |
 | `DEBUG` | Enable debug mode | `ON`, `OFF` | `OFF` | Use for debug builds. |
 | `TESTS` | Compile unit tests | `ON`, `OFF` | `OFF` | Required before running `ctest`. |
-| `CMAKE_CXX_STANDARD` | C++ language standard | `17`, `20` | profile-derived | Use `20` for Entity `1.4.0` and newer; use `17` for versions before `1.4.0`. |
+| `CMAKE_CXX_STANDARD` | C++ language standard | `20` | `20` | Entity versions before `1.4.0` are unsupported. |
 
 ## Entity Version Profiles
 
@@ -42,7 +42,6 @@ The Entity version determines the default C++ standard and dependency family:
 
 | Entity version | Profile | C++ standard | Kokkos | ADIOS2 | ADIOS2 Kokkos support |
 | --- | --- | --- | --- | --- | --- |
-| before `1.4.0` | `legacy` | `17` | `4.x` | `2.10.x` | `OFF` |
 | `1.4.0` and newer | `modern` | `20` | `5.x` | `2.11.x` | `ON` |
 
 Exact source-build tags may be pinned in `requirements.environment.dependency_versions`, but they must remain inside the profile's version family unless the user explicitly accepts an override.

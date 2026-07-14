@@ -860,6 +860,7 @@ def generate_build_script(
 
 def cmd_build(args: argparse.Namespace) -> None:
     req = load_json(args.requirements_json)
+    entity_version_profile(req)
     if not args.env.exists():
         msg = f"env.sh not found: {args.env}"
         if args.json:

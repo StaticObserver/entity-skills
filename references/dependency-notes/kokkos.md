@@ -4,14 +4,13 @@
 
 | Profile | Entity Version | Kokkos Version | C++ Standard |
 |---------|---------------|----------------|-------------|
-| legacy  | < 1.4.0       | 4.x (user-pinned) | 17 |
 | modern  | >= 1.4.0      | 5.x (default 5.0.1) | 20 |
 
-Legacy profile requires `requirements.environment.dependency_versions.kokkos` to pin an exact 4.x tag.
+Entity versions before `1.4.0` are unsupported.
 
 ## CMake Options
 
-Baseline (all profiles):
+Baseline:
 ```
 -DCMAKE_CXX_EXTENSIONS=OFF
 -DCMAKE_POSITION_INDEPENDENT_CODE=TRUE
@@ -57,7 +56,7 @@ Install prefix contains `bin/nvcc_wrapper` — this is what selected.compiler.cx
 ### Kokkos_ENABLE_PIC Warning
 - Symptom: CMake warning "Manually-specified variables were not used: Kokkos_ENABLE_PIC"
 - Trigger: Kokkos 5.x ignores this flag (PIC is always on)
-- Fix: Ignore — harmless. The flag is safe to keep for backward compat.
+- Fix: Ignore; the flag is harmless.
 
 ## Post-Build Validation
 

@@ -64,17 +64,17 @@ Fail if the checkpoint was produced for a different Entity checkout, workdir, ba
 
 > **Implementation status: Implemented** — `entity_compat.py` validates profile detection, C++ standard, Kokkos/ADIOS2 version-family match, and ADIOS2 Kokkos support mode.
 
-Derive the expected profile from `requirements.entity.version_bucket` unless `requirements.entity.dependency_profile` explicitly overrides it.
+Reject Entity versions before `1.4.0`. `requirements.entity.dependency_profile`, when present, must be `modern`.
 
 Check:
 
-- `legacy`: Entity `1.4.x` and older, `C++17`, Kokkos `4.x`, ADIOS2 `2.10.x`, ADIOS2 Kokkos support `OFF`.
-- `modern`: Entity newer than `1.4.x`, `C++20`, Kokkos `5.x`, ADIOS2 `2.11.x`, ADIOS2 Kokkos support `ON`.
+- Entity `1.4.0` and newer use `C++20`, Kokkos `5.x`, ADIOS2 `2.11.x`, and ADIOS2 Kokkos support `ON`.
+- CUDA builds require Entity `1.4.3` or newer; Entity `1.4.0`–`1.4.2` are CPU-only.
 - `requirements.compile.cxx_standard` matches the profile.
 - selected Kokkos and ADIOS2 versions match the profile family.
 - ADIOS2 `compile_config` or generated script metadata records the expected Kokkos support mode.
 
-Fail on a version-family mismatch unless the user explicitly confirmed an override in `decisions`.
+Fail on an unsupported Entity version or dependency-family mismatch.
 
 ## 3. Toolchain Consistency
 

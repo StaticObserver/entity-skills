@@ -7,12 +7,11 @@ ADIOS2 is the most complex dependency due to its multi-library dependency chain
 
 | Profile | ADIOS2 Version | Kokkos Support | CUDA via |
 |---------|---------------|----------------|----------|
-| legacy  | 2.10.x        | OFF            | n/a      |
 | modern  | 2.11.x        | ON             | Kokkos only |
 
 ## CMake Options
 
-Baseline (all profiles):
+Baseline:
 ```
 -DCMAKE_CXX_EXTENSIONS=OFF
 -DCMAKE_POSITION_INDEPENDENT_CODE=TRUE
@@ -31,11 +30,10 @@ Profile/backend-dependent:
 |-----------|---------|
 | MPI=ON     | `-DADIOS2_USE_MPI=ON -DADIOS2_HAVE_HDF5_VOL=ON` |
 | MPI=OFF    | `-DADIOS2_USE_MPI=OFF -DADIOS2_HAVE_HDF5_VOL=OFF` |
-| modern     | `-DADIOS2_USE_Kokkos=ON` |
-| cuda + modern | `-DADIOS2_USE_CUDA=OFF` (CUDA goes through Kokkos) |
-| cuda + legacy  | `-DADIOS2_USE_CUDA=ON` (direct CUDA, no Kokkos) |
+| all supported builds | `-DADIOS2_USE_Kokkos=ON` |
+| CUDA | `-DADIOS2_USE_CUDA=OFF` (CUDA goes through Kokkos) |
 
-CUDA + modern profile ADDITIONALLY requires:
+CUDA additionally requires:
 ```
 -DCMAKE_CUDA_COMPILER=<cuda_prefix>/bin/nvcc
 -DCMAKE_CUDA_ARCHITECTURES=<arch_number>
