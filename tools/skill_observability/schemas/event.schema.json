@@ -1,0 +1,59 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://entity-skills.local/schemas/observability/event-v1.json",
+  "title": "Entity skill observability event",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "event_id",
+    "run_id",
+    "seq",
+    "time",
+    "type",
+    "source",
+    "evidence_level",
+    "phase",
+    "span_id",
+    "parent_span_id",
+    "payload"
+  ],
+  "properties": {
+    "schema_version": {"const": 1},
+    "event_id": {"type": "string", "minLength": 1},
+    "run_id": {"type": "string", "minLength": 1},
+    "seq": {"type": "integer", "minimum": 1},
+    "time": {"type": "string", "format": "date-time"},
+    "type": {
+      "enum": [
+        "run.started",
+        "run.finished",
+        "run.failed",
+        "skill.exposed",
+        "skill.resource_observed",
+        "decision.recorded",
+        "tool.started",
+        "tool.finished",
+        "state.transition_observed",
+        "artifact.observed",
+        "validation.finished",
+        "error.observed"
+      ]
+    },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "id"],
+      "properties": {
+        "kind": {"enum": ["collector", "agent", "worker", "tool", "validator", "adapter"]},
+        "id": {"type": "string", "minLength": 1}
+      }
+    },
+    "evidence_level": {"enum": ["declared", "observed", "verified"]},
+    "phase": {"enum": ["orient", "decide", "execute", "verify", "finish"]},
+    "span_id": {"type": "string", "minLength": 1},
+    "parent_span_id": {"type": ["string", "null"]},
+    "payload": {"type": "object"}
+  }
+}
+

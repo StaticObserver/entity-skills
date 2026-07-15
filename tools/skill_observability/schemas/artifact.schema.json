@@ -1,0 +1,40 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://entity-skills.local/schemas/observability/artifact-v1.json",
+  "title": "Entity skill observability artifact reference",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "artifact_id",
+    "run_id",
+    "role",
+    "locator",
+    "media_type",
+    "sha256",
+    "size_bytes",
+    "produced_by",
+    "authority"
+  ],
+  "properties": {
+    "schema_version": {"const": 1},
+    "artifact_id": {"type": "string", "minLength": 1},
+    "run_id": {"type": "string", "minLength": 1},
+    "role": {"type": "string", "minLength": 1},
+    "locator": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["site_id", "path"],
+      "properties": {
+        "site_id": {"type": "string", "minLength": 1},
+        "path": {"type": "string", "pattern": "^/"}
+      }
+    },
+    "media_type": {"type": "string", "minLength": 1},
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "size_bytes": {"type": "integer", "minimum": 0},
+    "produced_by": {"type": "string", "minLength": 1},
+    "authority": {"type": "string", "minLength": 1}
+  }
+}
+

@@ -1,0 +1,91 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://entity-skills.local/schemas/observability/manifest-v1.json",
+  "title": "Entity skill observability run manifest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "run_id",
+    "task",
+    "variant",
+    "agent",
+    "tools",
+    "skills",
+    "capture",
+    "started_at"
+  ],
+  "properties": {
+    "schema_version": {"const": 1},
+    "run_id": {"type": "string", "minLength": 1},
+    "task": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["case_id", "input_ref", "input_sha256"],
+      "properties": {
+        "case_id": {"type": "string", "minLength": 1},
+        "input_ref": {"type": "string", "minLength": 1},
+        "input_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+      }
+    },
+    "variant": {"type": "string", "minLength": 1},
+    "agent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["provider", "model", "configuration"],
+      "properties": {
+        "provider": {"type": "string", "minLength": 1},
+        "model": {"type": "string", "minLength": 1},
+        "configuration": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+      }
+    },
+    "tools": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["profile", "configuration"],
+      "properties": {
+        "profile": {"type": "string", "minLength": 1},
+        "configuration": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+      }
+    },
+    "skills": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "name",
+          "source",
+          "package_revision",
+          "content_sha256",
+          "dirty",
+          "exposure"
+        ],
+        "properties": {
+          "name": {"type": "string", "minLength": 1},
+          "source": {"type": "string", "minLength": 1},
+          "package_revision": {"type": ["string", "null"]},
+          "content_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+          "dirty": {"type": ["boolean", "null"]},
+          "exposure": {"enum": ["injected", "available", "unknown"]}
+        }
+      }
+    },
+    "capture": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["raw_input", "raw_tool_output", "decision_records", "protected_roots"],
+      "properties": {
+        "raw_input": {"type": "boolean"},
+        "raw_tool_output": {"type": "boolean"},
+        "decision_records": {"type": "boolean"},
+        "protected_roots": {
+          "type": "array",
+          "items": {"type": "string", "minLength": 1},
+          "uniqueItems": true
+        }
+      }
+    },
+    "started_at": {"type": "string", "format": "date-time"}
+  }
+}
