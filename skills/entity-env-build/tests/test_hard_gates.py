@@ -52,6 +52,46 @@ class HardGateTests(unittest.TestCase):
             },
         }
 
+    def test_v2_uses_independent_site_paths_without_workdir(self):
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            source = tmp / "source-checkout"
+            build = tmp / "scratch" / "case" / "build-id"
+            deps = tmp / "shared-deps"
+            artifacts = tmp / "records" / "build-id"
+            for path in [source, build, deps, artifacts]:
+                path.mkdir(parents=True)
+            req = self.base_requirements(tmp)
+            req["schema_version"] = 2
+            req["entity"] = {
+                "site_id": "cluster-a",
+                "source_checkout": str(source),
+                "source_revision": {"kind": "git", "commit": "test", "tree": "test"},
+                "build_root": str(build),
+                "deps_root": str(deps),
+                "artifacts_root": str(artifacts),
+                "version_bucket": "1.4.0",
+                "dependency_profile": "modern",
+            }
+            req_path = tmp / "requirements-v2.json"
+            checkpoint = artifacts / "entity-deps.local.json"
+            self.write_json(req_path, req)
+
+            validated = run_cmd("scripts/entity_checkpoint.py", "validate", str(req_path))
+            self.assertEqual(validated.returncode, 0, validated.stdout + validated.stderr)
+            created = run_cmd(
+                "scripts/entity_checkpoint.py", "create", str(req_path),
+                "--output", str(checkpoint),
+            )
+            self.assertEqual(created.returncode, 0, created.stdout + created.stderr)
+            data = json.loads(checkpoint.read_text(encoding="utf-8"))
+            self.assertEqual(data["schema_version"], 2)
+            self.assertEqual(data["entity"]["site_id"], "cluster-a")
+            self.assertEqual(data["entity"]["source_checkout"], str(source))
+            self.assertEqual(data["entity"]["build_root"], str(build))
+            self.assertEqual(data["entity"]["deps_root"], str(deps))
+            self.assertEqual(data["env_sh"]["path"], str(artifacts / "env.sh"))
+
     def test_validate_blocks_partial_by_default(self):
         with tempfile.TemporaryDirectory() as td:
             tmp = Path(td)

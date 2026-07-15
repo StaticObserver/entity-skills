@@ -1,6 +1,6 @@
 ---
 name: entity-pgen
-description: Design, implement, review, and modify Entity problem generators together with their matching TOML configurations and docs/design.md. Use for new or existing PGen work involving initial fields, initial particles, boundaries, custom timestep behavior, external current or force, custom output, PGen-specific parameters, normalization, or PGen-TOML consistency. Handle only problems attributed to the PGen or its TOML; route environment builds, untriaged runtime failures, Entity core changes, and result analysis to their owning skills.
+description: Design, implement, explain, review, and modify Entity problem generators together with matching TOML configurations and docs/design.md. Use directly for bounded PGen-domain work with an exact target, including standalone new or existing PGens, initial fields or particles, boundaries, custom behavior, output, normalization, and PGen-TOML consistency. For writes inside a Router-managed Case, require a valid active pgen.* Action; route Case lifecycle, cross-domain work, builds, runs, untriaged failures, Entity core changes, and scientific analysis to their owners.
 ---
 
 # Entity PGen
@@ -11,11 +11,49 @@ Develop `pgen.hpp` and its TOML configuration as one design unit. Keep `docs/des
 
 Use the bundled references as an on-demand knowledge base. Load only what the current task needs and verify version-sensitive details against the active Entity checkout.
 
+## Execution Modes and Write Gate
+
+Classify the task before loading domain references or modifying files:
+
+- **Read-only**: explain, inspect, or review without changing files. This may
+  run directly in standalone or managed paths. Do not create process artifacts.
+- **Standalone write**: modify only PGen-owned artifacts at an exact target
+  that is not inside a Router-managed Case. This may run directly.
+- **Managed write**: modify a source Locator registered by Router v3. Require a
+  valid active `pgen.*` Action Contract on that Case's source authority site.
+
+Before every write, run:
+
+```bash
+python3 <entity-pgen-skill>/scripts/pgen_preflight.py \
+  --router-home <controller-root> \
+  --operation write \
+  --target <site_id:/exact/absolute/path> \
+  [--action-request <controller-case/actions/<id>/request.json>]
+```
+
+Resolve `<entity-pgen-skill>` from this `SKILL.md`; do not assume the current
+working directory is the skill directory.
+Run the preflight for each intended target or for their narrow common parent.
+Proceed only when it returns `"allowed": true`. The preflight queries the
+Router registry and verifies Case UID, revision, execution site, owner, and
+Locator envelope; it never infers managed state from ancestor directories. If
+it reports `router-required`, do not write; return the target, detected Case,
+requested change, and reason to `entity-router`. Never modify Router control
+state.
+Do not accept a whole-Case write root: a managed `pgen.*` Action may authorize
+only the exact `pgen.hpp`, matching TOML, and affected paths under `docs/`.
+
+For a target not registered by Router, treat it as standalone only
+when the user selected an exact location and requested PGen-domain deliverables
+only. Route ambiguous workspace creation, persistent simulation work, or any
+request that continues into build, run, recovery, or analysis to Router.
+
 ## Scope
 
 Handle:
 
-- designing a new PGen and matching TOML;
+- designing a new PGen and matching TOML in standalone or managed mode;
 - modifying or reviewing an existing PGen/TOML pair;
 - maintaining `docs/design.md` alongside implementation changes;
 - checking normalization, coordinate basis, API usage, and PGen-TOML consistency;
@@ -23,6 +61,7 @@ Handle:
 
 Route elsewhere:
 
+- managed Case lifecycle and cross-domain simulation workflows -> `entity-router`;
 - dependency setup, CMake configuration, and compilation execution -> `entity-env-build`;
 - failures whose owner is still unclear -> return evidence to the package Router;
 - Entity engine or framework changes -> return a scoped handoff to the package Router;

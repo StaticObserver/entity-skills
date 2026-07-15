@@ -48,7 +48,7 @@
 
 ## Build History
 <!-- Append after each build. Format:
-| <date> | <entity ver> | <pgen> | <backend> | <precision> | <opt> | <result> | <workdir> |
+| <date> | <site_id> | <entity ver> | <source rev> | <backend> | <result> | <build root> |
 -->
 | Date | Entity | PGen | Backend | Precision | Opt | Result | Workdir |
 |------|--------|------|---------|-----------|-----|--------|---------|

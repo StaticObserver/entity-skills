@@ -12,7 +12,7 @@ The build scripts should follow the same decision model as Entity's `dependencie
 - Use the supported Entity profile: C++20 + Kokkos 5.x + ADIOS2 2.11.x.
 - Build ADIOS2 with Kokkos support.
 - For CUDA builds, use Kokkos `nvcc_wrapper` after Kokkos is installed.
-- Keep generated dependency scripts in `ENTITY_WORKDIR/deps/scripts/`.
+- Keep generated dependency scripts in the execution site's `entity.deps_root/scripts/`.
 
 Official reference: https://entity-toolkit.github.io/wiki/content/1-getting-started/2-dependencies/
 
@@ -31,7 +31,7 @@ python3 scripts/entity_generate.py deps requirements.json \
 Default output directory:
 
 ```text
-$ENTITY_WORKDIR/deps/scripts/
+<deps_root>/scripts/
 ```
 
 Generated scripts should be reviewed before execution. They are not the source of truth; `requirements.json` and `entity-deps.local.json` are.
@@ -40,7 +40,7 @@ Current generator scope:
 
 - `kokkos`, `hdf5`, and `adios2` source-build scripts are generated directly.
 - `mpi` emits a deliberate stop script until a reviewed OpenMPI/UCX policy is added.
-- every script writes configure/build/install logs under `$ENTITY_WORKDIR/build-logs`.
+- every script writes configure/build/install logs under `entity.artifacts_root/build-logs`.
 - Kokkos and ADIOS2 scripts include the official baseline switches such as `CMAKE_CXX_EXTENSIONS=OFF`, position-independent code, disabled ADIOS2 Python/Fortran/ZeroMQ, disabled ADIOS2 tests, and disabled ADIOS2 examples.
 - exact Kokkos/ADIOS2/HDF5 source tags can be pinned through `requirements.environment.dependency_versions`.
 
@@ -62,7 +62,7 @@ ADIOS2 only if output=true
 Every generated script should:
 
 - use `set -euo pipefail`;
-- write logs under `$ENTITY_WORKDIR/build-logs`;
+- write logs under `entity.artifacts_root/build-logs`;
 - install under a prefix recorded in `entity-deps.local.json`;
 - use compilers from `entity-deps.local.json.selected.compiler`;
 - preserve MPI on/off and backend choices from `requirements.json`;
@@ -76,7 +76,7 @@ After generating scripts, update `entity-deps.local.json.build_scripts`:
 ```json
 {
   "build_scripts": {
-    "directory": "/path/to/ENTITY_WORKDIR/generated/source-build-scripts",
+    "directory": "/absolute/deps_root/scripts",
     "generated_at": "",
     "scripts": {
       "kokkos": {

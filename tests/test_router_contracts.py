@@ -22,7 +22,10 @@ class RouterContractTest(unittest.TestCase):
     def test_runtime_entrypoints_exist(self):
         required = [
             "SKILL.md",
+            "scripts/entity_router_common.py",
+            "scripts/entity_router_remote.py",
             "scripts/entity_router_state.py",
+            "scripts/entity_router_site.py",
             "references/workspace-layout.md",
             "references/router-runtime.md",
             "playbooks/new-simulation.md",
@@ -30,6 +33,7 @@ class RouterContractTest(unittest.TestCase):
             "playbooks/resume-simulation.md",
             "playbooks/analyze-run.md",
             "../entity-pgen/SKILL.md",
+            "../entity-pgen/scripts/pgen_preflight.py",
             "../entity-env-build/SKILL.md",
             "../entity-nt2py/SKILL.md",
         ]
@@ -61,8 +65,10 @@ class RouterContractTest(unittest.TestCase):
         result = self.read_json("templates/action-result.json")
         self.assertEqual(case["schema_version"], router_state.SCHEMA_VERSION)
         self.assertEqual(set(case["readiness"]), set(router_state.READINESS_STATUSES))
-        self.assertTrue({"case_id", "workflow_id", "action_id", "action_type", "owner", "write_roots"}.issubset(request))
-        self.assertTrue({"case_id", "workflow_id", "action_id", "status", "verification"}.issubset(result))
+        self.assertEqual(request["schema_version"], 2)
+        self.assertEqual(result["schema_version"], 2)
+        self.assertTrue({"case_uid", "execution_site_id", "workflow_id", "action_id", "action_type", "owner", "write_roots"}.issubset(request))
+        self.assertTrue({"case_uid", "execution_site_id", "workflow_id", "action_id", "status", "verification"}.issubset(result))
 
     def test_router_declares_all_execution_domains(self):
         with open(os.path.join(ROUTER_ROOT, "SKILL.md"), "r") as handle:
@@ -77,6 +83,46 @@ class RouterContractTest(unittest.TestCase):
         ]:
             self.assertIn(value, skill)
 
+    def test_action_prefixes_have_fixed_execution_contracts(self):
+        expected = {
+            "source": ("router", "playbook-sync"),
+            "pgen": ("entity-pgen", "entity-pgen"),
+            "build": ("entity-env-build", "entity-env-build"),
+            "data": ("entity-nt2py", "entity-nt2py"),
+            "run": ("playbook-run", "playbook-run"),
+            "analysis": ("playbook-analysis", "playbook-analysis"),
+            "failure": ("failure-triage", "failure-triage"),
+        }
+        for prefix, contract in expected.items():
+            self.assertEqual(contract, router_state.ACTION_EXECUTION[prefix])
+
+    def test_pgen_write_envelope_is_owner_specific(self):
+        source = os.path.join(ROOT, "test-source")
+        state = {
+            "control": {"site_id": "controller", "root": os.path.join(ROOT, "control")},
+            "source": {"authority": {"site_id": "source", "path": source}},
+            "artifacts": {
+                "pgen": {"site_id": "source", "path": os.path.join(source, "pgen.hpp")},
+                "toml": {"site_id": "source", "path": os.path.join(source, "smoke.toml")},
+                "design": {"site_id": "source", "path": os.path.join(source, "docs", "design.md")},
+            },
+            "resources": {},
+        }
+        allowed = [
+            state["artifacts"]["pgen"],
+            state["artifacts"]["toml"],
+            {"site_id": "source", "path": os.path.join(source, "docs")},
+        ]
+        router_state.validate_action_write_envelope(state, "pgen.edit", "source", allowed, ROOT)
+        with self.assertRaises(router_state.StateError):
+            router_state.validate_action_write_envelope(
+                state, "pgen.edit", "source",
+                [{"site_id": "source", "path": os.path.join(source, "run-001")}], ROOT
+            )
+        with self.assertRaises(router_state.StateError):
+            router_state.validate_action_write_envelope(
+                state, "pgen.edit", "other", allowed, ROOT
+            )
 
 if __name__ == "__main__":
     unittest.main()

@@ -1,10 +1,12 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
+  "case_uid": "",
   "case_id": "",
   "workflow_id": "",
   "action_id": "",
   "action_type": "",
   "owner": "",
+  "execution_site_id": "",
   "status": "completed",
   "outputs": [],
   "verification": [],

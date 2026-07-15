@@ -1,16 +1,14 @@
 {
-  "schema_version": 2,
+  "schema_version": 3,
   "revision": 0,
+  "case_uid": "",
   "case_id": "",
   "case_status": "active",
   "created_at": "",
   "updated_at": "",
   "last_opened_at": "",
-  "identity": {
-    "name": "",
-    "summary": "",
-    "tags": []
-  },
+  "control": {"site_id": "local", "root": "/absolute/control/case"},
+  "identity": {"name": "", "summary": "", "tags": []},
   "memory": {
     "goal": "",
     "done_when": [],
@@ -20,18 +18,25 @@
     "out_of_scope": [],
     "last_summary": ""
   },
-  "scope": {
-    "entity_workdir": "",
-    "case_dir": "",
-    "entity_checkout": "",
-    "entity_commit": "",
-    "pgen": "",
-    "pgen_path": "",
-    "toml_path": "",
-    "design_doc": "",
-    "active_run": "",
-    "protected_paths": []
+  "source": {
+    "authority": {"site_id": "local", "path": "/source/checkout"},
+    "replicas": [],
+    "transfer_policy": "git-ref",
+    "revision": {},
+    "materializations": []
   },
+  "artifacts": {
+    "pgen": {"site_id": "local", "path": "/source/checkout/src/pgen.hpp"},
+    "toml": {"site_id": "local", "path": "/source/checkout/input.toml"},
+    "design": {"site_id": "local", "path": "/source/checkout/docs/design.md"}
+  },
+  "resources": {
+    "build": {"root": null, "current_id": "", "identities": []},
+    "run": {"root": null, "current_id": "", "identities": []},
+    "data": {"root": null, "current_id": "", "identities": []},
+    "analysis": {"root": null, "current_id": "", "identities": []}
+  },
+  "legacy": {},
   "workflow": {
     "workflow_id": "",
     "type": "",
@@ -46,6 +51,7 @@
   "readiness": {
     "orientation": {"status": "unresolved", "evidence": []},
     "pgen": {"status": "absent", "evidence": []},
+    "source": {"status": "unmaterialized", "evidence": []},
     "build": {"status": "absent", "evidence": []},
     "run": {"status": "none", "evidence": []},
     "data": {"status": "absent", "evidence": []},

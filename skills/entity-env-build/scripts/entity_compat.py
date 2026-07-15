@@ -8,9 +8,11 @@ Renamed from check_compatibility.py — logic unchanged.
 """
 
 import argparse
+import hashlib
 import json
 import os
 import re
+import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -18,10 +20,18 @@ from typing import Any, Dict, List, Optional, Tuple
 from _json_io import add_json_flag, get_dotted, load_json, protocol_error, protocol_ok, write_json_atomic
 from _version_profile import profile_for, detect_profile_name
 from entity_state import record_step
-from entity_schema import COMPILER_MIN_VERSIONS, MIN_CMAKE_VERSION, COMPAT_OVERRIDE_MAP, override_satisfies, version_satisfies, COMPILER_KNOWN_BAD
+from entity_schema import (
+    COMPILER_MIN_VERSIONS,
+    MIN_CMAKE_VERSION,
+    COMPAT_OVERRIDE_MAP,
+    entity_paths,
+    override_satisfies,
+    version_satisfies,
+    COMPILER_KNOWN_BAD,
+)
 
 
-SUPPORTED_SCHEMA_VERSION = 1
+SUPPORTED_SCHEMA_VERSIONS = {1, 2}
 CHECKER_VERSION = 1
 
 
@@ -72,6 +82,12 @@ def _same_request_value(actual: Any, expected: Any) -> bool:
 
 
 REQUEST_SNAPSHOT_FIELDS = [
+    "entity.site_id",
+    "entity.source_checkout",
+    "entity.source_revision",
+    "entity.build_root",
+    "entity.deps_root",
+    "entity.artifacts_root",
     "entity.checkout_root",
     "entity.workdir",
     "entity.version_bucket",
@@ -719,6 +735,72 @@ def validate_adios2_install_integrity(
 # ---------------------------------------------------------------------------
 
 
+def check_source_revision(req: Dict[str, Any], checks: List[Dict[str, Any]],
+                          issues: List[str]) -> None:
+    entity = req.get("entity", {}) if isinstance(req.get("entity"), dict) else {}
+    if req.get("schema_version") != 2:
+        return
+    checkout = Path(str(entity.get("source_checkout") or ""))
+    revision = entity.get("source_revision", {})
+    if not checkout.is_dir() or not isinstance(revision, dict):
+        add(checks, "source.revision", "fail", "source checkout or revision is missing",
+            {"source_checkout": str(checkout)},
+            remediation="Materialize and record an immutable source revision before build.")
+        issues.append("source revision is not verifiable")
+        return
+    kind = str(revision.get("kind") or "")
+    if kind == "git":
+        process = subprocess.run(
+            ["git", "-C", str(checkout), "rev-parse", "HEAD", "HEAD^{tree}"],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, check=False,
+        )
+        status = subprocess.run(
+            ["git", "-C", str(checkout), "status", "--porcelain"],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, check=False,
+        )
+        values = [line.strip() for line in process.stdout.splitlines() if line.strip()]
+        actual = {"commit": values[0] if len(values) > 0 else "",
+                  "tree": values[1] if len(values) > 1 else "",
+                  "dirty": status.returncode != 0 or bool(status.stdout.strip())}
+        expected = {"commit": str(revision.get("commit") or ""),
+                    "tree": str(revision.get("tree") or "")}
+        passed = (process.returncode == 0 and not actual["dirty"]
+                  and actual["commit"] == expected["commit"]
+                  and (not expected["tree"] or actual["tree"] == expected["tree"]))
+    elif kind == "snapshot":
+        manifest_path = checkout / "snapshot-manifest.json"
+        actual = {"snapshot_id": "", "verified_files": 0}
+        passed = manifest_path.is_file()
+        if passed:
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            actual["snapshot_id"] = str(manifest.get("snapshot_id") or "")
+            passed = actual["snapshot_id"] == str(revision.get("snapshot_id") or "")
+            for entry in manifest.get("files", []):
+                relative = str(entry.get("path") or "")
+                if (not relative or os.path.isabs(relative)
+                        or ".." in Path(relative).parts):
+                    passed = False
+                    break
+                path = checkout / relative
+                digest = hashlib.sha256(path.read_bytes()).hexdigest() if path.is_file() else ""
+                if digest != entry.get("sha256"):
+                    passed = False
+                    break
+                actual["verified_files"] += 1
+        expected = {"snapshot_id": str(revision.get("snapshot_id") or "")}
+    else:
+        actual = {"kind": kind}
+        expected = {"kind": "git or snapshot"}
+        passed = False
+    add(checks, "source.revision", "pass" if passed else "fail",
+        "Materialized source revision matches build request" if passed else
+        "Materialized source revision differs from build request",
+        {"expected": expected, "actual": actual},
+        remediation="Re-materialize the exact Git commit or immutable snapshot.")
+    if not passed:
+        issues.append("materialized source revision differs from requirements")
+
+
 def run_checks(
     req: Dict[str, Any], checkpoint: Dict[str, Any]
 ) -> Tuple[str, List[Dict[str, Any]], List[str]]:
@@ -728,26 +810,38 @@ def run_checks(
     # -- Section 1: Request / checkpoint consistency ------------------------
     req_schema = req.get("schema_version")
     checkpoint_schema = checkpoint.get("schema_version")
-    if req_schema != SUPPORTED_SCHEMA_VERSION:
+    if req_schema not in SUPPORTED_SCHEMA_VERSIONS:
         add(
             checks,
             "schema.requirements",
             "fail",
             "Unsupported requirements.json schema_version",
-            {"expected": SUPPORTED_SCHEMA_VERSION, "actual": req_schema},
-            remediation=f"Regenerate requirements.json with schema_version={SUPPORTED_SCHEMA_VERSION}.",
+            {"expected": sorted(SUPPORTED_SCHEMA_VERSIONS), "actual": req_schema},
+            remediation="Regenerate requirements.json with schema_version=2.",
         )
         issues.append("Unsupported requirements.json schema_version")
-    if checkpoint_schema != SUPPORTED_SCHEMA_VERSION:
+    if checkpoint_schema not in SUPPORTED_SCHEMA_VERSIONS:
         add(
             checks,
             "schema.checkpoint",
             "fail",
             "Unsupported entity-deps.local.json schema_version",
-            {"expected": SUPPORTED_SCHEMA_VERSION, "actual": checkpoint_schema},
-            remediation=f"Regenerate entity-deps.local.json with schema_version={SUPPORTED_SCHEMA_VERSION}.",
+            {"expected": sorted(SUPPORTED_SCHEMA_VERSIONS), "actual": checkpoint_schema},
+            remediation="Regenerate entity-deps.local.json with schema_version=2.",
         )
         issues.append("Unsupported entity-deps.local.json schema_version")
+    if (req_schema in SUPPORTED_SCHEMA_VERSIONS
+            and checkpoint_schema in SUPPORTED_SCHEMA_VERSIONS
+            and req_schema != checkpoint_schema):
+        add(
+            checks,
+            "schema.match",
+            "fail",
+            "requirements and checkpoint schema versions differ",
+            {"requirements": req_schema, "checkpoint": checkpoint_schema},
+            remediation="Regenerate entity-deps.local.json from the current requirements.json.",
+        )
+        issues.append("requirements and checkpoint schema versions differ")
 
     req_path = (
         checkpoint.get("requirements", {}).get("path", "")
@@ -811,32 +905,22 @@ def run_checks(
             )
 
     cp_entity = checkpoint.get("entity", {}) if isinstance(checkpoint.get("entity"), dict) else {}
-    req_entity = req.get("entity", {}) if isinstance(req.get("entity"), dict) else {}
-    cp_checkout = str(cp_entity.get("checkout_root") or "")
-    req_checkout = str(req_entity.get("checkout_root") or "")
-    if cp_checkout and req_checkout and cp_checkout != req_checkout:
-        add(
-            checks,
-            "consistency.checkout_root",
-            "fail",
-            "ENTITY_CHECKOUT mismatch between requirements and checkpoint",
-            {"requirements": req_checkout, "checkpoint": cp_checkout},
-            remediation="Regenerate entity-deps.local.json for the current ENTITY_CHECKOUT.",
-        )
-        issues.append("ENTITY_CHECKOUT differs between requirements.json and checkpoint")
+    req_paths = entity_paths(req)
+    for field in ["site_id", "source_checkout", "build_root", "deps_root", "artifacts_root"]:
+        expected = str(req_paths.get(field) or "")
+        actual = str(cp_entity.get(field) or "")
+        if actual and expected and actual != expected:
+            add(
+                checks,
+                "consistency.%s" % field,
+                "fail",
+                "%s mismatch between requirements and checkpoint" % field,
+                {"requirements": expected, "checkpoint": actual},
+                remediation="Regenerate entity-deps.local.json for the current execution site paths.",
+            )
+            issues.append("%s differs between requirements.json and checkpoint" % field)
 
-    cp_workdir = str(cp_entity.get("workdir") or "")
-    req_workdir = str(req_entity.get("workdir") or "")
-    if cp_workdir and req_workdir and cp_workdir != req_workdir:
-        add(
-            checks,
-            "consistency.workdir",
-            "fail",
-            "ENTITY_WORKDIR mismatch between requirements and checkpoint",
-            {"requirements": req_workdir, "checkpoint": cp_workdir},
-            remediation="Regenerate entity-deps.local.json for the current ENTITY_WORKDIR.",
-        )
-        issues.append("ENTITY_WORKDIR differs between requirements.json and checkpoint")
+    check_source_revision(req, checks, issues)
 
     # -- Section 2: Entity version profile ----------------------------------
     try:

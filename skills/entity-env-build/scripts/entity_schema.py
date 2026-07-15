@@ -8,6 +8,7 @@ references/json-contracts.md is the human-readable mirror of this file.
 """
 
 from typing import Any, Dict, List, Tuple
+from pathlib import Path
 
 # ---------------------------------------------------------------------------
 # Version profiles (moved from _version_profile.py)
@@ -41,10 +42,22 @@ DEFAULT_HDF5_VERSION = "1.14.6"
 # requirements.json — Required fields by build phase
 # ---------------------------------------------------------------------------
 
-REQUIRED_ALWAYS: List[str] = [
+REQUIRED_ALWAYS_V1: List[str] = [
     "entity.checkout_root",
     "entity.workdir",
 ]
+
+REQUIRED_ALWAYS_V2: List[str] = [
+    "entity.site_id",
+    "entity.source_checkout",
+    "entity.source_revision",
+    "entity.build_root",
+    "entity.deps_root",
+]
+
+# Kept for imports from older callers. Validation selects the version-specific
+# list through required_entity_fields() below.
+REQUIRED_ALWAYS: List[str] = REQUIRED_ALWAYS_V2
 
 REQUIRED_BUILD: List[str] = [
     "compile.pgen",
@@ -68,6 +81,42 @@ OPTIONAL_DEFAULTS: Dict[str, str] = {
     "compile.build_intent": "unspecified",
     "compile.cxx_standard": "profile-derived",
 }
+
+
+def requirements_schema(req: Dict[str, Any]) -> int:
+    """Return the requirements schema; v1 is explicit legacy compatibility."""
+    try:
+        return int(req.get("schema_version", 1))
+    except (TypeError, ValueError):
+        return -1
+
+
+def required_entity_fields(req: Dict[str, Any]) -> List[str]:
+    return REQUIRED_ALWAYS_V1 if requirements_schema(req) == 1 else REQUIRED_ALWAYS_V2
+
+
+def entity_paths(req: Dict[str, Any]) -> Dict[str, str]:
+    """Resolve build-site paths without inventing a common workspace parent."""
+    entity = req.get("entity", {}) if isinstance(req.get("entity"), dict) else {}
+    if requirements_schema(req) == 1:
+        workdir = str(entity.get("workdir") or "")
+        pgen = str((req.get("compile", {}) or {}).get("pgen") or "")
+        pgen_root = str(Path(workdir) / "problems" / pgen)
+        return {
+            "site_id": str(entity.get("site_id") or "legacy-local"),
+            "source_checkout": str(entity.get("checkout_root") or ""),
+            "build_root": str(Path(pgen_root) / "build"),
+            "deps_root": str(Path(workdir) / "deps"),
+            "artifacts_root": str(Path(pgen_root) / "_build"),
+        }
+    build_root = str(entity.get("build_root") or "")
+    return {
+        "site_id": str(entity.get("site_id") or ""),
+        "source_checkout": str(entity.get("source_checkout") or ""),
+        "build_root": build_root,
+        "deps_root": str(entity.get("deps_root") or ""),
+        "artifacts_root": str(entity.get("artifacts_root") or (Path(build_root) / "_artifacts")),
+    }
 
 # ---------------------------------------------------------------------------
 # requirements.json — Consistency rules

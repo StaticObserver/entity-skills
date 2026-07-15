@@ -2,7 +2,7 @@
 
 一套帮助 Agent 使用 [Entity](https://github.com/entity-toolkit/entity) 完成天体物理模拟的 skills package。
 
-`skills/entity-router/SKILL.md` 是 Router 入口。它根据用户目标和 workspace 状态选择 playbook，并按需调用三个同级子 skill：
+`skills/entity-router/SKILL.md` 是受管 simulation 工作流的控制入口。需要 Case 状态、跨领域交接、构建运行、恢复或持续追踪时，由 Router 选择 playbook 并按需调用三个同级子 skill。边界明确的领域任务可以直接调用对应 skill；一旦目标属于受管 Case，修改操作必须持有 Router Action Contract。
 
 - `entity-pgen`：PGen、匹配 TOML 和设计记录；
 - `entity-env-build`：依赖环境与 Entity 编译；
@@ -32,6 +32,8 @@ entity-skills/
 
 当前整体设计见 `design/architecture.md`，workspace 和状态细节见 `design/workspace-and-state.md`。`design/` 和 `legacy/` 不属于 Router 运行时上下文。
 
+`entity-pgen` 的直接调用分为只读和 standalone 修改。它在写入前必须运行自身的 preflight；preflight 查询 Router registry 和 Locator envelope，注册源码只有当前有效、site 匹配的 `pgen.*` Action 才允许修改。Router 控制状态位于独立 control root，不依赖源码祖先目录中的 `_case/` 标记。
+
 ## 仓库与发布
 
 四个 skill 由本仓库统一开发、测试和发布。`skills/` 下不使用嵌套 Git 仓库或 submodule；跨 skill 的契约修改应在同一个分支和 pull request 中完成。
@@ -47,5 +49,6 @@ entity-skills/
 
 ```bash
 python3 -m unittest discover -s tests -v
+python3 -m unittest discover -s skills/entity-pgen/tests -v
 python3 -m unittest discover -s skills/entity-env-build/tests -v
 ```

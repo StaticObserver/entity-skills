@@ -1,124 +1,113 @@
 ---
 name: entity-router
-description: Orchestrate end-to-end Entity astrophysical simulations with persistent Case state, gated PGen and build handoffs, immutable run identities, failure recovery, and context-isolated workers. Use when a request spans Entity PGen/TOML design, environment build, simulation launch or restart, workspace recovery, or nt2py-assisted analysis.
+description: Orchestrate end-to-end Entity astrophysical simulations with controller-authoritative Case v3 state, multi-site Locators, gated PGen/build/run handoffs, immutable source/build/run identities, failure recovery, and context-isolated workers. Use when a request creates, recovers, or continues a Case; spans PGen, build, run, data, or analysis; changes downstream readiness; or requires managed writes. Bounded standalone domain work and read-only explanation may enter the owner skill directly.
 ---
 
 # Entity Router
 
-Act as the control plane for an Entity simulation. Keep global state in the
-Case, execute one gated Action at a time, and delegate domain work to a
-Case-bound Worker when sub-agents are available.
+Act as the single control plane for a managed Entity simulation. A Case is a
+logical resource graph whose source, build, run, data, and analysis resources
+may live at different sites.
 
-## Non-negotiable Rules
+Read `references/workspace-layout.md` before orienting a Case and
+`references/router-runtime.md` before state/site operations. Load one matching
+playbook for the current phase.
 
-- Select an exact Case, checkout, and run; never guess the newest candidate.
-- Use `scripts/entity_router_state.py` for every `_case/` mutation. Never edit
-  `case.json`, events, Action requests, or Action results by hand.
-- Treat files, hashes, logs, processes, and scheduler queries as evidence.
-  Chat summaries and Worker claims are not state transitions.
-- Keep one active mutating Action per Case.
-- Restrict every Worker to the Action Contract read/write roots.
-- Never overwrite a historical run or raw output. Changed parameters and
-  checkpoint continuation require a new run identity.
+## Entry and behavior gate
 
-Read `references/workspace-layout.md` when locating a real workspace. Read
-`references/router-runtime.md` when creating or closing Actions, recovering a
-Case, or managing Workers.
+- Direct task-skill use is allowed only for bounded read-only work or a clearly
+  standalone owner-domain edit.
+- Use Router for Case creation/recovery, persistent or cross-domain work,
+  downstream invalidation, execution-site choice, source transfer, build/run,
+  and every write to a registered Case resource without an active owner Action.
+- Do not route by a noun such as “PGen” alone. Decide from lifecycle scope,
+  persistence, managed locators, and requested effects.
+- Before dispatching a mutating Worker, create the matching Action Contract.
 
-## Control Objects
+## Non-negotiable protocol
+
+- Use `scripts/entity_router_site.py` for site profiles, probes, and source
+  materialization. Use `scripts/entity_router_state.py` for all controller Case
+  mutations. Never edit controller files by hand.
+- Controller state is single-writer and never placed in a source checkout.
+- Use structured Locators in JSON and `site_id:/absolute/path` on the CLI.
+- Select an exact `case_uid`, source revision/snapshot, build ID, and run ID;
+  never guess the newest path.
+- Each Case has one editable source authority. PGen writes execute there.
+- Dirty/untracked source reaches build/run only as an immutable hashed
+  snapshot. Mutable rsync/tar content is never a source identity.
+- Remote Workers receive immutable staged requests and may not write controller
+  state. The Router reprobes file, Git, scheduler, and data evidence before
+  committing success.
+- Enforce both site and path in every read/write envelope. Keep one active
+  mutating Action per Case.
+- Never overwrite historical build/run identities or raw data. Raw data remains
+  authoritative at the data site and is fetched selectively.
+
+## Control model
 
 ```text
 Case -> Workflow -> Action -> Worker
 ```
 
-- **Case** persists the simulation scope, critical memory, readiness, and
-  evidence pointers.
-- **Workflow** represents the current user goal and done-when conditions.
-- **Action** is the atomic state transition and context-isolation boundary.
-- **Worker** executes one domain using the immutable Action request.
+The Case stores compact memory, resource locators, immutable identities,
+readiness, and evidence. The Worker receives one Action request and one owner
+skill/playbook. Long logs and scientific artifacts remain at their owner site.
 
-The Router retains only control context. Do not load child skill bodies or
-long domain references into the Router context.
+## Domain routing
 
-## Domain Routing
-
-| Action prefix | Execution domain | Worker loads |
+| Action prefix | Owner | Execution domain |
 |---|---|---|
-| `pgen.*` | `entity-pgen` | `../entity-pgen/SKILL.md` |
-| `build.*` | `entity-env-build` | `../entity-env-build/SKILL.md` |
-| `data.*` | `entity-nt2py` | `../entity-nt2py/SKILL.md` |
-| `run.*` | `playbook-run` | matching run/resume playbook only |
-| `analysis.*` | `playbook-analysis` | `playbooks/analyze-run.md`; load `entity-nt2py` only as data-access support |
-| `failure.triage` | `failure-triage` | relevant evidence only; no speculative skill |
+| `pgen.*` | `entity-pgen` | `entity-pgen` |
+| `source.*` | `router` | `playbook-sync` |
+| `build.*` | `entity-env-build` | `entity-env-build` |
+| `run.*` | `playbook-run` | `playbook-run` |
+| `data.*` | `entity-nt2py` | `entity-nt2py` |
+| `analysis.*` | `playbook-analysis` | `playbook-analysis` |
+| `failure.*` | `failure-triage` | `failure-triage` |
 
-`entity-nt2py` does not own scientific interpretation. Run operations belong
-to Router playbooks and do not form an `entity-simulator` skill.
+`entity-nt2py` owns data access, not scientific judgment. Run and analysis
+orchestration remain Router playbooks.
 
-## Standard Loop
+## Standard loop
 
-1. **Orient**
-   - Locate `ENTITY_WORKDIR`, exact checkout, and exact Case.
-   - List existing Cases with the state tool before creating a new one.
-   - Create a Case only after its identity and user goal are clear.
-2. **Recover**
-   - Read `case.json`, then refresh fingerprints and dynamic run evidence.
-   - Verify the Case control files before choosing an Action.
-3. **Decide**
-   - Read one matching playbook.
-   - Choose only from `workflow.allowed_actions`.
-   - Resolve decisions that materially change the physical model or compute
-     commitment before starting the Action.
-4. **Start**
-   - Create an immutable Action request with the current Case revision,
-     explicit owner, inputs, write roots, outputs, and acceptance checks.
-5. **Dispatch**
-   - Reuse a Worker bound to the same `(case_id, execution_domain)`.
-   - Otherwise create a fresh Worker without inherited conversation history.
-   - Send only the Action request path and the selected skill/playbook path.
-6. **Verify**
-   - Inspect changed files, logs, hashes, process or scheduler state.
-   - Reject outputs outside write roots or unsupported success claims.
-7. **Commit**
-   - Close the Action with the state tool, recording verified outputs,
-     readiness updates, blockers, and the next Action.
-8. **Continue or stop**
-   - Continue the playbook, suspend safely, or complete the Workflow only when
-     every done-when item has evidence.
+1. **Orient**: list registry Cases; register controller/source/execution sites
+   and only the roots needed for the current phase. Determine the one source
+   authority and transfer policy.
+2. **Recover**: read `case.json`, verify site profiles, and refresh fingerprints
+   and scheduler observations. Cached remote observations are not current facts.
+3. **Decide**: choose only from `workflow.allowed_actions`; resolve decisions
+   that change physics or compute commitment.
+4. **Start**: record an immutable request with `execution_site_id`, Locator
+   inputs/roots, fingerprints, outputs, and acceptance checks.
+5. **Dispatch**: bind the Worker to `(case_uid, execution_domain)` and send only
+   the staged request plus its owner skill/playbook.
+6. **Verify**: inspect owner artifacts and reprobe the execution site. Reject
+   wrong-site, outside-root, stale-revision, or unsupported success claims.
+7. **Commit**: close the Action with verified evidence and readiness updates.
+8. **Continue**: propagate stale state, start a new immutable identity, suspend
+   safely, or complete only when every done-when item is proven.
 
-## Worker Protocol
+## Source and failure rules
 
-Bind Workers by `(case_id, execution_domain)`. Reuse them when returning from
-PGen to build and back to PGen. Do not repurpose a Worker for another Case.
+- Prefer `git-ref` for formal build/run. Use `snapshot` for dirty/untracked
+  authority content, `shared` for verified mappings, and `external` for
+  user-managed copies whose revision/hash matches.
+- Source authority transfer is its own `source.transfer-authority` Action. Prove
+  both endpoints identical before switching; never permit dual editability.
+- A source change makes dependent build/run state stale. A build change makes
+  unlaunched run state stale. Data changes make dependent analysis stale.
+- Keep owner-local failures in the owner. When evidence changes the owner,
+  close the Action and create a new one. Use `failure.triage` only while the
+  owner is unknown.
+- Offline sites block or suspend current work; after recovery, probe again.
 
-A Worker must:
+## Worker result
 
-- read its Action request before any write;
-- read exactly one owner skill or the named playbook fragment;
-- stay inside read/write roots and preserve protected paths;
-- write only owner artifacts, never `_case/`;
-- return status, changed paths, verification evidence, blockers, diagnosis,
-  and suggested next owner;
-- avoid direct Worker-to-Worker instructions.
+Require terminal status, actual changed Locators, verification evidence,
+blockers, diagnosis, and suggested next owner. A Worker narrative cannot
+advance Case state. If sub-agents are unavailable, execute sequentially under
+the same immutable Contract and gates.
 
-Keep an idle Worker isolated on Case switch when capacity allows. Rebuild it
-from disk when unavailable, stale, context-heavy, or trapped in an unchanged
-failure loop. Runtime Agent IDs are ephemeral and never enter Case state.
-
-If sub-agents are unavailable, execute the Action sequentially in the current
-context using the same Contract and gates. This is a degraded isolation mode.
-
-## Failure Routing
-
-- Keep domain-local diagnosis and the smallest repair in the current Worker.
-- When evidence changes the owner, close the failed Action and create a new
-  Action for that owner.
-- Use `failure.triage` only when the cause remains cross-layer or unknown.
-- Require a changed fingerprint or explicit reason before retrying.
-- Preserve unsupported Entity-core failures and report the missing capability;
-  do not invent an unavailable child skill.
-
-## Completion Report
-
-Report the exact Case, checkout, build, and run paths; Workflow and terminal
-Action state; artifacts changed; verification performed; unresolved blockers;
-and next owner. Keep the report concise because the durable record is on disk.
+Report the exact Case UID, authority revision, execution sites, build/run IDs,
+verified outputs, unresolved blockers, and next owner.

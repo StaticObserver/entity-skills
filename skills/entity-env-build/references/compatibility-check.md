@@ -48,14 +48,14 @@ Only `status=pass` may continue to `env.sh` generation.
 
 ## 1. Request And Checkpoint Consistency
 
-> **Implementation status: Mostly implemented** — `entity_compat.py` checks schema version, `ENTITY_CHECKOUT`/`ENTITY_WORKDIR` mismatch, `requirements.path` existence, and the reusable `requirements.embedded` snapshot for backend, MPI, output, profile, and compile-option drift.
+> **Implementation status: Mostly implemented** — `entity_compat.py` checks schema version, execution `site_id` and independent source/build/deps/artifacts path mismatches, `requirements.path` existence, and the reusable embedded request for backend, MPI, output, profile, and compile-option drift.
 
 Check:
 
 - `entity-deps.local.json.requirements` points to or embeds the current `requirements.json`.
 - `requirements.schema_version` and checkpoint `schema_version` are supported.
-- `ENTITY_CHECKOUT` equals `requirements.entity.checkout_root`.
-- `ENTITY_WORKDIR` equals `requirements.entity.workdir`.
+- execution site and all resolved schema-v2 Entity paths equal the current requirements;
+- schema-v1 `checkout_root/workdir` comparisons are legacy compatibility only.
 - requested backend, MPI, output, dependency profile, and compile options match checkpoint selections.
 
 Fail if the checkpoint was produced for a different Entity checkout, workdir, backend, MPI mode, output mode, or dependency profile.
@@ -210,7 +210,7 @@ Check:
 - `requirements.compile.pgen` is set.
 - selected dependency paths can produce the CMake options needed by `entity-build.sh`.
 - `requirements.compile.cxx_standard`, backend, MPI, output, debug, tests, precision, deposit, and shape order are internally consistent.
-- expected build directory is under `ENTITY_WORKDIR` unless the user explicitly chose otherwise.
+- expected build directory equals the immutable `entity.build_root` unless the user explicitly records another build identity path.
 
 This check does not compile Entity. It only decides whether generating `env.sh` and then `entity-build.sh` is safe.
 

@@ -27,7 +27,14 @@ from _json_io import (
 )
 from _version_profile import version_profile as detect_version_profile
 from entity_state import record_step
-from entity_schema import CONSISTENCY_RULES, OPTIONAL_DEFAULTS, REQUIRED_ALWAYS, REQUIRED_BUILD
+from entity_schema import (
+    CONSISTENCY_RULES,
+    OPTIONAL_DEFAULTS,
+    REQUIRED_BUILD,
+    entity_paths,
+    required_entity_fields,
+    requirements_schema,
+)
 
 
 # ===========================================================================
@@ -51,8 +58,14 @@ def requirements_snapshot(req: Dict[str, Any]) -> Dict[str, Any]:
     compile_cfg = req.get("compile", {}) if isinstance(req.get("compile"), dict) else {}
     return {
         "entity": {
-            "checkout_root": entity.get("checkout_root", ""),
-            "workdir": entity.get("workdir", ""),
+            "site_id": entity.get("site_id", ""),
+            "source_checkout": entity.get("source_checkout", ""),
+            "source_revision": entity.get("source_revision", {}),
+            "build_root": entity.get("build_root", ""),
+            "deps_root": entity.get("deps_root", ""),
+            "artifacts_root": entity.get("artifacts_root", ""),
+            "checkout_root": entity.get("checkout_root", ""),  # schema v1 only
+            "workdir": entity.get("workdir", ""),              # schema v1 only
             "version_bucket": entity.get("version_bucket", ""),
             "dependency_profile": entity.get("dependency_profile", ""),
         },
@@ -112,11 +125,18 @@ def check_consistency(req: Dict[str, Any]) -> List[Dict[str, str]]:
 
 
 def run_validation(req: Dict[str, Any]) -> Dict[str, Any]:
-    always_missing = check_required(req, REQUIRED_ALWAYS, "always")
+    schema = requirements_schema(req)
+    always_missing = check_required(req, required_entity_fields(req), "always")
     build_missing = check_required(req, REQUIRED_BUILD, "build")
     missing_fields = always_missing + build_missing
     consistency_issues = check_consistency(req)
-    unsupported_version = False
+    unsupported_version = schema not in {1, 2}
+    if unsupported_version:
+        consistency_issues.append({
+            "rule": "schema.supported",
+            "message": "requirements schema_version must be 1 (legacy) or 2",
+            "fields": ["schema_version"],
+        })
     try:
         detect_version_profile(req)
     except (ValueError, SystemExit) as exc:
@@ -197,12 +217,10 @@ def build_checkpoint(
 ) -> Dict[str, Any]:
     now = datetime.now(timezone.utc).isoformat()
     entity = req.get("entity", {})
-    workdir = str(entity.get("workdir", "")) if isinstance(entity, dict) else ""
-
-    if not workdir:
-        workdir = os.environ.get("ENTITY_WORKDIR", "")
-    if not workdir:
-        raise SystemExit("ENTITY_WORKDIR must be set or present in requirements.entity.workdir")
+    paths = entity_paths(req)
+    for name in ["source_checkout", "build_root", "deps_root", "artifacts_root"]:
+        if not paths[name]:
+            raise SystemExit("requirements.json cannot resolve entity.%s" % name)
 
     selected: Dict[str, Any] = {}
     if discovery and isinstance(discovery, dict):
@@ -223,7 +241,6 @@ def build_checkpoint(
 
     profile = detect_version_profile(req)
 
-    checkout_root = str(entity.get("checkout_root", "")) if isinstance(entity, dict) else ""
     version_bucket = str(entity.get("version_bucket", "")) if isinstance(entity, dict) else ""
     dep_profile = (
         str(entity.get("dependency_profile", profile.get("name", "")))
@@ -232,7 +249,7 @@ def build_checkpoint(
     )
 
     checkpoint: Dict[str, Any] = {
-        "schema_version": 1,
+        "schema_version": requirements_schema(req),
         "generated_at": now,
         "requirements": {
             "path": "",
@@ -240,17 +257,21 @@ def build_checkpoint(
         },
         "target": detect_target(),
         "entity": {
-            "checkout_root": checkout_root,
+            "site_id": paths["site_id"],
+            "source_checkout": paths["source_checkout"],
+            "source_revision": entity.get("source_revision", {}),
+            "build_root": paths["build_root"],
+            "deps_root": paths["deps_root"],
+            "artifacts_root": paths["artifacts_root"],
             "version_bucket": version_bucket,
             "dependency_profile": dep_profile,
-            "workdir": workdir,
         },
         "candidates": {},
         "selected": selected,
         "decisions": decisions,
         "paths": derive_paths(selected),
         "build_scripts": {
-            "directory": str(Path(workdir) / "generated" / "source-build-scripts"),
+            "directory": str(Path(paths["deps_root"]) / "scripts"),
             "generated_at": now,
             "scripts": {},
         },
@@ -261,7 +282,7 @@ def build_checkpoint(
             "issues": [],
         },
         "env_sh": {
-            "path": str(Path(workdir) / "env.sh"),
+            "path": str(Path(paths["artifacts_root"]) / "env.sh"),
             "status": "missing",
             "generated_at": "",
             "validation": {},
@@ -294,17 +315,7 @@ def cmd_create(args: argparse.Namespace) -> None:
     if args.output:
         output_path = args.output
     else:
-        workdir = str(
-            (req.get("entity", {}) if isinstance(req.get("entity"), dict) else {})
-            .get("workdir", "")
-            or os.environ.get("ENTITY_WORKDIR", "")
-        )
-        if not workdir:
-            msg = "Cannot determine output path: use --output or set ENTITY_WORKDIR"
-            if args.json:
-                protocol_error("checkpoint.create", msg)
-            raise SystemExit(msg)
-        output_path = Path(workdir) / "entity-deps.local.json"
+        output_path = Path(entity_paths(req)["artifacts_root"]) / "entity-deps.local.json"
 
     checkpoint["requirements"]["path"] = str(args.requirements_json.resolve())
     write_json_atomic(output_path, checkpoint)
@@ -452,7 +463,7 @@ def main() -> None:
     p_cre.add_argument("--merge", type=Path, dest="merge",
                        help="Existing entity-deps.local.json to merge selected/decisions from")
     p_cre.add_argument("--output", type=Path,
-                       help="Output path (default: $ENTITY_WORKDIR/entity-deps.local.json)")
+                       help="Output path (default: entity.artifacts_root/entity-deps.local.json)")
     add_json_flag(p_cre)
 
     # --- record-install ---

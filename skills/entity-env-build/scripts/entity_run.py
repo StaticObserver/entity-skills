@@ -16,6 +16,7 @@ from typing import Any, Dict
 from _json_io import add_json_flag, ensure_harness_home, load_json, log_event, protocol_ok, write_json_atomic
 from _version_profile import version_profile as validate_entity_version
 from entity_state import record_step
+from entity_schema import entity_paths
 
 
 def _utc_now() -> str:
@@ -27,12 +28,9 @@ def _build_artifacts_dir(req: Dict[str, Any]) -> Path:
     if isinstance(artifacts, dict) and artifacts.get("logs_dir"):
         return Path(str(artifacts["logs_dir"]))
 
-    entity = req.get("entity", {}) if isinstance(req.get("entity"), dict) else {}
-    compile_cfg = req.get("compile", {}) if isinstance(req.get("compile"), dict) else {}
-    workdir = str(entity.get("workdir") or "")
-    pgen = str(compile_cfg.get("pgen") or "")
-    if workdir and pgen:
-        return Path(workdir) / "problems" / pgen / "_build" / "build-logs"
+    artifacts_root = entity_paths(req).get("artifacts_root", "")
+    if artifacts_root:
+        return Path(artifacts_root) / "build-logs"
     return Path.cwd() / "build-logs"
 
 

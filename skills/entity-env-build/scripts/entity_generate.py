@@ -39,6 +39,7 @@ from entity_schema import (
     KOKKOS_BACKEND_FLAGS,
     SOURCE_BUILD_DEPENDENCIES,
     OPTIONAL_SOURCE_DEPENDENCIES,
+    entity_paths,
     override_satisfies,
 )
 
@@ -70,28 +71,24 @@ def unique(values: List[str]) -> List[str]:
     return out
 
 
-def get_workdir(req: Dict[str, Any]) -> Path:
-    entity = req.get("entity", {})
-    if isinstance(entity, dict) and entity.get("workdir"):
-        return Path(str(entity["workdir"]))
-    env_workdir = os.environ.get("ENTITY_WORKDIR")
-    if env_workdir:
-        return Path(env_workdir)
-    raise SystemExit("requirements.json missing entity.workdir and ENTITY_WORKDIR is unset")
+def get_deps_root(req: Dict[str, Any]) -> Path:
+    value = entity_paths(req)["deps_root"]
+    if not value:
+        raise SystemExit("requirements.json missing entity.deps_root")
+    return Path(value)
 
 
 def get_pgen_dir(req: Dict[str, Any]) -> Path:
-    """problems/<pgen>/ under ROOT — the pgen's source/config directory."""
-    compile_cfg = req.get("compile", {})
-    pgen = compile_cfg.get("pgen")
-    if not pgen:
-        raise SystemExit("requirements.json missing required field: compile.pgen")
-    return get_workdir(req) / "problems" / str(pgen)
+    """Legacy helper: parent of the independent artifacts root."""
+    return get_build_artifacts_dir(req).parent
 
 
 def get_build_artifacts_dir(req: Dict[str, Any]) -> Path:
-    """_build/ under pgen — all tool-generated build artifacts."""
-    return get_pgen_dir(req) / "_build"
+    """Independent root for generated scripts, logs, and checkpoints."""
+    value = entity_paths(req)["artifacts_root"]
+    if not value:
+        raise SystemExit("requirements.json missing entity.artifacts_root")
+    return Path(value)
 
 
 # ===========================================================================
@@ -200,24 +197,22 @@ def _git_clone_fallback(dep: str, repo_url: str, branch_ref: str) -> str:
     return fallback
 
 
-def script_header(name: str, workdir: Path, pgen_dir: Path, prefix: Path,
+def script_header(name: str, deps_root: Path, artifacts_root: Path, prefix: Path,
                   compilers: Dict[str, str], tarball_dir: str = "") -> str:
-    build_artifacts_dir = pgen_dir / "_build"
     lines = [
         "#!/usr/bin/env bash",
         f"# Generated dependency build script for {name}. Review before execution.",
         "set -euo pipefail",
-        'if [ -z "${ENTITY_WORKDIR:-}" ]; then',
-        f"  ENTITY_WORKDIR={q(workdir)}",
+        'if [ -z "${ENTITY_DEPS_ROOT:-}" ]; then',
+        f"  ENTITY_DEPS_ROOT={q(deps_root)}",
         "fi",
-        "export ENTITY_WORKDIR",
-        f"export PGEN_DIR={q(pgen_dir)}",
-        f"export BUILD_ARTIFACTS_DIR={q(build_artifacts_dir)}",
+        "export ENTITY_DEPS_ROOT",
+        f"export BUILD_ARTIFACTS_DIR={q(artifacts_root)}",
         'if [ -z "${PREFIX:-}" ]; then',
         f"  PREFIX={q(prefix)}",
         "fi",
         "export PREFIX",
-        'SRC_ROOT="${ENTITY_WORKDIR}/deps/sources"',
+        'SRC_ROOT="${ENTITY_DEPS_ROOT}/sources"',
         'BUILD_ROOT="${BUILD_ARTIFACTS_DIR}/generated/source-builds"',
         'LOG_DIR="${BUILD_ARTIFACTS_DIR}/build-logs"',
         "mkdir -p \"$SRC_ROOT\" \"$BUILD_ROOT\" \"$PREFIX\" \"$LOG_DIR\"",
@@ -236,13 +231,13 @@ def script_header(name: str, workdir: Path, pgen_dir: Path, prefix: Path,
     return "\n".join(lines)
 
 
-def _kokkos_script(req: Dict[str, Any], checkpoint: Dict[str, Any], workdir: Path, tarball_dir: str = "") -> str:
+def _kokkos_script(req: Dict[str, Any], checkpoint: Dict[str, Any], deps_root: Path, tarball_dir: str = "") -> str:
     env = req.get("environment", {})
     compilers = compiler_env(checkpoint)
     profile = entity_version_profile(req)
     version = requested_version(req, "kokkos", profile)
-    prefix = workdir / "deps" / "kokkos" / version
-    pgen_dir = get_pgen_dir(req)
+    prefix = deps_root / "kokkos" / version
+    artifacts_root = get_build_artifacts_dir(req)
     if not isinstance(env, dict):
         env = {}
     backend = str(env.get("backend") or "cpu").lower()
@@ -271,7 +266,7 @@ fi
 export CXX="$SRC/bin/nvcc_wrapper"
 """
     return (
-        script_header("kokkos", workdir, pgen_dir, prefix, compilers, tarball_dir)
+        script_header("kokkos", deps_root, artifacts_root, prefix, compilers, tarball_dir)
         + f"""
 VERSION="${{KOKKOS_VERSION:-{version}}}"
 SRC="$SRC_ROOT/kokkos-$VERSION"
@@ -288,16 +283,16 @@ cmake --install "$BUILD" 2>&1 | tee "$LOG_DIR/kokkos-install.log"
     )
 
 
-def _hdf5_script(req: Dict[str, Any], checkpoint: Dict[str, Any], workdir: Path, tarball_dir: str = "") -> str:
+def _hdf5_script(req: Dict[str, Any], checkpoint: Dict[str, Any], deps_root: Path, tarball_dir: str = "") -> str:
     env = req.get("environment", {})
     compilers = compiler_env(checkpoint)
     version = requested_version(req, "hdf5", entity_version_profile(req))
-    prefix = workdir / "deps" / "hdf5" / version
-    pgen_dir = get_pgen_dir(req)
+    prefix = deps_root / "hdf5" / version
+    artifacts_root = get_build_artifacts_dir(req)
     mpi_on = bool(env.get("mpi")) if isinstance(env, dict) else False
     parallel = "-DHDF5_ENABLE_PARALLEL=ON" if mpi_on else "-DHDF5_ENABLE_PARALLEL=OFF"
     return (
-        script_header("hdf5", workdir, pgen_dir, prefix, compilers, tarball_dir)
+        script_header("hdf5", deps_root, artifacts_root, prefix, compilers, tarball_dir)
         + f"""
 VERSION="${{HDF5_VERSION:-{version}}}"
 SRC="$SRC_ROOT/hdf5-$VERSION"
@@ -315,22 +310,22 @@ cmake --install "$BUILD" 2>&1 | tee "$LOG_DIR/hdf5-install.log"
     )
 
 
-def _adios2_script(req: Dict[str, Any], checkpoint: Dict[str, Any], workdir: Path, tarball_dir: str = "") -> str:
+def _adios2_script(req: Dict[str, Any], checkpoint: Dict[str, Any], deps_root: Path, tarball_dir: str = "") -> str:
     env = req.get("environment", {})
     compilers = compiler_env(checkpoint)
     profile = entity_version_profile(req)
     version = requested_version(req, "adios2", profile)
     hdf5_version = requested_version(req, "hdf5", profile)
     kokkos_version = requested_version(req, "kokkos", profile)
-    prefix = workdir / "deps" / "adios2" / version
-    pgen_dir = get_pgen_dir(req)
+    prefix = deps_root / "adios2" / version
+    artifacts_root = get_build_artifacts_dir(req)
     if not isinstance(env, dict):
         env = {}
     mpi_on = bool(env.get("mpi"))
     backend = str(env.get("backend") or "cpu").lower()
-    prefix_parts = [str(workdir / "deps" / "hdf5" / hdf5_version)]
+    prefix_parts = [str(deps_root / "hdf5" / hdf5_version)]
     if profile["adios2_uses_kokkos"]:
-        prefix_parts.insert(0, str(workdir / "deps" / "kokkos" / kokkos_version))
+        prefix_parts.insert(0, str(deps_root / "kokkos" / kokkos_version))
     cmake_prefix_base = ":".join(prefix_parts)
     # CUDA + Kokkos requires explicit CMAKE_CUDA_COMPILER and ARCHITECTURES
     cuda_extra = ""
@@ -378,7 +373,7 @@ export CMAKE_SHARED_LINKER_FLAGS="-L{stubs_path} -L{cuda_lib_path} ${{CMAKE_SHAR
     ]
     opts = [opt for opt in opts if opt]
     return (
-        script_header("adios2", workdir, pgen_dir, prefix, compilers, tarball_dir)
+        script_header("adios2", deps_root, artifacts_root, prefix, compilers, tarball_dir)
         + f"""
 VERSION="${{ADIOS2_VERSION:-v{version}}}"
 SRC="$SRC_ROOT/ADIOS2-$VERSION"
@@ -397,14 +392,14 @@ cmake --install "$BUILD" 2>&1 | tee "$LOG_DIR/adios2-install.log"
     )
 
 
-def _mpi_script(req: Dict[str, Any], checkpoint: Dict[str, Any], workdir: Path) -> str:
+def _mpi_script(req: Dict[str, Any], checkpoint: Dict[str, Any], deps_root: Path, tarball_dir: str = "") -> str:
     compilers = compiler_env(checkpoint)
     profile = entity_version_profile(req)
     version = requested_version(req, "openmpi", profile)
-    prefix = workdir / "deps" / "openmpi" / version
-    pgen_dir = get_pgen_dir(req)
+    prefix = deps_root / "openmpi" / version
+    artifacts_root = get_build_artifacts_dir(req)
     return (
-        script_header("openmpi", workdir, pgen_dir, prefix, compilers)
+        script_header("openmpi", deps_root, artifacts_root, prefix, compilers, tarball_dir)
         + """
 cat >&2 <<'MSG'
 OpenMPI source build is intentionally not auto-generated yet.
@@ -443,15 +438,15 @@ def dep_list(value: Optional[str], req: Dict[str, Any]) -> List[str]:
 def cmd_deps(args: argparse.Namespace) -> None:
     req = load_json(args.requirements_json)
     checkpoint = load_json(args.checkpoint)
-    workdir = get_workdir(req)
-    out_dir = args.output_dir or workdir / "deps" / "scripts"
+    deps_root = get_deps_root(req)
+    out_dir = args.output_dir or deps_root / "scripts"
     out_dir.mkdir(parents=True, exist_ok=True)
     scripts: Dict[str, Dict[str, str]] = {}
     profile = entity_version_profile(req)
     generated: List[str] = []
     tarball_dir = getattr(args, 'source_tarball_dir', "") or ""
     for dep in dep_list(args.deps, req):
-        text = SCRIPT_FACTORIES[dep](req, checkpoint, workdir, tarball_dir)
+        text = SCRIPT_FACTORIES[dep](req, checkpoint, deps_root, tarball_dir)
         path = out_dir / f"build-{dep}.sh"
         path.write_text(text, encoding="utf-8")
         path.chmod(0o755)
@@ -570,7 +565,7 @@ def generate_env(data: Dict[str, Any], json_path: Path) -> str:
         paths = {}
 
     prefixes = dep_prefixes(selected)
-    # ENTITY_DEPS_ROOT is the common parent of all dep prefixes (usually $ENTITY_WORKDIR/deps)
+    # ENTITY_DEPS_ROOT is the independent dependency root for this execution site.
     if prefixes:
         deps_root = str(Path(os.path.commonpath(prefixes)).parent) if len(prefixes) > 1 else str(Path(prefixes[0]).parent)
     elif paths.get("ENTITY_DEPS_ROOT"):
@@ -771,8 +766,8 @@ def require_string(obj: Dict[str, Any], path: str) -> str:
 
 
 def default_build_dir(req: Dict[str, Any]) -> str:
-    """Entity cmake build tree: problems/<pgen>/build/"""
-    return str(get_pgen_dir(req) / "build")
+    """Entity cmake build tree supplied by the build-site contract."""
+    return entity_paths(req)["build_root"]
 
 
 def _verify_checkpoint_gate(
@@ -803,8 +798,9 @@ def generate_build_script(
     req: Dict[str, Any], req_path: Path, env_sh: Path, run_id: str,
     clean_build: bool = False,
 ) -> Tuple[str, Dict[str, str]]:
-    checkout = require_string(req, "entity.checkout_root")
-    workdir = require_string(req, "entity.workdir")
+    checkout = entity_paths(req)["source_checkout"]
+    if not checkout:
+        raise SystemExit("requirements.json cannot resolve entity.source_checkout")
     compile_cfg = req.setdefault("compile", {})
     build_dir = str(compile_cfg.get("build_dir") or default_build_dir(req))
     compile_cfg["build_dir"] = build_dir
@@ -900,7 +896,6 @@ def cmd_build(args: argparse.Namespace) -> None:
         if isinstance(artifacts, dict) and artifacts.get("entity_build_sh"):
             args.output = Path(str(artifacts["entity_build_sh"]))
         else:
-            workdir = str(get_workdir(req))
             args.output = get_build_artifacts_dir(req) / "entity-build.sh"
 
     script, meta = generate_build_script(req, args.requirements_json, args.env, run_id,
