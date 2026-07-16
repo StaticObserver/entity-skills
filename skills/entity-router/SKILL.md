@@ -24,6 +24,20 @@ playbook for the current phase.
   persistence, managed locators, and requested effects.
 - Before dispatching a mutating Worker, create the matching Action Contract.
 
+## Fast read-only run status
+
+For a bounded “is it running / how far has it progressed” request with an exact
+run root plus job ID or PID, use `run.status` before the Standard loop. Execute
+`scripts/entity_router_status.py` directly in the current agent. This fast path
+does not resume or suspend a Case, create or finish an Action, dispatch a
+Worker, or write controller evidence. Its quick profile makes at most one
+remote call and returns a compact observation.
+
+If the result recommends `observe_only`, report it and stop. Only enter a
+normal `run.monitor` Action when the result recommends
+`promote_to_run_monitor`, or when the user explicitly requests durable/full
+monitoring.
+
 ## Non-negotiable protocol
 
 - Use `scripts/entity_router_site.py` for site profiles, probes, and source
@@ -42,7 +56,9 @@ playbook for the current phase.
 - Enforce both site and path in every read/write envelope. Keep one active
   mutating Action per Case.
 - Never overwrite historical build/run identities or raw data. Raw data remains
-  authoritative at the data site and is fetched selectively.
+  authoritative at the data site and is fetched selectively. Deletion is allowed
+  only through an explicitly authorized `data.purge` Action with an exact manifest,
+  protected source/build/dependency roots, and an out-of-target purge receipt.
 
 ## Control model
 
@@ -63,6 +79,7 @@ skill/playbook. Long logs and scientific artifacts remain at their owner site.
 | `build.*` | `entity-env-build` | `entity-env-build` |
 | `run.*` | `playbook-run` | `playbook-run` |
 | `data.*` | `entity-nt2py` | `entity-nt2py` |
+| `data.purge` | `router` | `router` |
 | `analysis.*` | `playbook-analysis` | `playbook-analysis` |
 | `failure.*` | `failure-triage` | `failure-triage` |
 
@@ -70,6 +87,9 @@ skill/playbook. Long logs and scientific artifacts remain at their owner site.
 orchestration remain Router playbooks.
 
 ## Standard loop
+
+Use this loop for Actions and persistent lifecycle transitions, not for
+`run.status`.
 
 1. **Orient**: list registry Cases; register controller/source/execution sites
    and only the roots needed for the current phase. Determine the one source
@@ -87,6 +107,9 @@ orchestration remain Router playbooks.
 7. **Commit**: close the Action with verified evidence and readiness updates.
 8. **Continue**: propagate stale state, start a new immutable identity, suspend
    safely, or complete only when every done-when item is proven.
+
+For destructive storage cleanup, load `playbooks/purge-data.md`. Never reuse an
+inspection or analysis Action as a deletion envelope.
 
 ## Source and failure rules
 
@@ -107,7 +130,7 @@ orchestration remain Router playbooks.
 Require terminal status, actual changed Locators, verification evidence,
 blockers, diagnosis, and suggested next owner. A Worker narrative cannot
 advance Case state. If sub-agents are unavailable, execute sequentially under
-the same immutable Contract and gates.
+the same immutable Contract and gates. `run.status` never uses a Worker.
 
 Report the exact Case UID, authority revision, execution sites, build/run IDs,
 verified outputs, unresolved blockers, and next owner.

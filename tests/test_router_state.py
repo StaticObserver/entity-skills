@@ -238,6 +238,51 @@ class RouterV3CLITest(unittest.TestCase):
         self.assertIn("separate", payload["error"])
         self.assertFalse(os.path.exists(forbidden))
 
+    def test_explicit_data_purge_contract(self):
+        created = self.create_case("purge")
+        case = created["case_dir"]
+        run_data = os.path.join(self.remote, "run", "purge-data")
+        os.makedirs(run_data)
+        self._write(os.path.join(run_data, "fields.bp"), "raw\n")
+        code, reconciled = self.cli(
+            STATE, "reconcile", "--case", case, "--expected-revision", "0",
+            "--readiness", "data=ready",
+            "--evidence", "data=remote-sim:%s" % run_data,
+        )
+        self.assertEqual(code, 0, reconciled)
+        self.assertIn("data.purge", reconciled["allowed_actions"])
+
+        receipt = os.path.join(self.remote, "staging", "purge-receipt.json")
+        common = [
+            "start-action", "--case", case, "--expected-revision", "1",
+            "--action-id", "purge-1", "--action-type", "data.purge",
+            "--owner", "router", "--execution-domain", "router",
+            "--execution-site", "remote-sim", "--goal", "delete authorized data",
+            "--input", "remote-sim:%s" % run_data,
+            "--read-root", "remote-sim:%s" % run_data,
+            "--write-root", "remote-sim:%s" % run_data,
+            "--write-root", "remote-sim:%s" % os.path.dirname(receipt),
+            "--expected-output", "remote-sim:%s" % receipt,
+            "--acceptance-check", "receipt exists",
+        ]
+        code, rejected = self.cli(STATE, *common)
+        self.assertEqual(code, 2)
+        self.assertIn("authorization", rejected["error"])
+
+        code, started = self.cli(STATE, *(common + ["--authorization", "explicit test request"]))
+        self.assertEqual(code, 0, started)
+        shutil.rmtree(run_data)
+        self._write(receipt, "{}\n")
+        code, finished = self.cli(
+            STATE, "finish-action", "--case", case, "--expected-revision", "2",
+            "--action-id", "purge-1", "--status", "completed",
+            "--output", "remote-sim:%s" % receipt,
+            "--verification", "target missing and receipt inspected",
+            "--readiness", "data=absent",
+        )
+        self.assertEqual(code, 0, finished)
+        self.assertNotIn("data.purge", finished["allowed_actions"])
+
     def test_v2_migration_is_non_destructive(self):
         legacy = os.path.join(self.temp, "legacy-case")
         os.makedirs(os.path.join(legacy, "_case"))

@@ -32,6 +32,24 @@ Procedure:
 3. Record `submitted` or `running` only after process/scheduler evidence.
 4. Never mutate `input.toml` after launch.
 
+## `run.status` fast path
+
+Use this path for a one-shot progress/status question when the exact run root
+and scheduler job ID or process PID are already known. It is a read-only
+observation and does not create an Action. Do not dispatch a Worker or
+sub-agent, resume/suspend the Case, refresh all Case resources, or write an
+evidence record.
+
+Run `scripts/entity_router_status.py` once in the current agent. The default
+`quick` profile performs at most one SSH call and returns scheduler/process
+state, parsed progress, a short stderr tail, and shallow field/checkpoint
+counts. Use `--profile full` only when the user explicitly asks for detailed
+output inventory.
+
+If `recommendation=observe_only`, report the compact result and stop. If it is
+`promote_to_run_monitor`, continue with the durable `run.monitor` Action below
+to diagnose a terminal, missing, or anomalous run.
+
 ## `run.monitor`
 
 1. Query the actual process or scheduler through a fresh site probe; do not

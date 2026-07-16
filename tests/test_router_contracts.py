@@ -23,8 +23,10 @@ class RouterContractTest(unittest.TestCase):
         required = [
             "SKILL.md",
             "scripts/entity_router_common.py",
+            "scripts/entity_router_purge.py",
             "scripts/entity_router_remote.py",
             "scripts/entity_router_state.py",
+            "scripts/entity_router_status.py",
             "scripts/entity_router_site.py",
             "references/workspace-layout.md",
             "references/router-runtime.md",
@@ -32,6 +34,7 @@ class RouterContractTest(unittest.TestCase):
             "playbooks/run-simulation.md",
             "playbooks/resume-simulation.md",
             "playbooks/analyze-run.md",
+            "playbooks/purge-data.md",
             "../entity-pgen/SKILL.md",
             "../entity-pgen/scripts/pgen_preflight.py",
             "../entity-env-build/SKILL.md",
@@ -83,6 +86,16 @@ class RouterContractTest(unittest.TestCase):
         ]:
             self.assertIn(value, skill)
 
+    def test_run_status_is_a_non_delegated_read_only_fast_path(self):
+        with open(os.path.join(ROUTER_ROOT, "SKILL.md"), "r") as handle:
+            skill = handle.read()
+        with open(os.path.join(ROUTER_ROOT, "playbooks", "run-simulation.md"), "r") as handle:
+            playbook = handle.read()
+        self.assertIn("run.status", skill)
+        self.assertIn("run.status", playbook)
+        self.assertIn("Do not dispatch", playbook)
+        self.assertIn("does not create an Action", playbook)
+
     def test_action_prefixes_have_fixed_execution_contracts(self):
         expected = {
             "source": ("router", "playbook-sync"),
@@ -95,6 +108,7 @@ class RouterContractTest(unittest.TestCase):
         }
         for prefix, contract in expected.items():
             self.assertEqual(contract, router_state.ACTION_EXECUTION[prefix])
+        self.assertEqual(("router", "router"), router_state.required_execution("data.purge"))
 
     def test_pgen_write_envelope_is_owner_specific(self):
         source = os.path.join(ROOT, "test-source")

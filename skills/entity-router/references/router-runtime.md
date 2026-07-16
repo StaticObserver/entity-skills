@@ -88,6 +88,34 @@ block the Action until the site is reachable and probe again.
 Authority transfer uses `source.transfer-authority` and completes with
 `--new-authority <replica-locator>`.
 
+## Read run status without an Action
+
+For a bounded progress check, use the one-shot read-only probe. It does not
+mutate Case state and makes at most one SSH call:
+
+```bash
+python3 scripts/entity_router_status.py --router-home <control-root> \
+  --site-id cluster --run-root /scratch/run/<case_uid>/<run_id> \
+  --scheduler slurm --job-id <job_id> \
+  --progress-log logs/stdout.log --stderr-log logs/stderr.log \
+  --fields-root data/fields --checkpoint-root data/checkpoints
+```
+
+For an unregistered legacy site, replace `--site-id cluster` with
+`--ssh-alias <ssh-config-alias>`. Use `--pid <pid>` for a non-scheduler run and
+add `--pid-start-ticks <ticks>` when `/proc` identity protection is available.
+The default quick inventory is shallow; `--profile full` recursively totals
+only matching field/checkpoint entries.
+
+## Purge explicitly authorized data
+
+Use `data.purge` only after `data.inspect` has established `data=partial` or
+`data=ready`. The Action requires non-empty `--authorization` text. Declare
+each deletion target as a write root, protect source/build/dependency and any
+retained run paths, and put the expected purge receipt outside every deletion
+target, normally under the registered staging root. A completed purge must set
+`--readiness data=absent` or `data=partial`.
+
 ## Migrate v2
 
 ```bash

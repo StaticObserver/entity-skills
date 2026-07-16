@@ -63,6 +63,10 @@ ACTION_EXECUTION = {
     "failure": ("failure-triage", "failure-triage"),
 }
 
+ACTION_TYPE_EXECUTION = {
+    "data.purge": ("router", "router"),
+}
+
 
 class StateError(RouterError):
     pass
@@ -110,6 +114,8 @@ def readiness(status, evidence=None):
 
 
 def required_execution(action_type):
+    if action_type in ACTION_TYPE_EXECUTION:
+        return ACTION_TYPE_EXECUTION[action_type]
     prefix = action_type.split(".", 1)[0]
     if prefix not in ACTION_EXECUTION:
         raise StateError("action has no execution contract: %s" % action_type)
@@ -244,6 +250,8 @@ def allowed_actions(state):
         result.append("failure.triage")
     if data in {"partial", "ready", "unknown"}:
         result.append("data.inspect")
+    if data in {"partial", "ready"}:
+        result.append("data.purge")
     if data in {"partial", "ready"} and analysis in {"none", "planned", "stale"}:
         result.append("analysis.run")
     return sorted(set(result))
@@ -522,6 +530,24 @@ def validate_action_write_envelope(state, action_type, execution_site, write_roo
         if not root:
             raise StateError("run root is not configured")
         allowed = [root]
+    elif action_type == "data.purge":
+        profile = load_site_profile(home, execution_site)
+        roots = profile.get("roots", {})
+        for key in ["run_root", "analysis_root", "staging_root"]:
+            if roots.get(key):
+                allowed.append({"site_id": execution_site, "path": roots[key]})
+        data_root = resource_root(state, "data")
+        if data_root and data_root["site_id"] == execution_site:
+            allowed.append(data_root)
+        forbidden = []
+        for key in ["source_root", "build_root", "deps_root"]:
+            if roots.get(key):
+                forbidden.append({"site_id": execution_site, "path": roots[key]})
+        if state["source"]["authority"]["site_id"] == execution_site:
+            forbidden.append(state["source"]["authority"])
+        for root in write_roots:
+            if any(locators_overlap(root, item) for item in forbidden):
+                raise StateError("data.purge write root overlaps protected source/build/deps locator: %s" % locator_text(root))
     elif prefix == "data":
         profile = load_site_profile(home, execution_site)
         roots = profile.get("roots", {})
@@ -596,6 +622,8 @@ def command_start_action(args):
             raise StateError("another Action is already active")
         if args.action_type not in state["workflow"].get("allowed_actions", []):
             raise StateError("action is not allowed in current state: %s" % args.action_type)
+        if args.action_type == "data.purge" and not args.authorization:
+            raise StateError("data.purge requires explicit --authorization text")
         required_owner, required_domain = required_execution(args.action_type)
         if args.owner != required_owner or args.execution_domain != required_domain:
             raise StateError("action execution mismatch: %s requires owner=%s execution_domain=%s" % (args.action_type, required_owner, required_domain))
@@ -662,6 +690,7 @@ def command_start_action(args):
             "run_id": state["resources"]["run"].get("current_id", ""),
             "goal": args.goal,
             "playbook": args.playbook or "",
+            "authorization": args.authorization or "",
             "inputs": inputs,
             "read_roots": read_roots,
             "write_roots": write_roots,
@@ -736,6 +765,9 @@ def command_finish_action(args):
             if len(args.verification) < len(request.get("acceptance_checks", [])):
                 raise StateError("completed Action requires at least one verification per acceptance check")
         updates = parse_readiness_updates(args.readiness)
+        if (request["action_type"] == "data.purge" and args.status == "completed"
+                and updates.get("data") not in {"absent", "partial"}):
+            raise StateError("completed data.purge requires --readiness data=absent or data=partial")
         authority_transfer = None
         if request["action_type"] == "source.transfer-authority" and args.status == "completed":
             if not args.new_authority:
@@ -1241,6 +1273,7 @@ def build_parser():
     start.add_argument("--identity-id")
     start.add_argument("--goal", required=True)
     start.add_argument("--playbook")
+    start.add_argument("--authorization")
     start.add_argument("--input", action="append", default=[])
     start.add_argument("--read-root", action="append", default=[])
     start.add_argument("--write-root", action="append", default=[])
