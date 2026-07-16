@@ -12,6 +12,7 @@ import argparse
 import datetime
 import fnmatch
 import json
+import math
 import os
 import re
 import subprocess
@@ -31,6 +32,12 @@ FATAL_RE = re.compile(
     re.IGNORECASE,
 )
 ANSI_RE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
+FLOAT_TOKEN = r"[+-]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?"
+TIME_RE = re.compile(
+    r"\bTime:\s*(%s)(?=\.{2,}|\s|\[|$)"
+    r"(?:\.{2,})?(?:\s*/\s*(%s)(?=\.{2,}|\s|\[|$))?"
+    % (FLOAT_TOKEN, FLOAT_TOKEN)
+)
 COMMAND_TIMEOUT_SECONDS = 8
 
 
@@ -64,6 +71,16 @@ def probe_error(name, code, stderr):
     return "%s: %s" % (name, detail)
 
 
+def finite_float(value):
+    if value is None:
+        return None
+    try:
+        result = float(value)
+    except (TypeError, ValueError):
+        return None
+    return result if math.isfinite(result) else None
+
+
 def tail_text(path, limit):
     if not path or not os.path.isfile(path):
         return ""
@@ -80,7 +97,7 @@ def parse_progress(text, configured_steps=None, configured_time=None):
     step = None
     total_steps = configured_steps
     simulation_time = None
-    target_time = configured_time
+    target_time = finite_float(configured_time)
     elapsed = ""
     remaining = ""
     for line in clean.splitlines():
@@ -89,13 +106,15 @@ def parse_progress(text, configured_steps=None, configured_time=None):
             step = int(match.group(1))
             if match.group(2):
                 total_steps = int(match.group(2))
-        match = re.search(
-            r"\bTime:\s*([-+0-9.eE]+)(?:\s*/\s*([-+0-9.eE]+))?", line
-        )
+        match = TIME_RE.search(line)
         if match:
-            simulation_time = float(match.group(1))
+            parsed_time = finite_float(match.group(1))
+            if parsed_time is not None:
+                simulation_time = parsed_time
             if match.group(2):
-                target_time = float(match.group(2))
+                parsed_target = finite_float(match.group(2))
+                if parsed_target is not None:
+                    target_time = parsed_target
         match = re.search(r"\bElapsed time:\s*(.+)$", line)
         if match:
             elapsed = match.group(1).strip()

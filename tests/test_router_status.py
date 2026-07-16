@@ -31,7 +31,10 @@ class RouterStatusTest(unittest.TestCase):
         os.makedirs(self.bin)
         self.write(
             os.path.join(self.run_root, "logs", "stdout.log"),
-            "Step: 120 / 1000\nTime: 12.5 / 100.0\nElapsed time: 2min\nRemaining time: 14min\n",
+            "Step: 120 / 1000\n"
+            "\x1b[0mTime:\x1b[90m \x1b[92m12.5\x1b[0m"
+            "..................\x1b[90m[Δt = 0.0013]\x1b[0m\n"
+            "Elapsed time: 2min\nRemaining time: 14min\n",
         )
         self.write(os.path.join(self.run_root, "logs", "stderr.log"), "")
         self.write(
@@ -88,6 +91,7 @@ class RouterStatusTest(unittest.TestCase):
                 "--stderr-log", "logs/stderr.log",
                 "--fields-root", "data/fields",
                 "--checkpoint-root", "data/checkpoints",
+                "--target-time", "100.0",
             ] + list(extra),
             stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env,
         )
@@ -110,6 +114,20 @@ class RouterStatusTest(unittest.TestCase):
         self.assertEqual(payload["checkpoints"]["count"], 1)
         self.assertNotIn("total_bytes", payload["fields"])
         self.assertEqual(payload["recommendation"], "observe_only")
+
+    def test_progress_parser_accepts_scientific_notation(self):
+        payload = router_status.parse_progress("Time: -1.25e+02 / +5.0E+02\n")
+        self.assertEqual(payload["simulation_time"], -125.0)
+        self.assertEqual(payload["target_simulation_time"], 500.0)
+        self.assertAlmostEqual(payload["percent_complete"], -25.0)
+
+    def test_malformed_time_line_does_not_abort_or_replace_valid_progress(self):
+        payload = router_status.parse_progress(
+            "Time: 12.5 / 100.0\nTime: 13.0.5..................[Δt = 0.1]\n"
+        )
+        self.assertEqual(payload["simulation_time"], 12.5)
+        self.assertEqual(payload["target_simulation_time"], 100.0)
+        self.assertAlmostEqual(payload["percent_complete"], 12.5)
 
     def test_full_status_adds_bounded_inventory(self):
         code, payload = self.cli("--profile", "full")
