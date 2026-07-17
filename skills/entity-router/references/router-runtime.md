@@ -122,8 +122,46 @@ target, normally under the registered staging root. A completed purge must set
 python3 scripts/entity_router_state.py --router-home <control-root> migrate-case \
   --legacy-case /old/problem --dry-run
 python3 scripts/entity_router_state.py --router-home <control-root> migrate-case \
-  --legacy-case /old/problem --commit
+  --legacy-case /old/problem \
+  --build-root <site:path> --run-root <site:path> \
+  --data-root <site:path> --analysis-root <site:path> \
+  --active-run <site:path> --active-run-id <run-id> --commit
 ```
 
 Migration copies old control records into v3 evidence and suspends v2 only
 after v3 validates. It does not move or delete source, build, run, or raw data.
+If remote scope is discovered after migration, repair it with
+`reconcile --resource-root DIMENSION=LOCATOR`. After the v3 Case verifies,
+remove the suspended v2 controller and preserved full copy only through the
+explicit cleanup gate:
+
+```bash
+python3 scripts/entity_router_state.py --router-home <control-root> finalize-migration \
+  --case <uid> --expected-revision <n> \
+  --authorization '<explicit user authorization>' --purge-control-copy
+```
+
+Finalization retains a manifest-hashed receipt under v3 `evidence/` and never
+targets run or data resources.
+
+## Feature-gated deterministic flow
+
+The façade is opt-in while replay and live canary evidence are collected:
+
+```bash
+export ENTITY_ROUTER_FLOW_V1=1
+python3 scripts/entity_router_flow.py inspect --case <uid> --live --phase build
+python3 scripts/entity_router_flow.py execute --request <flow-request.json>
+python3 scripts/entity_router_flow.py execute --request <flow-request.json> \
+  --prepare --step <n>
+python3 scripts/entity_router_flow.py execute --request <flow-request.json> \
+  --resume --step <n> --worker-result <site:/absolute/result.json>
+python3 scripts/entity_router_flow.py watch --case <uid> --action <action-id> \
+  --flow-request-hash <sha256:...> --interval-seconds 60 --timeout-seconds 86400
+```
+
+`execute` derives progress only from Case revision, immutable Action records,
+and dispatch receipts. It refuses target drift, Action ID collisions, revision
+drift, arbitrary shell fields, non-contiguous history, and blind scheduler
+resubmission. The flag changes Router entry selection; direct diagnostic use of
+the façade remains available for tests and recovery.

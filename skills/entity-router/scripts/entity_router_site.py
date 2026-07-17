@@ -23,6 +23,7 @@ from entity_router_common import (
     now_utc,
     parse_locator,
     probe_locator,
+    probe_locators_batch,
     router_home,
     run_command,
     run_on_site,
@@ -99,6 +100,16 @@ def command_verify(args):
 
 def command_probe(args):
     return {"ok": True, "evidence": probe_locator(args.router_home, args.locator, args.kind)}
+
+
+def command_probe_batch(args):
+    items = [{"locator": value, "kind": args.kind} for value in args.locator]
+    return {
+        "ok": True,
+        "site_id": args.site_id,
+        "remote_calls": 0 if load_site_profile(args.router_home, args.site_id)["transport"]["kind"] == "local" else 1,
+        "evidence": probe_locators_batch(args.router_home, args.site_id, items),
+    }
 
 
 def command_scheduler_probe(args):
@@ -433,6 +444,11 @@ def build_parser():
     probe.add_argument("--locator", required=True)
     probe.add_argument("--kind", choices=["auto", "git"], default="auto")
     probe.set_defaults(func=command_probe)
+    batch = sub.add_parser("probe-batch")
+    batch.add_argument("--site-id", required=True)
+    batch.add_argument("--locator", action="append", required=True)
+    batch.add_argument("--kind", choices=["auto", "git"], default="auto")
+    batch.set_defaults(func=command_probe_batch)
     scheduler = sub.add_parser("scheduler-probe")
     scheduler.add_argument("--site-id", required=True)
     scheduler.add_argument("--job-id", required=True)

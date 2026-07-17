@@ -1,0 +1,81 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "entity-router-flow-request-v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "flow_id", "case_uid", "base_revision", "workflow_id", "target_hash", "goal", "steps", "stop_policy"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "flow_id": {"type": "string", "minLength": 1},
+    "case_uid": {"type": "string", "minLength": 1},
+    "base_revision": {"type": "integer", "minimum": 0},
+    "workflow_id": {"type": "string", "minLength": 1},
+    "target_hash": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "goal": {"type": "string", "minLength": 1},
+    "steps": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 8,
+      "items": {"$ref": "#/definitions/step"}
+    },
+    "stop_policy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["on_completed", "on_needs_decision", "on_blocked", "on_anomaly"],
+      "properties": {
+        "on_completed": {"enum": ["continue", "return"]},
+        "on_needs_decision": {"const": "return"},
+        "on_blocked": {"const": "return"},
+        "on_anomaly": {"const": "return"}
+      }
+    }
+  },
+  "definitions": {
+    "locator": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["site_id", "path"],
+      "properties": {
+        "site_id": {"type": "string", "minLength": 1},
+        "path": {"type": "string", "pattern": "^/"}
+      }
+    },
+    "input_from": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["step_index", "role", "expected_locator"],
+      "properties": {
+        "step_index": {"type": "integer", "minimum": 0},
+        "role": {"type": "string", "minLength": 1},
+        "expected_locator": {"$ref": "#/definitions/locator"}
+      }
+    },
+    "step": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["index", "action_id", "action_type", "owner", "execution_domain", "execution_site_id", "runner", "identity_id", "spec_hash", "parents", "input_from", "inputs", "read_roots", "write_roots", "protected_paths", "resource_bindings", "constraints", "expected_outputs", "acceptance_checks", "runner_args"],
+      "properties": {
+        "index": {"type": "integer", "minimum": 0},
+        "action_id": {"type": "string", "minLength": 1},
+        "action_type": {"type": "string", "minLength": 1},
+        "owner": {"type": "string", "minLength": 1},
+        "execution_domain": {"type": "string", "minLength": 1},
+        "execution_site_id": {"type": "string", "minLength": 1},
+        "runner": {"type": "string", "minLength": 1},
+        "identity_id": {"type": "string"},
+        "spec_hash": {"type": "string"},
+        "parents": {"type": "object", "additionalProperties": {"type": "string"}},
+        "input_from": {"type": "array", "items": {"$ref": "#/definitions/input_from"}},
+        "inputs": {"type": "array", "items": {"$ref": "#/definitions/locator"}},
+        "read_roots": {"type": "array", "items": {"$ref": "#/definitions/locator"}},
+        "write_roots": {"type": "array", "minItems": 1, "items": {"$ref": "#/definitions/locator"}},
+        "protected_paths": {"type": "array", "items": {"$ref": "#/definitions/locator"}},
+        "resource_bindings": {"type": "object", "additionalProperties": {"$ref": "#/definitions/locator"}},
+        "constraints": {"type": "array", "items": {"type": "string"}},
+        "expected_outputs": {"type": "array", "items": {"$ref": "#/definitions/locator"}},
+        "acceptance_checks": {"type": "array", "items": {"type": "string"}},
+        "runner_args": {"type": "object"}
+      }
+    }
+  }
+}

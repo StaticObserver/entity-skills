@@ -10,6 +10,17 @@
   "execution_domain": "",
   "execution_site_id": "",
   "identity_id": "",
+  "orchestration": {
+    "flow_id": "",
+    "flow_request_hash": "",
+    "target_hash": "",
+    "step_index": null,
+    "runner": ""
+  },
+  "spec_hash": "",
+  "runner_args": {},
+  "parents": {},
+  "resource_bindings": {},
   "source_revision": {},
   "build_id": "",
   "run_id": "",

@@ -28,6 +28,15 @@ class RouterContractTest(unittest.TestCase):
             "scripts/entity_router_state.py",
             "scripts/entity_router_status.py",
             "scripts/entity_router_site.py",
+            "scripts/entity_router_flow.py",
+            "scripts/entity_router_flow_common.py",
+            "scripts/entity_router_flow_runners.py",
+            "scripts/entity_router_flow_metrics.py",
+            "templates/flow-request.schema.json",
+            "templates/flow-result.schema.json",
+            "templates/flow-check.schema.json",
+            "templates/worker-envelope.schema.json",
+            "templates/dispatch-receipt.schema.json",
             "references/workspace-layout.md",
             "references/router-runtime.md",
             "playbooks/new-simulation.md",
@@ -72,6 +81,25 @@ class RouterContractTest(unittest.TestCase):
         self.assertEqual(result["schema_version"], 2)
         self.assertTrue({"case_uid", "execution_site_id", "workflow_id", "action_id", "action_type", "owner", "write_roots"}.issubset(request))
         self.assertTrue({"case_uid", "execution_site_id", "workflow_id", "action_id", "status", "verification"}.issubset(result))
+        self.assertIn("target", case["workflow"])
+        self.assertIn("target_hash", case["workflow"])
+        self.assertIn("orchestration", request)
+        self.assertIn("runner_args", request)
+        self.assertIn("identity", result)
+
+    def test_flow_schemas_are_bounded_and_versioned(self):
+        request = self.read_json("templates/flow-request.schema.json")
+        result = self.read_json("templates/flow-result.schema.json")
+        check = self.read_json("templates/flow-check.schema.json")
+        envelope = self.read_json("templates/worker-envelope.schema.json")
+        receipt = self.read_json("templates/dispatch-receipt.schema.json")
+        self.assertEqual(request["properties"]["schema_version"]["const"], 1)
+        self.assertEqual(request["properties"]["steps"]["maxItems"], 8)
+        self.assertFalse(request["additionalProperties"])
+        self.assertEqual(result["properties"]["schema_version"]["const"], 1)
+        self.assertEqual(check["properties"]["schema_version"]["const"], 1)
+        self.assertFalse(envelope["additionalProperties"])
+        self.assertFalse(receipt["additionalProperties"])
 
     def test_router_declares_all_execution_domains(self):
         with open(os.path.join(ROUTER_ROOT, "SKILL.md"), "r") as handle:

@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "required": [
+    "controller_single_writer",
+    "one_active_action",
+    "target_hash_pinned",
+    "revision_owned_by_flow",
+    "site_and_path_envelope",
+    "source_build_run_data_analysis_identity_chain",
+    "launch_never_blindly_resubmitted",
+    "terminal_monitor_closed",
+    "worker_outputs_reprobed"
+  ],
+  "efficiency_gates": {
+    "model_wakeups_max": 6,
+    "tool_roundtrips_max": 30,
+    "tool_output_bytes_max": 65536,
+    "relative_reduction_min": 0.6
+  }
+}

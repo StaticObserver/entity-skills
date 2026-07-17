@@ -5,6 +5,7 @@ from __future__ import print_function
 
 import argparse
 import fcntl
+import hashlib
 import json
 import os
 import shlex
@@ -67,6 +68,18 @@ ACTION_TYPE_EXECUTION = {
     "data.purge": ("router", "router"),
 }
 
+TARGET_CHECKS = {
+    "identity_exists",
+    "source_revision_matches",
+    "spec_hash_matches",
+    "terminal_status",
+    "artifact_exists",
+    "artifact_sha256",
+    "nt2_inventory_status",
+    "analysis_result_status",
+}
+RESOURCE_DIMENSIONS = {"build", "run", "data", "analysis"}
+
 
 class StateError(RouterError):
     pass
@@ -74,6 +87,62 @@ class StateError(RouterError):
 
 def emit(value):
     print(json.dumps(value, indent=2, sort_keys=True))
+
+
+def canonical_hash(value):
+    rendered = json.dumps(value, sort_keys=True, separators=(",", ":"),
+                          ensure_ascii=True, allow_nan=False)
+    return "sha256:" + hashlib.sha256(rendered.encode("utf-8")).hexdigest()
+
+
+def validate_workflow_target(value):
+    if not isinstance(value, dict) or value.get("schema_version") != 1:
+        raise StateError("workflow target must use schema_version 1")
+    target = json.loads(json.dumps(value))
+    if not isinstance(target.get("target_id"), str) or not target["target_id"].strip():
+        raise StateError("workflow target requires a non-empty target_id")
+    for key in [
+        "source_revision_hash", "build_id", "build_spec_hash", "run_id",
+        "run_spec_hash", "data_id", "analysis_id",
+    ]:
+        item = target.get(key, "")
+        if not isinstance(item, str):
+            raise StateError("workflow target %s must be a string" % key)
+        target[key] = item
+    criteria = target.get("criteria", [])
+    if not isinstance(criteria, list):
+        raise StateError("workflow target criteria must be a list")
+    seen = set()
+    normalized = []
+    for item in criteria:
+        if not isinstance(item, dict):
+            raise StateError("workflow target criterion must be an object")
+        criterion_id = item.get("id")
+        if not isinstance(criterion_id, str) or not criterion_id.strip():
+            raise StateError("workflow target criterion requires an id")
+        if criterion_id in seen:
+            raise StateError("duplicate workflow target criterion: %s" % criterion_id)
+        seen.add(criterion_id)
+        subject = item.get("subject")
+        if subject not in {"source", "build", "run", "data", "analysis"}:
+            raise StateError("invalid workflow target criterion subject: %s" % subject)
+        check = item.get("check")
+        if check not in TARGET_CHECKS:
+            raise StateError("invalid workflow target criterion check: %s" % check)
+        if "expected" not in item:
+            raise StateError("workflow target criterion requires expected: %s" % criterion_id)
+        subject_id = item.get("subject_id", "")
+        if not isinstance(subject_id, str):
+            raise StateError("workflow target criterion subject_id must be a string")
+        normalized.append({
+            "id": criterion_id,
+            "subject": subject,
+            "subject_id": subject_id,
+            "check": check,
+            "expected": item["expected"],
+        })
+    target["criteria"] = normalized
+    return target
 
 
 def state_path(case_dir):
@@ -139,6 +208,11 @@ def validate_state(state, case_dir=None):
         raise StateError("invalid case_status")
     if state["workflow"].get("status") not in WORKFLOW_STATUSES:
         raise StateError("invalid workflow status")
+    target = state["workflow"].get("target")
+    if target is not None:
+        normalized = validate_workflow_target(target)
+        if state["workflow"].get("target_hash") != canonical_hash(normalized):
+            raise StateError("workflow target_hash does not match target")
     for dimension, statuses in READINESS_STATUSES.items():
         if dimension not in state["readiness"]:
             raise StateError("missing readiness dimension: %s" % dimension)
@@ -288,6 +362,57 @@ def parse_resource(home, locator):
     }
 
 
+def identity_record(state, dimension, identity_id):
+    if not identity_id:
+        return None
+    for item in state["resources"].get(dimension, {}).get("identities", []):
+        if item.get("id") == identity_id:
+            return item
+    return None
+
+
+def source_revision_hash(state):
+    return canonical_hash(effective_source_revision(state))
+
+
+def mark_target_conflicts_stale(state, target):
+    source_hash = target.get("source_revision_hash", "")
+    if source_hash and source_hash != source_revision_hash(state):
+        state["readiness"]["source"] = readiness("stale")
+        if state["readiness"]["build"]["status"] != "absent":
+            state["readiness"]["build"] = readiness("stale")
+        if state["readiness"]["run"]["status"] != "none":
+            state["readiness"]["run"] = readiness("stale")
+    build_id = target.get("build_id", "")
+    build = identity_record(state, "build", state["resources"]["build"].get("current_id", ""))
+    if build_id and (not build or build.get("id") != build_id
+                     or (target.get("build_spec_hash")
+                         and build.get("spec_hash", "") != target["build_spec_hash"])):
+        if state["readiness"]["build"]["status"] != "absent":
+            state["readiness"]["build"] = readiness("stale")
+        if state["readiness"]["run"]["status"] != "none":
+            state["readiness"]["run"] = readiness("stale")
+    run_id = target.get("run_id", "")
+    run = identity_record(state, "run", state["resources"]["run"].get("current_id", ""))
+    if run_id and (not run or run.get("id") != run_id
+                   or (target.get("run_spec_hash")
+                       and run.get("spec_hash", "") != target["run_spec_hash"])):
+        if state["readiness"]["run"]["status"] != "none":
+            state["readiness"]["run"] = readiness("stale")
+        state["resources"]["data"]["current_id"] = ""
+        state["resources"]["analysis"]["current_id"] = ""
+        state["readiness"]["data"] = readiness("unknown")
+        state["readiness"]["analysis"] = readiness("none")
+    data_id = target.get("data_id", "")
+    if data_id and state["resources"]["data"].get("current_id") != data_id:
+        state["readiness"]["data"] = readiness("unknown")
+        state["resources"]["analysis"]["current_id"] = ""
+        state["readiness"]["analysis"] = readiness("none")
+    analysis_id = target.get("analysis_id", "")
+    if analysis_id and state["resources"]["analysis"].get("current_id") != analysis_id:
+        state["readiness"]["analysis"] = readiness("stale")
+
+
 def effective_source_revision(state):
     materializations = state["source"].get("materializations", [])
     if materializations:
@@ -378,6 +503,8 @@ def build_initial_state(args, case_dir, case_uid):
             "allowed_actions": [],
             "next_action": "",
             "blockers": [],
+            "target": None,
+            "target_hash": "",
         },
         "readiness": {
             "orientation": readiness("ready" if oriented else "unresolved", [source_evidence]),
@@ -630,7 +757,7 @@ def command_start_action(args):
         prefix = args.action_type.split(".", 1)[0]
         if args.action_type in {"build.compile", "run.prepare"} and not args.identity_id:
             raise StateError("%s requires --identity-id" % args.action_type)
-        if args.identity_id and prefix in {"build", "run"}:
+        if args.identity_id and prefix in RESOURCE_DIMENSIONS:
             identities = state["resources"][prefix].get("identities", [])
             if any(item.get("id") == args.identity_id for item in identities):
                 raise StateError("%s identity already exists: %s" % (prefix, args.identity_id))
@@ -640,6 +767,52 @@ def command_start_action(args):
         read_roots = parse_locators(args.router_home, args.read_root)
         write_roots = parse_locators(args.router_home, args.write_root)
         protected = parse_locators(args.router_home, args.protected_path)
+        parents = parse_key_value(args.parent, "--parent")
+        resource_bindings = parse_resource_bindings(args.router_home, args.resource_binding)
+        for dimension, locator in resource_bindings.items():
+            load_site_profile(args.router_home, locator["site_id"])
+            validate_binding_scope(state, dimension, locator)
+        flow_values = [args.flow_id, args.flow_request_hash, args.runner, args.target_hash]
+        flow_enabled = any(value for value in flow_values) or args.flow_step_index is not None
+        if flow_enabled and not all(flow_values):
+            raise StateError("flow Actions require --flow-id, --flow-request-hash, --target-hash, and --runner")
+        if flow_enabled and args.flow_step_index is None:
+            raise StateError("flow Actions require --flow-step-index")
+        if flow_enabled and not args.flow_request_hash.startswith("sha256:"):
+            raise StateError("--flow-request-hash must use sha256:<digest>")
+        if flow_enabled and not state["workflow"].get("target"):
+            raise StateError("flow Actions require a structured workflow target")
+        if flow_enabled and args.target_hash != state["workflow"].get("target_hash"):
+            raise StateError("flow Action target hash differs from current workflow target")
+        if flow_enabled and args.action_type == "run.prepare":
+            missing_bindings = sorted({"run", "data", "analysis"}.difference(resource_bindings))
+            if missing_bindings:
+                raise StateError("flow run.prepare requires resource bindings: %s" % ", ".join(missing_bindings))
+        runner_args = {}
+        if args.runner_args_json:
+            try:
+                runner_args = json.loads(args.runner_args_json)
+            except ValueError as exc:
+                raise StateError("--runner-args-json is invalid JSON: %s" % exc)
+            if not isinstance(runner_args, dict):
+                raise StateError("--runner-args-json must contain an object")
+        if any(key in runner_args for key in {"command", "shell", "script_text", "pre_command"}):
+            raise StateError("runner args may not contain shell or command text")
+        if args.action_type == "run.prepare":
+            parent_build = parents.get("build_id") or state["resources"]["build"].get("current_id", "")
+            if parent_build != state["resources"]["build"].get("current_id", ""):
+                raise StateError("run.prepare build parent is not the current build identity")
+            parents["build_id"] = parent_build
+        if args.action_type == "data.inspect":
+            parent_run = parents.get("run_id") or state["resources"]["run"].get("current_id", "")
+            if not parent_run or parent_run != state["resources"]["run"].get("current_id", ""):
+                raise StateError("data.inspect requires the current run parent")
+            parents["run_id"] = parent_run
+        if args.action_type == "analysis.run":
+            parent_data = parents.get("data_id") or state["resources"]["data"].get("current_id", "")
+            if not parent_data or parent_data != state["resources"]["data"].get("current_id", ""):
+                raise StateError("analysis.run requires the current data parent")
+            parents["data_id"] = parent_data
         control_locator = {
             "site_id": state["control"]["site_id"],
             "path": state["control"]["root"],
@@ -685,6 +858,17 @@ def command_start_action(args):
             "execution_domain": args.execution_domain,
             "execution_site_id": args.execution_site,
             "identity_id": args.identity_id or "",
+            "orchestration": {
+                "flow_id": args.flow_id or "",
+                "flow_request_hash": args.flow_request_hash or "",
+                "target_hash": args.target_hash or "",
+                "step_index": args.flow_step_index,
+                "runner": args.runner or "",
+            },
+            "spec_hash": args.spec_hash or "",
+            "runner_args": runner_args,
+            "parents": parents,
+            "resource_bindings": resource_bindings,
             "source_revision": effective_source_revision(state),
             "build_id": state["resources"]["build"].get("current_id", ""),
             "run_id": state["resources"]["run"].get("current_id", ""),
@@ -740,6 +924,81 @@ def parse_readiness_updates(items):
     return updates
 
 
+def parse_resource_bindings(home, items):
+    raw = parse_key_value(items, "--resource-binding")
+    result = {}
+    for dimension, value in raw.items():
+        if dimension not in RESOURCE_DIMENSIONS:
+            raise StateError("unknown resource binding dimension: %s" % dimension)
+        result[dimension] = canonical_locator(home, value)
+    return result
+
+
+def validate_binding_scope(state, dimension, locator):
+    configured = resource_root(state, dimension)
+    if not configured or not locator_within(locator, configured):
+        raise StateError("%s binding is outside the configured resource root" % dimension)
+
+
+def make_identity(state, request, kind, outputs, identity_id=None, root=None, parents=None):
+    identity = identity_id or request.get("identity_id", "")
+    evidence = list(outputs)
+    if not identity:
+        seed = {
+            "kind": kind,
+            "root": root,
+            "parents": parents or {},
+            "spec_hash": request.get("spec_hash", ""),
+            "evidence": [
+                {
+                    "locator": item.get("locator"),
+                    "kind": item.get("kind"),
+                    "fingerprint": item.get("fingerprint", {}),
+                }
+                for item in evidence
+            ],
+        }
+        identity = "%s-%s" % (kind, canonical_hash(seed).split(":", 1)[1][:12])
+    return {
+        "id": identity,
+        "kind": kind,
+        "site_id": request["execution_site_id"],
+        "root": root,
+        "spec_hash": request.get("spec_hash", ""),
+        "parents": parents or {},
+        "evidence": evidence,
+        "outputs": evidence,
+        "created_by_action": request["action_id"],
+        "verified_at": now_utc(),
+    }
+
+
+def data_identity_id(home, state, request, outputs):
+    inventory = request.get("runner_args", {}).get("inventory")
+    inventory_locator = canonical_locator(home, inventory) if inventory else None
+    inventory_sha256 = ""
+    nt2py_version = None
+    for item in outputs:
+        item_locator = canonical_locator(home, item.get("locator")) if item.get("locator") else None
+        if inventory_locator and item_locator == inventory_locator:
+            inventory_sha256 = item.get("fingerprint", {}).get("sha256", "")
+            profile = load_site_profile(home, inventory_locator["site_id"])
+            if profile["transport"]["kind"] == "local":
+                try:
+                    payload = load_json(inventory_locator["path"], "nt2 inventory")
+                    nt2py_version = payload.get("nt2py_version")
+                except StateError:
+                    pass
+            break
+    seed = {
+        "run_id": request.get("parents", {}).get("run_id", ""),
+        "data_root": request.get("resource_bindings", {}).get("data") or resource_root(state, "data"),
+        "inventory_sha256": inventory_sha256,
+        "nt2py_version": nt2py_version,
+    }
+    return "data-%s" % canonical_hash(seed).split(":", 1)[1][:12], seed
+
+
 def command_finish_action(args):
     case_dir = resolve_case(args.router_home, args.case)
     with locked_case(case_dir):
@@ -768,6 +1027,57 @@ def command_finish_action(args):
         if (request["action_type"] == "data.purge" and args.status == "completed"
                 and updates.get("data") not in {"absent", "partial"}):
             raise StateError("completed data.purge requires --readiness data=absent or data=partial")
+        identity = None
+        if args.status == "completed" and request["action_type"] == "build.compile":
+            target = state["workflow"].get("target") or {}
+            if target.get("build_id") and target["build_id"] != request.get("identity_id"):
+                raise StateError("completed build identity does not match workflow target")
+            if target.get("build_spec_hash") and target["build_spec_hash"] != request.get("spec_hash", ""):
+                raise StateError("completed build spec hash does not match workflow target")
+            root = request.get("resource_bindings", {}).get("build")
+            if root is None and request.get("write_roots"):
+                root = request["write_roots"][0]
+            identity = make_identity(
+                state, request, "build", outputs, request.get("identity_id"), root,
+                {"source_revision_hash": canonical_hash(request.get("source_revision", {}))},
+            )
+            identity["source_revision"] = request.get("source_revision", {})
+        if args.status == "completed" and request["action_type"] == "run.prepare":
+            target = state["workflow"].get("target") or {}
+            if target.get("run_id") and target["run_id"] != request.get("identity_id"):
+                raise StateError("completed run identity does not match workflow target")
+            if target.get("run_spec_hash") and target["run_spec_hash"] != request.get("spec_hash", ""):
+                raise StateError("completed run spec hash does not match workflow target")
+            bindings = request.get("resource_bindings", {})
+            root = bindings.get("run")
+            if root is None and request.get("write_roots"):
+                root = request["write_roots"][0]
+            identity = make_identity(
+                state, request, "run", outputs, request.get("identity_id"), root,
+                {"build_id": request.get("parents", {}).get("build_id") or request.get("build_id", "")},
+            )
+            identity["build_id"] = identity["parents"]["build_id"]
+        if args.status == "completed" and request["action_type"] == "data.inspect":
+            root = request.get("resource_bindings", {}).get("data") or resource_root(state, "data")
+            data_id, data_seed = data_identity_id(args.router_home, state, request, outputs)
+            identity = make_identity(
+                state, request, "data", outputs, data_id, root,
+                {"run_id": request.get("parents", {}).get("run_id", "")},
+            )
+            identity["inventory_sha256"] = data_seed["inventory_sha256"]
+            identity["nt2py_version"] = data_seed["nt2py_version"]
+            target_data = (state["workflow"].get("target") or {}).get("data_id", "")
+            if target_data and target_data != identity["id"]:
+                raise StateError("completed data identity does not match workflow target")
+        if args.status == "completed" and request["action_type"] == "analysis.run":
+            root = request.get("resource_bindings", {}).get("analysis") or resource_root(state, "analysis")
+            identity = make_identity(
+                state, request, "analysis", outputs, None, root,
+                {"data_id": request.get("parents", {}).get("data_id", "")},
+            )
+            target_analysis = (state["workflow"].get("target") or {}).get("analysis_id", "")
+            if target_analysis and target_analysis != identity["id"]:
+                raise StateError("completed analysis identity does not match workflow target")
         authority_transfer = None
         if request["action_type"] == "source.transfer-authority" and args.status == "completed":
             if not args.new_authority:
@@ -814,6 +1124,8 @@ def command_finish_action(args):
             "blockers": args.blocker,
             "diagnosis": args.diagnosis or "",
             "suggested_owner": args.suggested_owner or "",
+            "orchestration": request.get("orchestration", {}),
+            "identity": identity,
             "started_at": request["started_at"],
             "finished_at": now_utc(),
         }
@@ -836,31 +1148,43 @@ def command_finish_action(args):
                 "verified_at": now_utc(),
             })
         if request["action_type"] == "build.compile" and args.status == "completed":
-            identity = request.get("identity_id", "")
             if not identity:
                 raise StateError("completed build.compile has no immutable build identity")
-            record = {
-                "id": identity,
-                "site_id": request["execution_site_id"],
-                "source_revision": request.get("source_revision", {}),
-                "outputs": outputs,
-                "verified_at": now_utc(),
-            }
-            state["resources"]["build"].setdefault("identities", []).append(record)
-            state["resources"]["build"]["current_id"] = identity
+            state["resources"]["build"].setdefault("identities", []).append(identity)
+            state["resources"]["build"]["current_id"] = identity["id"]
         if request["action_type"] == "run.prepare" and args.status == "completed":
-            identity = request.get("identity_id", "")
             if not identity:
                 raise StateError("completed run.prepare has no immutable run identity")
-            record = {
-                "id": identity,
-                "site_id": request["execution_site_id"],
-                "build_id": request.get("build_id", ""),
-                "outputs": outputs,
-                "verified_at": now_utc(),
-            }
-            state["resources"]["run"].setdefault("identities", []).append(record)
-            state["resources"]["run"]["current_id"] = identity
+            state["resources"]["run"].setdefault("identities", []).append(identity)
+            state["resources"]["run"]["current_id"] = identity["id"]
+            bindings = request.get("resource_bindings", {})
+            if bindings:
+                for dimension in ["run", "data", "analysis"]:
+                    if dimension not in bindings:
+                        raise StateError("run.prepare is missing %s resource binding" % dimension)
+                    validate_binding_scope(state, dimension, bindings[dimension])
+                state["resources"]["run"]["active"] = bindings["run"]
+                state["resources"]["data"]["root"] = bindings["data"]
+                state["resources"]["analysis"]["root"] = bindings["analysis"]
+                state["resources"]["data"]["current_id"] = ""
+                state["resources"]["analysis"]["current_id"] = ""
+                state["readiness"]["data"] = readiness("unknown")
+                state["readiness"]["analysis"] = readiness("none")
+        if request["action_type"] == "data.inspect" and args.status == "completed":
+            if not identity:
+                raise StateError("completed data.inspect has no immutable data identity")
+            identities = state["resources"]["data"].setdefault("identities", [])
+            if not any(item.get("id") == identity["id"] for item in identities):
+                identities.append(identity)
+            state["resources"]["data"]["current_id"] = identity["id"]
+            if state["resources"]["analysis"].get("current_id"):
+                state["readiness"]["analysis"] = readiness("stale")
+            state["resources"]["analysis"]["current_id"] = ""
+        if request["action_type"] == "analysis.run" and args.status == "completed":
+            if not identity:
+                raise StateError("completed analysis.run has no immutable analysis identity")
+            state["resources"]["analysis"].setdefault("identities", []).append(identity)
+            state["resources"]["analysis"]["current_id"] = identity["id"]
         if (request["action_type"] in {"pgen.design", "pgen.edit", "pgen.fix"}
                 and args.status == "completed"):
             authority_evidence = probe_safe(args.router_home, state["source"]["authority"], "git")
@@ -969,19 +1293,78 @@ def command_reconcile(args):
             if status not in neutral and not entries:
                 raise StateError("readiness %s=%s requires evidence or observation" % (dimension, status))
             state["readiness"][dimension] = readiness(status, entries)
-        if args.active_run:
+        resource_roots = {}
+        for raw in args.resource_root:
+            if "=" not in raw:
+                raise StateError("--resource-root must use DIMENSION=LOCATOR")
+            dimension, value = raw.split("=", 1)
+            if dimension not in {"build", "run", "data", "analysis"}:
+                raise StateError("unknown resource dimension: %s" % dimension)
+            locator = canonical_locator(args.router_home, value)
+            load_site_profile(args.router_home, locator["site_id"])
+            resource_roots[dimension] = locator
+        active_run = canonical_locator(args.router_home, args.active_run) if args.active_run else None
+        resulting_run_root = resource_roots.get("run") or resource_root(state, "run")
+        effective_active_run = active_run or state["resources"]["run"].get("active")
+        if effective_active_run and (not resulting_run_root or not locator_within(effective_active_run, resulting_run_root)):
+            raise StateError("active run must be inside the configured run root")
+        for dimension, locator in resource_roots.items():
+            state["resources"][dimension]["root"] = locator
+        if active_run:
             state["resources"]["run"]["current_id"] = args.active_run_id or "external"
-            state["resources"]["run"]["active"] = canonical_locator(args.router_home, args.active_run)
+            state["resources"]["run"]["active"] = active_run
         for raw in args.protect_path:
             state.setdefault("protected_paths", []).append(canonical_locator(args.router_home, raw))
-        if not updates and not args.active_run and not args.protect_path:
+        if not updates and not resource_roots and not args.active_run and not args.protect_path:
             raise StateError("reconcile requires a readiness or scope update")
         state["revision"] += 1
         state["updated_at"] = now_utc()
         set_allowed_actions(state)
         atomic_write_json(state_path(case_dir), state)
-        append_event(case_dir, "case.reconciled", state["revision"], {"readiness": updates})
+        append_event(case_dir, "case.reconciled", state["revision"], {
+            "readiness": updates,
+            "resource_roots": {key: locator_text(value) for key, value in resource_roots.items()},
+        })
         return {"ok": True, "case_dir": case_dir, "revision": state["revision"], "allowed_actions": state["workflow"]["allowed_actions"]}
+
+
+def command_set_workflow_target(args):
+    case_dir = resolve_case(args.router_home, args.case)
+    with locked_case(case_dir):
+        state = load_state(case_dir)
+        require_revision(state, args.expected_revision)
+        if state["workflow"].get("active_action_id"):
+            raise StateError("cannot set workflow target while an Action is active")
+        target = validate_workflow_target(load_json(absolute(args.target), "workflow target"))
+        target_hash = canonical_hash(target)
+        if (state["workflow"].get("target") == target
+                and state["workflow"].get("target_hash") == target_hash):
+            raise StateError("workflow target does not change Case state")
+        for dimension, key in [
+            ("build", "build_id"), ("run", "run_id"),
+            ("data", "data_id"), ("analysis", "analysis_id"),
+        ]:
+            identity_id = target.get(key, "")
+            record = identity_record(state, dimension, identity_id)
+            if identity_id and record:
+                expected_spec = target.get("%s_spec_hash" % dimension, "")
+                if expected_spec and record.get("spec_hash", "") != expected_spec:
+                    raise StateError("workflow target %s spec hash does not match identity" % dimension)
+        state["workflow"]["target"] = target
+        state["workflow"]["target_hash"] = target_hash
+        mark_target_conflicts_stale(state, target)
+        state["revision"] += 1
+        state["updated_at"] = now_utc()
+        set_allowed_actions(state)
+        atomic_write_json(state_path(case_dir), state)
+        append_event(case_dir, "workflow.target_set", state["revision"], {
+            "target_id": target["target_id"], "target_hash": target_hash,
+        })
+        return {
+            "ok": True, "case_dir": case_dir, "revision": state["revision"],
+            "target_hash": target_hash,
+            "allowed_actions": state["workflow"]["allowed_actions"],
+        }
 
 
 def command_update_memory(args):
@@ -1059,6 +1442,47 @@ def _set_suspended(args, suspended):
         return {"ok": True, "case_dir": case_dir, "revision": state["revision"], "snapshot": snapshot, "allowed_actions": state["workflow"]["allowed_actions"]}
 
 
+def evaluate_criterion(state, criterion, evidence):
+    subject = criterion["subject"]
+    subject_id = criterion.get("subject_id", "")
+    check = criterion["check"]
+    expected = criterion.get("expected")
+    record = None
+    if subject in RESOURCE_DIMENSIONS:
+        effective_id = subject_id or state["resources"][subject].get("current_id", "")
+        record = identity_record(state, subject, effective_id)
+    if record:
+        subject_evidence = list(record.get("evidence", []))
+    elif subject == "source":
+        subject_evidence = list(state["readiness"]["source"].get("evidence", []))
+    else:
+        subject_evidence = []
+    if check == "identity_exists":
+        actual = bool(record) if subject != "source" else bool(effective_source_revision(state))
+    elif check == "source_revision_matches":
+        actual = source_revision_hash(state)
+    elif check == "spec_hash_matches":
+        actual = record.get("spec_hash", "") if record else ""
+    elif check == "terminal_status":
+        actual = state["readiness"][subject]["status"]
+    elif check == "artifact_exists":
+        actual = any(item.get("kind") not in {"missing", "unreachable"}
+                     for item in subject_evidence)
+    elif check == "artifact_sha256":
+        actual = [
+            item.get("fingerprint", {}).get("sha256", "") for item in subject_evidence
+            if item.get("fingerprint", {}).get("sha256")
+        ]
+        return expected in actual, actual
+    elif check == "nt2_inventory_status":
+        actual = "ok" if record and state["readiness"]["data"]["status"] in {"partial", "ready"} else "unverified"
+    elif check == "analysis_result_status":
+        actual = "complete" if record and state["readiness"]["analysis"]["status"] == "complete" else "unverified"
+    else:
+        raise StateError("unsupported workflow criterion check: %s" % check)
+    return actual == expected, actual
+
+
 def command_complete_workflow(args):
     case_dir = resolve_case(args.router_home, args.case)
     with locked_case(case_dir):
@@ -1066,9 +1490,23 @@ def command_complete_workflow(args):
         require_revision(state, args.expected_revision)
         if state["workflow"].get("active_action_id"):
             raise StateError("cannot complete workflow with active Action")
-        if len(args.verification) < len(state["memory"].get("done_when", [])):
-            raise StateError("completion requires one verification per done_when")
         evidence = [probe_locator(args.router_home, value) for value in args.evidence]
+        target = state["workflow"].get("target")
+        criterion_results = []
+        if target is None:
+            if len(args.verification) < len(state["memory"].get("done_when", [])):
+                raise StateError("completion requires one verification per done_when")
+        else:
+            for criterion in target.get("criteria", []):
+                passed, actual = evaluate_criterion(state, criterion, evidence)
+                criterion_results.append({
+                    "id": criterion["id"], "passed": passed, "actual": actual,
+                    "subject": criterion["subject"],
+                    "subject_id": criterion.get("subject_id", ""),
+                })
+            failed = [item["id"] for item in criterion_results if not item["passed"]]
+            if failed:
+                raise StateError("workflow criteria failed: %s" % ", ".join(failed))
         state["revision"] += 1
         state["updated_at"] = now_utc()
         state["case_status"] = "complete"
@@ -1079,7 +1517,11 @@ def command_complete_workflow(args):
         state["memory"]["last_summary"] = args.summary
         atomic_write_json(state_path(case_dir), state)
         snapshot = save_snapshot(case_dir, state, "complete")
-        append_event(case_dir, "workflow.completed", state["revision"], {"verification": args.verification, "evidence": evidence})
+        append_event(case_dir, "workflow.completed", state["revision"], {
+            "verification": args.verification,
+            "evidence": evidence,
+            "criteria": criterion_results,
+        })
         return {"ok": True, "case_dir": case_dir, "revision": state["revision"], "snapshot": snapshot}
 
 
@@ -1106,6 +1548,8 @@ def command_new_workflow(args):
             "allowed_actions": [],
             "next_action": "",
             "blockers": [],
+            "target": None,
+            "target_hash": "",
         }
         set_allowed_actions(state)
         atomic_write_json(state_path(case_dir), state)
@@ -1127,6 +1571,12 @@ def command_migrate_case(args):
         "pgen": "%s:%s" % (args.legacy_site, scope.get("pgen_path", os.path.join(legacy_case, "pgen.hpp"))),
         "toml": "%s:%s" % (args.legacy_site, scope.get("toml_path", os.path.join(legacy_case, "%s.toml" % old.get("case_id", "pgen")))),
         "design": "%s:%s" % (args.legacy_site, scope.get("design_doc", os.path.join(legacy_case, "docs", "design.md"))),
+        "build_root": args.build_root or "%s:%s" % (args.legacy_site, os.path.join(legacy_case, "build")),
+        "run_root": args.run_root or "%s:%s" % (args.legacy_site, legacy_case),
+        "data_root": args.data_root or args.run_root or "%s:%s" % (args.legacy_site, legacy_case),
+        "analysis_root": args.analysis_root or args.run_root or "%s:%s" % (args.legacy_site, legacy_case),
+        "active_run": args.active_run or "",
+        "active_run_id": args.active_run_id or "",
     }
     if args.dry_run:
         return {"ok": True, "dry_run": True, "proposal": proposal}
@@ -1177,10 +1627,10 @@ def command_migrate_case(args):
         pgen_locator=proposal["pgen"],
         toml_locator=proposal["toml"],
         design_locator=proposal["design"],
-        build_root="%s:%s" % (args.legacy_site, os.path.join(legacy_case, "build")),
-        run_root="%s:%s" % (args.legacy_site, legacy_case),
-        data_root="%s:%s" % (args.legacy_site, legacy_case),
-        analysis_root="%s:%s" % (args.legacy_site, legacy_case),
+        build_root=proposal["build_root"],
+        run_root=proposal["run_root"],
+        data_root=proposal["data_root"],
+        analysis_root=proposal["analysis_root"],
         goal=old.get("memory", {}).get("goal", "migrated v2 Case"),
         done_when=old.get("memory", {}).get("done_when", []),
         name=old.get("identity", {}).get("name"),
@@ -1195,6 +1645,17 @@ def command_migrate_case(args):
         legacy_copy = os.path.join(new_case, "evidence", "legacy-v2-control")
         shutil.copytree(os.path.join(legacy_case, "_case"), legacy_copy)
         state = load_state(new_case)
+        old_memory = old.get("memory", {})
+        for key in ["confirmed_decisions", "open_questions", "constraints", "out_of_scope"]:
+            state["memory"][key] = list(old_memory.get(key, []))
+        state["memory"]["last_summary"] = old_memory.get("last_summary", "")
+        if proposal["active_run"]:
+            active_run = canonical_locator(args.router_home, proposal["active_run"])
+            run_root = resource_root(state, "run")
+            if not run_root or not locator_within(active_run, run_root):
+                raise StateError("active run must be inside the migrated run root")
+            state["resources"]["run"]["current_id"] = proposal["active_run_id"] or "external"
+            state["resources"]["run"]["active"] = active_run
         state["case_status"] = "suspended"
         state["workflow"]["status"] = "suspended"
         state["legacy"] = {"schema_version": 2, "case_root": legacy_case, "control_copy": legacy_copy}
@@ -1223,6 +1684,85 @@ def command_migrate_case(args):
         raise
     created["migration"] = {"legacy_case": legacy_case, "control_copy": legacy_copy}
     return created
+
+
+def tree_manifest(root):
+    entries = []
+    for current, dirs, files in os.walk(root):
+        dirs.sort()
+        for name in sorted(files):
+            path = os.path.join(current, name)
+            relative = os.path.relpath(path, root)
+            digest = hashlib.sha256()
+            with open(path, "rb") as handle:
+                while True:
+                    chunk = handle.read(1024 * 1024)
+                    if not chunk:
+                        break
+                    digest.update(chunk)
+            entries.append({"path": relative, "sha256": digest.hexdigest(), "size": os.path.getsize(path)})
+    return entries
+
+
+def command_finalize_migration(args):
+    if not args.authorization.strip():
+        raise StateError("finalize-migration requires explicit --authorization")
+    case_dir = resolve_case(args.router_home, args.case)
+    with locked_case(case_dir):
+        state = load_state(case_dir)
+        require_revision(state, args.expected_revision)
+        if state["workflow"].get("active_action_id"):
+            raise StateError("cannot finalize migration while an Action is active")
+        legacy = state.get("legacy", {})
+        if legacy.get("schema_version") != 2 or not legacy.get("case_root"):
+            raise StateError("Case is not an unfinished v2 migration")
+        legacy_control = os.path.join(absolute(legacy["case_root"]), "_case")
+        control_copy = absolute(legacy.get("control_copy", ""))
+        expected_copy = os.path.join(case_dir, "evidence", "legacy-v2-control")
+        if control_copy != expected_copy:
+            raise StateError("legacy control copy is outside the expected evidence path")
+        old_path = os.path.join(legacy_control, "case.json")
+        old = load_json(old_path, "v2 Case state")
+        if old.get("schema_version") != 2 or old.get("case_status") != "suspended":
+            raise StateError("legacy v2 Case must be suspended before finalization")
+        summary = old.get("memory", {}).get("last_summary", "")
+        if state["case_uid"] not in summary:
+            raise StateError("legacy v2 Case does not point to this v3 Case UID")
+        if not os.path.isdir(control_copy):
+            raise StateError("preserved legacy control copy is missing")
+        receipt_path = os.path.join(case_dir, "evidence", "legacy-v2-migration-receipt.json")
+        receipt = {
+            "schema_version": 1,
+            "finalized_at": now_utc(),
+            "authorization": args.authorization,
+            "v3_case_uid": state["case_uid"],
+            "legacy_case_root": absolute(legacy["case_root"]),
+            "legacy_control_manifest": tree_manifest(legacy_control),
+            "preserved_copy_manifest": tree_manifest(control_copy),
+            "removed": [legacy_control],
+        }
+        if args.purge_control_copy:
+            receipt["removed"].append(control_copy)
+        atomic_write_json(receipt_path, receipt)
+        shutil.rmtree(legacy_control)
+        if args.purge_control_copy:
+            shutil.rmtree(control_copy)
+        state["legacy"] = {
+            "schema_version": 2,
+            "case_root": absolute(legacy["case_root"]),
+            "migration_finalized_at": receipt["finalized_at"],
+            "migration_receipt": receipt_path,
+            "legacy_control_removed": True,
+            "control_copy_removed": bool(args.purge_control_copy),
+        }
+        state["revision"] += 1
+        state["updated_at"] = now_utc()
+        atomic_write_json(state_path(case_dir), state)
+        append_event(case_dir, "migration.finalized", state["revision"], {
+            "receipt": receipt_path, "removed": receipt["removed"],
+        })
+        return {"ok": True, "case_dir": case_dir, "revision": state["revision"],
+                "receipt": receipt_path, "removed": receipt["removed"]}
 
 
 def add_common_case(parser):
@@ -1271,6 +1811,15 @@ def build_parser():
     start.add_argument("--execution-domain", required=True)
     start.add_argument("--execution-site", required=True)
     start.add_argument("--identity-id")
+    start.add_argument("--flow-id")
+    start.add_argument("--flow-request-hash")
+    start.add_argument("--target-hash")
+    start.add_argument("--flow-step-index", type=int)
+    start.add_argument("--runner")
+    start.add_argument("--runner-args-json")
+    start.add_argument("--spec-hash")
+    start.add_argument("--parent", action="append", default=[])
+    start.add_argument("--resource-binding", action="append", default=[])
     start.add_argument("--goal", required=True)
     start.add_argument("--playbook")
     start.add_argument("--authorization")
@@ -1302,10 +1851,15 @@ def build_parser():
     reconcile.add_argument("--readiness", action="append", default=[])
     reconcile.add_argument("--evidence", action="append", default=[])
     reconcile.add_argument("--observation", action="append", default=[])
+    reconcile.add_argument("--resource-root", action="append", default=[])
     reconcile.add_argument("--active-run")
     reconcile.add_argument("--active-run-id")
     reconcile.add_argument("--protect-path", action="append", default=[])
     reconcile.set_defaults(func=command_reconcile)
+    target = sub.add_parser("set-workflow-target"); add_common_case(target)
+    target.add_argument("--expected-revision", required=True, type=int)
+    target.add_argument("--target", required=True)
+    target.set_defaults(func=command_set_workflow_target)
     memory = sub.add_parser("update-memory"); add_common_case(memory)
     memory.add_argument("--expected-revision", required=True, type=int)
     memory.add_argument("--goal")
@@ -1340,10 +1894,21 @@ def build_parser():
     migrate.add_argument("--controller-site", default="local")
     migrate.add_argument("--control-root")
     migrate.add_argument("--case-uid")
+    migrate.add_argument("--build-root")
+    migrate.add_argument("--run-root")
+    migrate.add_argument("--data-root")
+    migrate.add_argument("--analysis-root")
+    migrate.add_argument("--active-run")
+    migrate.add_argument("--active-run-id")
     mode = migrate.add_mutually_exclusive_group(required=True)
     mode.add_argument("--dry-run", action="store_true")
     mode.add_argument("--commit", action="store_true")
     migrate.set_defaults(func=command_migrate_case)
+    finalize = sub.add_parser("finalize-migration"); add_common_case(finalize)
+    finalize.add_argument("--expected-revision", required=True, type=int)
+    finalize.add_argument("--authorization", required=True)
+    finalize.add_argument("--purge-control-copy", action="store_true")
+    finalize.set_defaults(func=command_finalize_migration)
     return parser
 
 

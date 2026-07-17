@@ -205,6 +205,27 @@ class RouterSiteTest(unittest.TestCase):
         self.assertFalse(payload["ok"])
         self.assertTrue(payload["issues"])
 
+    def test_batch_probe_returns_exact_order_and_site(self):
+        first = os.path.join(self.target, "first.txt")
+        second = os.path.join(self.target, "second.txt")
+        self.write(first, "first\n")
+        self.write(second, "second\n")
+        code, payload = self.cli(
+            SITE, "probe-batch", "--site-id", "build",
+            "--locator", "build:%s" % first,
+            "--locator", "build:%s" % second,
+        )
+        self.assertEqual(code, 0, payload)
+        self.assertEqual(payload["remote_calls"], 0)
+        self.assertEqual([item["locator"]["path"] for item in payload["evidence"]],
+                         [first, second])
+        code, rejected = self.cli(
+            SITE, "probe-batch", "--site-id", "build",
+            "--locator", "source:%s" % self.source,
+        )
+        self.assertEqual(code, 2)
+        self.assertIn("differs", rejected["error"])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -32,7 +32,7 @@
   },
   "resources": {
     "build": {"root": null, "current_id": "", "identities": []},
-    "run": {"root": null, "current_id": "", "identities": []},
+    "run": {"root": null, "active": null, "current_id": "", "identities": []},
     "data": {"root": null, "current_id": "", "identities": []},
     "analysis": {"root": null, "current_id": "", "identities": []}
   },
@@ -46,7 +46,9 @@
     "active_action_id": "",
     "allowed_actions": [],
     "next_action": "",
-    "blockers": []
+    "blockers": [],
+    "target": null,
+    "target_hash": ""
   },
   "readiness": {
     "orientation": {"status": "unresolved", "evidence": []},

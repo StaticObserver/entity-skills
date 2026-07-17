@@ -12,6 +12,12 @@ Simulation 的准备、运行、续跑和状态恢复由 Router 按自身 `playb
 
 初版 Router 将专业工作和 Router-owned run 操作放入 Case-bound Worker；Router 只保留控制上下文。`skills/entity-router/scripts/entity_router_state.py` 负责 Case、Workflow、Action Contract、revision、事件和 stale 状态。
 
+确定性 flow façade 已实现为显式试运行路径。设置
+`ENTITY_ROUTER_FLOW_V1=1` 后，Router 可用 `entity_router_flow.py` 完成 compact
+inspect/check、allowlisted execute、scheduler-safe launch/watch、nt2 inventory 和
+model Worker prepare/resume；Case mutation 仍全部经 state CLI。未设置该 flag 时继续
+使用原 Standard loop。
+
 ```text
 entity-skills/
 ├── skills/
@@ -31,7 +37,7 @@ entity-skills/
 └── legacy/
 ```
 
-当前整体设计见 `design/architecture.md`，workspace 和状态细节见 `design/workspace-and-state.md`，skill 执行观测和日志合同见 `design/skill-observability.md`。`design/` 和 `legacy/` 不属于 Router 运行时上下文。
+当前整体设计见 `design/architecture.md`，workspace 和状态细节见 `design/workspace-and-state.md`，模型高效执行流程见 `design/model-efficient-router-flow.md`，skill 执行观测和日志合同见 `design/skill-observability.md`。`design/` 和 `legacy/` 不属于 Router 运行时上下文。
 
 `entity-pgen` 的直接调用分为只读和 standalone 修改。它在写入前必须运行自身的 preflight；preflight 查询 Router registry 和 Locator envelope，注册源码只有当前有效、site 匹配的 `pgen.*` Action 才允许修改。Router 控制状态位于独立 control root，不依赖源码祖先目录中的 `_case/` 标记。
 

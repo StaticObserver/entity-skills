@@ -8,6 +8,14 @@
   "owner": "",
   "execution_site_id": "",
   "status": "completed",
+  "orchestration": {
+    "flow_id": "",
+    "flow_request_hash": "",
+    "target_hash": "",
+    "step_index": null,
+    "runner": ""
+  },
+  "identity": null,
   "outputs": [],
   "verification": [],
   "blockers": [],

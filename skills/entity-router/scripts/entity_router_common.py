@@ -353,6 +353,68 @@ def probe_locator(home, locator, probe_kind="auto"):
     return item
 
 
+def probe_locators_batch(home, site_id, items):
+    """Probe multiple exact Locators with at most one transport call per site."""
+    profile = load_site_profile(home, site_id)
+    normalized = []
+    for item in items:
+        if isinstance(item, dict) and "locator" in item:
+            locator = canonical_locator(home, item["locator"])
+            kind = item.get("kind", "auto")
+        else:
+            locator = canonical_locator(home, item)
+            kind = "auto"
+        if locator["site_id"] != site_id:
+            raise RouterError("batch probe Locator site differs from --site-id")
+        if kind not in {"auto", "git"}:
+            raise RouterError("batch probe kind must be auto or git")
+        normalized.append({"locator": locator, "kind": kind})
+    if profile["transport"]["kind"] == "local":
+        return [probe_locator(home, item["locator"], item["kind"]) for item in normalized]
+    script = """import hashlib,json,os,subprocess,sys
+items=json.loads(sys.argv[1]); out=[]
+for item in items:
+ p=item['path']; kind=item.get('kind','auto'); r={'path':p,'kind':'missing','fingerprint':{}}
+ if os.path.isfile(p):
+  r={'path':p,'kind':'file','fingerprint':{'sha256':hashlib.sha256(open(p,'rb').read()).hexdigest(),'size':os.path.getsize(p)}}
+ elif os.path.isdir(p):
+  mpath=os.path.join(p,'snapshot-manifest.json')
+  if os.path.isfile(mpath):
+   m=json.load(open(mpath)); r={'path':p,'kind':'snapshot','fingerprint':{'snapshot_id':m.get('snapshot_id',''),'manifest_sha256':hashlib.sha256(open(mpath,'rb').read()).hexdigest(),'files':len(m.get('files',[]))}}
+  else:
+   r={'path':p,'kind':'directory','fingerprint':{}}
+  if kind=='git' or (kind=='auto' and os.path.isdir(os.path.join(p,'.git'))):
+   rev=subprocess.Popen(['git','-C',p,'rev-parse','HEAD','HEAD^{tree}'],stdout=subprocess.PIPE,stderr=subprocess.PIPE,universal_newlines=True); stdout,stderr=rev.communicate()
+   status=subprocess.Popen(['git','-C',p,'status','--porcelain'],stdout=subprocess.PIPE,stderr=subprocess.PIPE,universal_newlines=True); dirty,unused=status.communicate()
+   vals=[x.strip() for x in stdout.splitlines() if x.strip()]
+   if rev.returncode==0 and len(vals)>=2: r['fingerprint']={'kind':'git','commit':vals[0],'tree':vals[1],'dirty':status.returncode!=0 or bool(dirty.strip())}
+ out.append(r)
+print(json.dumps(out,sort_keys=True))"""
+    payload = [{"path": item["locator"]["path"], "kind": item["kind"]} for item in normalized]
+    code, stdout, stderr = run_on_site(profile, [
+        "python3", "-c", script, json.dumps(payload, sort_keys=True, separators=(",", ":")),
+    ])
+    if code != 0:
+        raise RouterError("remote batch probe failed: %s" % (stderr.strip() or stdout.strip()))
+    try:
+        observed = json.loads(stdout)
+    except ValueError:
+        raise RouterError("remote batch probe returned invalid JSON")
+    if not isinstance(observed, list) or len(observed) != len(normalized):
+        raise RouterError("remote batch probe returned the wrong number of results")
+    timestamp = now_utc()
+    result = []
+    for request, value in zip(normalized, observed):
+        result.append({
+            "locator": request["locator"],
+            "kind": value.get("kind", "missing"),
+            "fingerprint": value.get("fingerprint", {}),
+            "observed_at": timestamp,
+            "observer_site": "controller",
+        })
+    return result
+
+
 def _git_files(source):
     code, stdout, unused = run_command(
         ["git", "-C", source, "ls-files", "-co", "--exclude-standard"]

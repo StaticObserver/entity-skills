@@ -38,6 +38,20 @@ normal `run.monitor` Action when the result recommends
 `promote_to_run_monitor`, or when the user explicitly requests durable/full
 monitoring.
 
+## Deterministic flow façade (feature gated)
+
+The legacy Standard loop remains the default. When `ENTITY_ROUTER_FLOW_V1=1`
+is explicitly present, use `scripts/entity_router_flow.py inspect/check` for
+orientation and execute an already confirmed immutable flow request through
+`execute`. Deterministic runners never accept caller-provided shell text.
+
+Use `execute --prepare --step N` and `execute --resume --step N` only for a
+`model.worker.v1` step. The prepared Worker envelope is an artifact, not Case
+state; only a structured result with the exact request hash and outputs that
+the controller can reprobe may finish the Action. Use `watch` only for an
+already-active `run.monitor` Action. Keep using `entity_router_state.py` as the
+sole Case writer in every mode.
+
 ## Non-negotiable protocol
 
 - Use `scripts/entity_router_site.py` for site profiles, probes, and source
@@ -59,6 +73,8 @@ monitoring.
   authoritative at the data site and is fetched selectively. Deletion is allowed
   only through an explicitly authorized `data.purge` Action with an exact manifest,
   protected source/build/dependency roots, and an out-of-target purge receipt.
+- For v2 migration cleanup, verify the v3 Case first and use
+  `finalize-migration` with explicit authorization; never delete run/data roots.
 
 ## Control model
 
