@@ -32,6 +32,8 @@ class RouterContractTest(unittest.TestCase):
             "scripts/entity_router_flow_common.py",
             "scripts/entity_router_flow_runners.py",
             "scripts/entity_router_flow_metrics.py",
+            "scripts/entity_router_project.py",
+            "scripts/entityctl.py",
             "templates/flow-request.schema.json",
             "templates/flow-result.schema.json",
             "templates/flow-check.schema.json",
@@ -83,7 +85,11 @@ class RouterContractTest(unittest.TestCase):
         self.assertTrue({"case_uid", "execution_site_id", "workflow_id", "action_id", "status", "verification"}.issubset(result))
         self.assertIn("target", case["workflow"])
         self.assertIn("target_hash", case["workflow"])
+        self.assertIn("writer_lease", case["control"])
         self.assertIn("orchestration", request)
+        self.assertIn("actor", request)
+        self.assertIn("actor", result)
+        self.assertEqual("unattributed", request["actor"]["run_id"])
         self.assertIn("runner_args", request)
         self.assertIn("identity", result)
 

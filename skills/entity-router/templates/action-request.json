@@ -10,6 +10,14 @@
   "execution_domain": "",
   "execution_site_id": "",
   "identity_id": "",
+  "actor": {
+    "run_id": "unattributed",
+    "provider": "",
+    "client": "",
+    "session_id": "",
+    "model": "",
+    "bundle_hash": ""
+  },
   "orchestration": {
     "flow_id": "",
     "flow_request_hash": "",

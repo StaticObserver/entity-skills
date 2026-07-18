@@ -49,6 +49,7 @@ def command_inspect(args):
     case_dir, state, unused = select_case(args.router_home, args.case, args.cwd)
     checked = check_case(args.router_home, case_dir, state, args.live, args.phase)
     summary = compact_summary(state, checked)
+    summary["status"] = checked["status"]
     summary["metrics"] = {
         "tool_calls": 1,
         "remote_calls": checked["metrics"]["remote_calls"],

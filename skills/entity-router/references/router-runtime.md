@@ -3,6 +3,59 @@
 Use the bundled tools. Put `--router-home` before the subcommand when using a
 non-default controller root.
 
+## Public controller entry
+
+Prefer the compact provider-neutral façade for ordinary orientation and status:
+
+```bash
+python3 scripts/entityctl.py doctor
+python3 scripts/entityctl.py \
+  --actor-run-id <run-id> --actor-provider <provider> \
+  bundle install --source-root <entity-skills-repo>/skills
+python3 scripts/entityctl.py project bind \
+  --project-root /absolute/project --case <case_uid>
+python3 scripts/entityctl.py inspect --project-root /absolute/project/subdir
+python3 scripts/entityctl.py run-status --project-root /absolute/project \
+  --job-id <job_id>
+```
+
+Bindings are stored at `~/.entity-router/project-bindings.json`. `inspect`
+never contacts a remote site and normally returns at most 4 KiB. `run-status`
+derives site/run root from the Case and makes at most one remote call.
+
+`bundle install` is the supported multi-client publication path. It stores a
+content-addressed bundle under `~/.entity-skills/bundles/`, atomically moves
+`current`, projects client skill entries as symlinks, and retains replaced entries
+under `~/.entity-skills/backups/`.
+
+For attributable mutations, set `ENTITY_AGENT_RUN_ID` and optionally
+`ENTITY_AGENT_PROVIDER`, `ENTITY_AGENT_CLIENT`, `ENTITY_AGENT_SESSION_ID`,
+`ENTITY_AGENT_MODEL`, and `ENTITY_SKILLS_BUNDLE_HASH`. Set
+`ENTITY_ROUTER_REQUIRE_ACTOR=1` to reject unattributed mutations. These fields
+are audit provenance and never contain hidden reasoning.
+
+## Coordinate multiple Agent writers
+
+```bash
+python3 scripts/entityctl.py \
+  --actor-run-id <run-id> --actor-provider <provider> \
+  writer acquire --case <uid> --expected-revision <n> \
+  --lease-id <lease-id> --ttl-seconds 900
+
+python3 scripts/entityctl.py \
+  --actor-run-id <run-id> --actor-provider <provider> \
+  --writer-lease-id <lease-id> writer handoff --case <uid> \
+  --expected-revision <n> --new-lease-id <new-id> \
+  --to-run-id <next-run-id> --to-provider <next-provider>
+```
+
+An active lease makes actor run ID plus lease ID mandatory for every Case
+mutation. TTL is 60–3600 seconds. A mutating `flow execute/watch` requires a
+lease; `inspect/check/run-status/writer status` remain lock-free read paths.
+Acquire the lease before freezing a flow request or recording its base
+revision: lease acquisition is itself a Case mutation, so a request created
+from the preceding revision is intentionally rejected as stale.
+
 ## Register sites
 
 ```bash
@@ -90,7 +143,8 @@ Authority transfer uses `source.transfer-authority` and completes with
 
 ## Read run status without an Action
 
-For a bounded progress check, use the one-shot read-only probe. It does not
+For a bound Case, prefer `entityctl.py run-status`. For an exact unbound or
+legacy run, use the one-shot read-only probe below. It does not
 mutate Case state and makes at most one SSH call:
 
 ```bash
@@ -144,24 +198,23 @@ python3 scripts/entity_router_state.py --router-home <control-root> finalize-mig
 Finalization retains a manifest-hashed receipt under v3 `evidence/` and never
 targets run or data resources.
 
-## Feature-gated deterministic flow
+## Default deterministic flow
 
-The façade is opt-in while replay and live canary evidence are collected:
+Use the public façade for managed transactions:
 
 ```bash
-export ENTITY_ROUTER_FLOW_V1=1
-python3 scripts/entity_router_flow.py inspect --case <uid> --live --phase build
-python3 scripts/entity_router_flow.py execute --request <flow-request.json>
-python3 scripts/entity_router_flow.py execute --request <flow-request.json> \
+python3 scripts/entityctl.py flow inspect --case <uid> --live --phase build
+python3 scripts/entityctl.py flow execute --request <flow-request.json>
+python3 scripts/entityctl.py flow execute --request <flow-request.json> \
   --prepare --step <n>
-python3 scripts/entity_router_flow.py execute --request <flow-request.json> \
+python3 scripts/entityctl.py flow execute --request <flow-request.json> \
   --resume --step <n> --worker-result <site:/absolute/result.json>
-python3 scripts/entity_router_flow.py watch --case <uid> --action <action-id> \
+python3 scripts/entityctl.py flow watch --case <uid> --action <action-id> \
   --flow-request-hash <sha256:...> --interval-seconds 60 --timeout-seconds 86400
 ```
 
 `execute` derives progress only from Case revision, immutable Action records,
 and dispatch receipts. It refuses target drift, Action ID collisions, revision
 drift, arbitrary shell fields, non-contiguous history, and blind scheduler
-resubmission. The flag changes Router entry selection; direct diagnostic use of
-the façade remains available for tests and recovery.
+resubmission. Set `ENTITY_ROUTER_LEGACY_LOOP=1` only to recover a legacy Action
+whose immutable request predates flow orchestration fields.

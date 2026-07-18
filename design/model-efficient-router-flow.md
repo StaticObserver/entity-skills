@@ -1,14 +1,15 @@
 # Entity Router 模型高效执行流程
 
 日期：2026-07-17
-状态：本地核心路径实现完成；远端 adapters 与显式授权的 m87 live canary 待执行
+状态：本地核心路径、默认公共入口和多 provider 观测完成；显式授权的 m87 live canary 待执行
 
 实现快照（2026-07-17）：WP0–WP5 的本地 runtime、合同与 replay 测试已落地；
 本地 Slurm fake transport 已验证 launch recovery/watch；Linux `/proc` PID launcher
 已实现“先原子 PID record、再 exec”的恢复协议，但当前 macOS CI 只能验证其安全
 拒绝门。真实 SSH runner staging 和 m87 canary 尚未完成。
-`ENTITY_ROUTER_FLOW_V1` 仍为 opt-in，旧 Router 入口未删除。真实 token usage 和 approval review 数据尚未执行，
-因此 60% 效率结论保持 `not_assessed`，不能由本地字符数替代。
+`entityctl flow` 已成为默认受管事务入口，旧低层命令仅用于恢复。Claude/Kimi 原生
+usage 已可读取；matched-scenario token reduction 在 live canary 前仍保持
+`not_assessed`，不能由字符数或不同任务的 session 直接替代。
 
 | 工作包 | 当前状态 | 剩余门 |
 |---|---|---|
@@ -17,7 +18,7 @@
 | WP2 deterministic execute | local completed | SSH build runner staging |
 | WP3 launch/watch | local Slurm + Linux PID implemented | SSH live recovery |
 | WP4 data/model Worker | local completed | SSH nt2/Worker staging |
-| WP5 eval/feature flag | local replay completed | m87 canary 与平台原始 usage |
+| WP5 eval/default entry | query canary + native baselines completed | m87 matched-scenario canary |
 
 ## 1. 目标与边界
 
@@ -853,15 +854,9 @@ evals/router-flow/
 └── replay-fixtures/
 ```
 
-先做本地 replay，再做一次用户明确授权的 m87 live canary。默认 Router 入口保持旧
-流程，只有设置显式 feature flag 才使用 façade：
-
-```text
-ENTITY_ROUTER_FLOW_V1=1
-```
-
-canary 连续通过后再把 Router 默认恢复入口改为 `inspect/check`；旧 `list/show/
-verify/status/start-action/finish-action` 不删除。
+本地 replay 和 controller-local query canary 先执行；受管事务默认通过
+`entityctl flow`。旧 `list/show/verify/status/start-action/finish-action` 不删除，只用于
+精确恢复和诊断。m87 live canary 仍要求用户对该远端计算副作用单独明确授权。
 
 ## 14. 测试矩阵
 

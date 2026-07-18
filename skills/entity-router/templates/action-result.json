@@ -7,6 +7,14 @@
   "action_type": "",
   "owner": "",
   "execution_site_id": "",
+  "actor": {
+    "run_id": "unattributed",
+    "provider": "",
+    "client": "",
+    "session_id": "",
+    "model": "",
+    "bundle_hash": ""
+  },
   "status": "completed",
   "orchestration": {
     "flow_id": "",

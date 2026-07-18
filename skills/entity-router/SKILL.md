@@ -13,6 +13,41 @@ Read `references/workspace-layout.md` before orienting a Case and
 `references/router-runtime.md` before state/site operations. Load one matching
 playbook for the current phase.
 
+## Shared controller and public entry
+
+All providers on the controller machine share `$ENTITY_ROUTER_HOME` or
+`~/.entity-router`. Project bindings, Case state, events, Actions, and evidence
+never live in `.codex`, `.claude`, `.kimi-code`, or a source checkout.
+
+Use the compact public entry before low-level state primitives:
+
+```bash
+python3 scripts/entityctl.py inspect --project-root <project-or-child-path>
+python3 scripts/entityctl.py doctor
+python3 scripts/entityctl.py \
+  --actor-run-id <run-id> --actor-provider <provider> \
+  bundle install --source-root <entity-skills-repo>/skills
+```
+
+`inspect` reads only controller-local state, contacts no remote site, returns
+`state_mutated=false`, and remains useful while a remote site is offline. A
+cached observation is not a current remote fact. Bind a project once with
+`entityctl.py project bind`; the binding is stored in the shared controller
+home, not the project.
+
+`bundle install` publishes one content-addressed bundle under `~/.entity-skills`,
+backs up replaced client directories, and projects that one bundle into the
+Codex, Claude Code, and Kimi Code discovery roots.
+
+Mutations should provide `ENTITY_AGENT_RUN_ID`, provider/client/session/model,
+and `ENTITY_SKILLS_BUNDLE_HASH` so events and Action request/results identify
+the initiating Agent run. Never infer actor identity from a private directory.
+
+Before `entityctl.py flow execute/watch`, acquire a short writer lease with
+`entityctl.py writer acquire`. Pass its ID through `--writer-lease-id` or
+`ENTITY_ROUTER_WRITER_LEASE_ID`. Use `writer handoff` when another Agent run
+must continue the Workflow. Read-only inspect/check/status never acquires a lease.
+
 ## Entry and behavior gate
 
 - Direct task-skill use is allowed only for bounded read-only work or a clearly
@@ -26,9 +61,10 @@ playbook for the current phase.
 
 ## Fast read-only run status
 
-For a bounded “is it running / how far has it progressed” request with an exact
-run root plus job ID or PID, use `run.status` before the Standard loop. Execute
-`scripts/entity_router_status.py` directly in the current agent. This fast path
+For a bounded “is it running / how far has it progressed” request with a bound
+Case plus job ID or PID, use `entityctl.py run-status` before the Standard loop;
+it derives the exact site and active run root from shared Case state. For an
+unbound legacy run, execute `scripts/entity_router_status.py` directly. This fast path
 does not resume or suspend a Case, create or finish an Action, dispatch a
 Worker, or write controller evidence. Its quick profile makes at most one
 remote call and returns a compact observation.
@@ -38,12 +74,13 @@ normal `run.monitor` Action when the result recommends
 `promote_to_run_monitor`, or when the user explicitly requests durable/full
 monitoring.
 
-## Deterministic flow façade (feature gated)
+## Deterministic flow façade (default)
 
-The legacy Standard loop remains the default. When `ENTITY_ROUTER_FLOW_V1=1`
-is explicitly present, use `scripts/entity_router_flow.py inspect/check` for
-orientation and execute an already confirmed immutable flow request through
-`execute`. Deterministic runners never accept caller-provided shell text.
+Use `entityctl.py flow inspect/check` for managed Case orientation and execute an
+already confirmed immutable flow request through `entityctl.py flow execute`.
+This is the default path for `change/build/run/data` transactions. Deterministic
+runners never accept caller-provided shell text. Set `ENTITY_ROUTER_LEGACY_LOOP=1`
+only for explicit recovery of a legacy Action that has no flow orchestration fields.
 
 Use `execute --prepare --step N` and `execute --resume --step N` only for a
 `model.worker.v1` step. The prepared Worker envelope is an artifact, not Case
@@ -57,6 +94,8 @@ sole Case writer in every mode.
 - Use `scripts/entity_router_site.py` for site profiles, probes, and source
   materialization. Use `scripts/entity_router_state.py` for all controller Case
   mutations. Never edit controller files by hand.
+- Use `scripts/entity_router_project.py` only for shared project-to-Case
+  bindings. A binding is discovery metadata, not a second Case snapshot.
 - Controller state is single-writer and never placed in a source checkout.
 - Use structured Locators in JSON and `site_id:/absolute/path` on the CLI.
 - Select an exact `case_uid`, source revision/snapshot, build ID, and run ID;

@@ -4,6 +4,7 @@
 from __future__ import print_function
 
 import argparse
+import datetime
 import fcntl
 import hashlib
 import json
@@ -17,6 +18,7 @@ from contextlib import contextmanager
 from entity_router_common import (
     RouterError,
     absolute,
+    actor_identity,
     atomic_write_json,
     canonical_locator,
     ensure_home,
@@ -31,6 +33,7 @@ from entity_router_common import (
     parse_locator,
     probe_locator,
     register_case,
+    require_attributed_actor,
     router_home,
     run_command,
     run_on_site,
@@ -79,6 +82,10 @@ TARGET_CHECKS = {
     "analysis_result_status",
 }
 RESOURCE_DIMENSIONS = {"build", "run", "data", "analysis"}
+CURRENT_ACTOR = None
+CURRENT_WRITER_LEASE_ID = ""
+WRITER_LEASE_MIN_SECONDS = 60
+WRITER_LEASE_MAX_SECONDS = 3600
 
 
 class StateError(RouterError):
@@ -153,12 +160,13 @@ def events_path(case_dir):
     return os.path.join(absolute(case_dir), "events.jsonl")
 
 
-def append_event(case_dir, event_type, revision, details=None):
+def append_event(case_dir, event_type, revision, details=None, actor=None):
     event = {
         "time": now_utc(),
         "event": event_type,
         "revision": revision,
         "details": details or {},
+        "actor": actor or actor_identity(),
     }
     with open(events_path(case_dir), "a") as handle:
         handle.write(json.dumps(event, sort_keys=True) + "\n")
@@ -208,6 +216,18 @@ def validate_state(state, case_dir=None):
         raise StateError("invalid case_status")
     if state["workflow"].get("status") not in WORKFLOW_STATUSES:
         raise StateError("invalid workflow status")
+    lease = state.get("control", {}).get("writer_lease")
+    if lease is not None:
+        required_lease = {"lease_id", "holder", "acquired_at", "expires_at"}
+        if not isinstance(lease, dict) or set(lease) != required_lease:
+            raise StateError("control.writer_lease has an invalid schema")
+        if not isinstance(lease.get("lease_id"), str) or not lease["lease_id"]:
+            raise StateError("control.writer_lease requires lease_id")
+        holder = lease.get("holder")
+        if not isinstance(holder, dict) or not holder.get("run_id"):
+            raise StateError("control.writer_lease requires holder.run_id")
+        parse_utc(lease.get("acquired_at"), "writer lease acquired_at")
+        parse_utc(lease.get("expires_at"), "writer lease expires_at")
     target = state["workflow"].get("target")
     if target is not None:
         normalized = validate_workflow_target(target)
@@ -260,11 +280,44 @@ def resolve_case(home, value):
     return matches[0]
 
 
+def parse_utc(value, label):
+    if not isinstance(value, str):
+        raise StateError("%s must be an ISO-8601 UTC timestamp" % label)
+    for pattern in ["%Y-%m-%dT%H:%M:%SZ", "%Y-%m-%dT%H:%M:%S.%fZ"]:
+        try:
+            return datetime.datetime.strptime(value, pattern)
+        except ValueError:
+            continue
+    raise StateError("%s must be an ISO-8601 UTC timestamp" % label)
+
+
+def lease_is_active(lease, current_time=None):
+    if not lease:
+        return False
+    current_time = current_time or datetime.datetime.utcnow()
+    return parse_utc(lease.get("expires_at"), "writer lease expires_at") > current_time
+
+
+def require_writer_lease(state, actor=None, lease_id=""):
+    lease = state.get("control", {}).get("writer_lease")
+    if not lease_is_active(lease):
+        return
+    actor = actor or actor_identity()
+    holder = lease["holder"]
+    if actor.get("run_id") != holder.get("run_id"):
+        raise StateError(
+            "active writer lease is held by another Agent run: %s" % holder.get("run_id")
+        )
+    if not lease_id or lease_id != lease.get("lease_id"):
+        raise StateError("mutation requires the active --writer-lease-id")
+
+
 def require_revision(state, expected):
     if expected is None:
         raise StateError("--expected-revision is required for mutations")
     if state["revision"] != expected:
         raise StateError("revision conflict: expected %s, current %s" % (expected, state["revision"]))
+    require_writer_lease(state, CURRENT_ACTOR, CURRENT_WRITER_LEASE_ID)
 
 
 def all_case_locators(state):
@@ -472,7 +525,11 @@ def build_initial_state(args, case_dir, case_uid):
         "created_at": timestamp,
         "updated_at": timestamp,
         "last_opened_at": timestamp,
-        "control": {"site_id": args.controller_site, "root": absolute(case_dir)},
+        "control": {
+            "site_id": args.controller_site,
+            "root": absolute(case_dir),
+            "writer_lease": None,
+        },
         "identity": {"name": args.name or args.case_id, "summary": args.summary or "", "tags": []},
         "memory": {
             "goal": args.goal,
@@ -538,7 +595,8 @@ def command_create(args):
         validate_state(state, case_dir)
         atomic_write_json(state_path(case_dir), state)
         register_case(home, case_uid, args.case_id, case_dir)
-        append_event(case_dir, "case.created", 0, {"workflow_id": args.workflow_id})
+        append_event(case_dir, "case.created", 0, {"workflow_id": args.workflow_id},
+                     actor_identity(args))
     except Exception:
         shutil.rmtree(case_dir, ignore_errors=True)
         raise
@@ -619,6 +677,161 @@ def command_verify(args):
     if not record or absolute(record["control_root"]) != case_dir:
         issues.append("Case registry entry is missing or stale")
     return {"ok": not issues, "case_dir": case_dir, "revision": state["revision"], "issues": issues}
+
+
+def writer_lease_summary(state):
+    lease = state.get("control", {}).get("writer_lease")
+    if not lease:
+        return {"active": False, "lease": None}
+    return {
+        "active": lease_is_active(lease),
+        "lease": {
+            "lease_id": lease["lease_id"],
+            "holder": lease["holder"],
+            "acquired_at": lease["acquired_at"],
+            "expires_at": lease["expires_at"],
+        },
+    }
+
+
+def command_writer_status(args):
+    case_dir = resolve_case(args.router_home, args.case)
+    state = load_state(case_dir)
+    result = writer_lease_summary(state)
+    result.update({
+        "ok": True,
+        "case_uid": state["case_uid"],
+        "revision": state["revision"],
+        "state_mutated": False,
+    })
+    return result
+
+
+def validate_lease_id(value):
+    if (not isinstance(value, str) or not value
+            or any(not (character.isalnum() or character in "._-") for character in value)):
+        raise StateError("writer lease ID may contain only letters, digits, dot, underscore, and hyphen")
+    return value
+
+
+def lease_expiry(ttl_seconds):
+    if ttl_seconds < WRITER_LEASE_MIN_SECONDS or ttl_seconds > WRITER_LEASE_MAX_SECONDS:
+        raise StateError(
+            "writer lease TTL must be between %s and %s seconds" %
+            (WRITER_LEASE_MIN_SECONDS, WRITER_LEASE_MAX_SECONDS)
+        )
+    return (datetime.datetime.utcnow() + datetime.timedelta(seconds=ttl_seconds)).replace(
+        microsecond=0
+    ).isoformat() + "Z"
+
+
+def active_action_actor(case_dir, state):
+    action_id = state["workflow"].get("active_action_id", "")
+    if not action_id:
+        return None
+    request = load_json(
+        os.path.join(case_dir, "actions", action_id, "request.json"),
+        "active Action request",
+    )
+    return request.get("actor") if isinstance(request.get("actor"), dict) else None
+
+
+def command_acquire_writer(args):
+    case_dir = resolve_case(args.router_home, args.case)
+    actor = actor_identity(args)
+    lease_id = validate_lease_id(args.lease_id)
+    with locked_case(case_dir):
+        state = load_state(case_dir)
+        require_revision(state, args.expected_revision)
+        action_actor = active_action_actor(case_dir, state)
+        if action_actor and action_actor.get("run_id") != actor.get("run_id"):
+            raise StateError("cannot acquire writer lease for another Agent's active Action")
+        previous = state["control"].get("writer_lease")
+        acquired_at = now_utc()
+        if previous and lease_is_active(previous):
+            acquired_at = previous["acquired_at"]
+        lease = {
+            "lease_id": lease_id,
+            "holder": actor,
+            "acquired_at": acquired_at,
+            "expires_at": lease_expiry(args.ttl_seconds),
+        }
+        state["control"]["writer_lease"] = lease
+        state["revision"] += 1
+        state["updated_at"] = now_utc()
+        atomic_write_json(state_path(case_dir), state)
+        append_event(case_dir, "writer.lease_acquired", state["revision"], {
+            "lease_id": lease_id,
+            "expires_at": lease["expires_at"],
+            "renewed": bool(previous and lease_is_active(previous)),
+        }, actor)
+        return {
+            "ok": True, "case_dir": case_dir, "case_uid": state["case_uid"],
+            "revision": state["revision"], "writer_lease": lease,
+        }
+
+
+def command_handoff_writer(args):
+    case_dir = resolve_case(args.router_home, args.case)
+    current_actor = actor_identity(args)
+    new_lease_id = validate_lease_id(args.new_lease_id)
+    with locked_case(case_dir):
+        state = load_state(case_dir)
+        require_revision(state, args.expected_revision)
+        previous = state["control"].get("writer_lease")
+        if not previous or not lease_is_active(previous):
+            raise StateError("writer handoff requires an active lease")
+        next_actor = {
+            "run_id": args.to_run_id,
+            "provider": args.to_provider or "",
+            "client": args.to_client or "",
+            "session_id": args.to_session_id or "",
+            "model": args.to_model or "",
+            "bundle_hash": args.to_bundle_hash or "",
+        }
+        lease = {
+            "lease_id": new_lease_id,
+            "holder": next_actor,
+            "acquired_at": now_utc(),
+            "expires_at": lease_expiry(args.ttl_seconds),
+        }
+        state["control"]["writer_lease"] = lease
+        state["revision"] += 1
+        state["updated_at"] = now_utc()
+        atomic_write_json(state_path(case_dir), state)
+        append_event(case_dir, "writer.lease_handed_off", state["revision"], {
+            "from_run_id": current_actor["run_id"],
+            "to_run_id": next_actor["run_id"],
+            "previous_lease_id": previous["lease_id"],
+            "new_lease_id": new_lease_id,
+            "expires_at": lease["expires_at"],
+        }, current_actor)
+        return {
+            "ok": True, "case_dir": case_dir, "case_uid": state["case_uid"],
+            "revision": state["revision"], "writer_lease": lease,
+        }
+
+
+def command_release_writer(args):
+    case_dir = resolve_case(args.router_home, args.case)
+    actor = actor_identity(args)
+    with locked_case(case_dir):
+        state = load_state(case_dir)
+        require_revision(state, args.expected_revision)
+        previous = state["control"].get("writer_lease")
+        if not previous:
+            raise StateError("Case has no writer lease")
+        state["control"]["writer_lease"] = None
+        state["revision"] += 1
+        state["updated_at"] = now_utc()
+        atomic_write_json(state_path(case_dir), state)
+        append_event(case_dir, "writer.lease_released", state["revision"], {
+            "lease_id": previous["lease_id"],
+        }, actor)
+        return {
+            "ok": True, "case_dir": case_dir, "case_uid": state["case_uid"],
+            "revision": state["revision"], "writer_lease": None,
+        }
 
 
 def validate_root_sites(roots, execution_site):
@@ -858,6 +1071,7 @@ def command_start_action(args):
             "execution_domain": args.execution_domain,
             "execution_site_id": args.execution_site,
             "identity_id": args.identity_id or "",
+            "actor": actor_identity(args),
             "orchestration": {
                 "flow_id": args.flow_id or "",
                 "flow_request_hash": args.flow_request_hash or "",
@@ -900,7 +1114,10 @@ def command_start_action(args):
         state["workflow"]["allowed_actions"] = []
         state["workflow"]["next_action"] = ""
         atomic_write_json(state_path(case_dir), state)
-        append_event(case_dir, "action.started", state["revision"], {"action_id": args.action_id, "execution_site_id": args.execution_site})
+        append_event(case_dir, "action.started", state["revision"], {
+            "action_id": args.action_id,
+            "execution_site_id": args.execution_site,
+        }, actor_identity(args))
         return {"ok": True, "case_dir": case_dir, "revision": state["revision"], "request": request_path, "worker_request": request["worker_request"]}
 
 
@@ -1118,6 +1335,7 @@ def command_finish_action(args):
             "action_type": request["action_type"],
             "owner": request["owner"],
             "execution_site_id": request["execution_site_id"],
+            "actor": actor_identity(args),
             "status": args.status,
             "outputs": outputs,
             "verification": args.verification,
@@ -1210,7 +1428,10 @@ def command_finish_action(args):
                 state["readiness"]["run"]["status"] = "stale"
         set_allowed_actions(state)
         atomic_write_json(state_path(case_dir), state)
-        append_event(case_dir, "action.%s" % args.status, state["revision"], {"action_id": args.action_id, "readiness": updates})
+        append_event(case_dir, "action.%s" % args.status, state["revision"], {
+            "action_id": args.action_id,
+            "readiness": updates,
+        }, actor_identity(args))
         return {"ok": True, "case_dir": case_dir, "revision": state["revision"], "result": result_path, "allowed_actions": state["workflow"]["allowed_actions"]}
 
 
@@ -1257,7 +1478,9 @@ def command_refresh(args):
             state["updated_at"] = now_utc()
             set_allowed_actions(state)
             atomic_write_json(state_path(case_dir), state)
-            append_event(case_dir, "case.refreshed", state["revision"], {"changed_dimensions": changed})
+            append_event(case_dir, "case.refreshed", state["revision"], {
+                "changed_dimensions": changed,
+            }, actor_identity(args))
         return {"ok": True, "case_dir": case_dir, "revision": state["revision"], "changed_dimensions": changed, "state": state}
 
 
@@ -1324,7 +1547,7 @@ def command_reconcile(args):
         append_event(case_dir, "case.reconciled", state["revision"], {
             "readiness": updates,
             "resource_roots": {key: locator_text(value) for key, value in resource_roots.items()},
-        })
+        }, actor_identity(args))
         return {"ok": True, "case_dir": case_dir, "revision": state["revision"], "allowed_actions": state["workflow"]["allowed_actions"]}
 
 
@@ -1359,7 +1582,7 @@ def command_set_workflow_target(args):
         atomic_write_json(state_path(case_dir), state)
         append_event(case_dir, "workflow.target_set", state["revision"], {
             "target_id": target["target_id"], "target_hash": target_hash,
-        })
+        }, actor_identity(args))
         return {
             "ok": True, "case_dir": case_dir, "revision": state["revision"],
             "target_hash": target_hash,
@@ -1404,7 +1627,8 @@ def command_update_memory(args):
         state["revision"] += 1
         state["updated_at"] = now_utc()
         atomic_write_json(state_path(case_dir), state)
-        append_event(case_dir, "case.memory_updated", state["revision"])
+        append_event(case_dir, "case.memory_updated", state["revision"],
+                     actor=actor_identity(args))
         return {"ok": True, "case_dir": case_dir, "revision": state["revision"]}
 
 
@@ -1438,7 +1662,8 @@ def _set_suspended(args, suspended):
         set_allowed_actions(state)
         atomic_write_json(state_path(case_dir), state)
         snapshot = save_snapshot(case_dir, state, "suspended") if suspended else ""
-        append_event(case_dir, "case.suspended" if suspended else "case.resumed", state["revision"])
+        append_event(case_dir, "case.suspended" if suspended else "case.resumed",
+                     state["revision"], actor=actor_identity(args))
         return {"ok": True, "case_dir": case_dir, "revision": state["revision"], "snapshot": snapshot, "allowed_actions": state["workflow"]["allowed_actions"]}
 
 
@@ -1521,7 +1746,7 @@ def command_complete_workflow(args):
             "verification": args.verification,
             "evidence": evidence,
             "criteria": criterion_results,
-        })
+        }, actor_identity(args))
         return {"ok": True, "case_dir": case_dir, "revision": state["revision"], "snapshot": snapshot}
 
 
@@ -1553,7 +1778,9 @@ def command_new_workflow(args):
         }
         set_allowed_actions(state)
         atomic_write_json(state_path(case_dir), state)
-        append_event(case_dir, "workflow.created", state["revision"], {"workflow_id": args.workflow_id})
+        append_event(case_dir, "workflow.created", state["revision"], {
+            "workflow_id": args.workflow_id,
+        }, actor_identity(args))
         return {"ok": True, "case_dir": case_dir, "revision": state["revision"], "allowed_actions": state["workflow"]["allowed_actions"]}
 
 
@@ -1674,7 +1901,9 @@ def command_migrate_case(args):
         state["workflow"]["status"] = "active"
         set_allowed_actions(state)
         atomic_write_json(state_path(new_case), state)
-        append_event(new_case, "case.migrated", state["revision"], {"legacy_case": legacy_case})
+        append_event(new_case, "case.migrated", state["revision"], {
+            "legacy_case": legacy_case,
+        }, actor_identity(args))
         created["revision"] = state["revision"]
         created["state"] = state
     except Exception:
@@ -1760,7 +1989,7 @@ def command_finalize_migration(args):
         atomic_write_json(state_path(case_dir), state)
         append_event(case_dir, "migration.finalized", state["revision"], {
             "receipt": receipt_path, "removed": receipt["removed"],
-        })
+        }, actor_identity(args))
         return {"ok": True, "case_dir": case_dir, "revision": state["revision"],
                 "receipt": receipt_path, "removed": receipt["removed"]}
 
@@ -1772,6 +2001,15 @@ def add_common_case(parser):
 def build_parser():
     parser = argparse.ArgumentParser(description="Entity Router v3 Case controller")
     parser.add_argument("--router-home", default=router_home())
+    parser.add_argument("--actor-run-id")
+    parser.add_argument("--actor-provider")
+    parser.add_argument("--actor-client")
+    parser.add_argument("--actor-session-id")
+    parser.add_argument("--actor-model")
+    parser.add_argument("--actor-bundle-hash")
+    parser.add_argument(
+        "--writer-lease-id", default=os.environ.get("ENTITY_ROUTER_WRITER_LEASE_ID", "")
+    )
     sub = parser.add_subparsers(dest="command")
     create = sub.add_parser("create")
     create.add_argument("--control-root")
@@ -1803,6 +2041,31 @@ def build_parser():
     rebuild.set_defaults(func=command_rebuild_registry)
     show = sub.add_parser("show"); add_common_case(show); show.set_defaults(func=command_show)
     verify = sub.add_parser("verify"); add_common_case(verify); verify.set_defaults(func=command_verify)
+    writer_status = sub.add_parser("writer-status")
+    add_common_case(writer_status)
+    writer_status.set_defaults(func=command_writer_status)
+    acquire_writer = sub.add_parser("acquire-writer")
+    add_common_case(acquire_writer)
+    acquire_writer.add_argument("--expected-revision", required=True, type=int)
+    acquire_writer.add_argument("--lease-id", required=True)
+    acquire_writer.add_argument("--ttl-seconds", type=int, default=900)
+    acquire_writer.set_defaults(func=command_acquire_writer)
+    handoff_writer = sub.add_parser("handoff-writer")
+    add_common_case(handoff_writer)
+    handoff_writer.add_argument("--expected-revision", required=True, type=int)
+    handoff_writer.add_argument("--new-lease-id", required=True)
+    handoff_writer.add_argument("--ttl-seconds", type=int, default=900)
+    handoff_writer.add_argument("--to-run-id", required=True)
+    handoff_writer.add_argument("--to-provider")
+    handoff_writer.add_argument("--to-client")
+    handoff_writer.add_argument("--to-session-id")
+    handoff_writer.add_argument("--to-model")
+    handoff_writer.add_argument("--to-bundle-hash")
+    handoff_writer.set_defaults(func=command_handoff_writer)
+    release_writer = sub.add_parser("release-writer")
+    add_common_case(release_writer)
+    release_writer.add_argument("--expected-revision", required=True, type=int)
+    release_writer.set_defaults(func=command_release_writer)
     start = sub.add_parser("start-action"); add_common_case(start)
     start.add_argument("--expected-revision", required=True, type=int)
     start.add_argument("--action-id", required=True)
@@ -1913,12 +2176,20 @@ def build_parser():
 
 
 def main(argv=None):
+    global CURRENT_ACTOR, CURRENT_WRITER_LEASE_ID
     parser = build_parser()
     args = parser.parse_args(argv)
     if not getattr(args, "func", None):
         parser.error("a command is required")
     args.router_home = ensure_home(args.router_home)
+    CURRENT_ACTOR = actor_identity(args)
+    CURRENT_WRITER_LEASE_ID = args.writer_lease_id
     try:
+        read_only = args.command in {"list", "show", "verify", "writer-status"}
+        if args.command == "migrate-case" and args.dry_run:
+            read_only = True
+        if not read_only:
+            require_attributed_actor(actor_identity(args))
         payload = args.func(args)
         emit(payload)
         return 0 if payload.get("ok", True) else 2

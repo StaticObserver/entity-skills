@@ -31,6 +31,8 @@ from tools.skill_observability.evidence import (  # noqa: E402
     validate_router_action,
 )
 from tools.skill_observability.adapters.codex_rollout import import_codex_rollout  # noqa: E402
+from tools.skill_observability.adapters.claude_transcript import import_claude_transcript  # noqa: E402
+from tools.skill_observability.adapters.kimi_wire import import_kimi_session  # noqa: E402
 
 
 class SkillObservabilityTest(unittest.TestCase):
@@ -687,6 +689,101 @@ class SkillObservabilityTest(unittest.TestCase):
             "adapter-input-secret", "unlabeled-output-secret",
         ):
             self.assertNotIn(secret, trace_text)
+
+    def test_claude_adapter_hashes_tools_skips_reasoning_and_imports_usage(self):
+        run_dir, _ = self.start(name="claude-native")
+        transcript = self.root / "claude-session.jsonl"
+        records = [
+            {
+                "type": "assistant", "sessionId": "claude-session", "cwd": str(self.root),
+                "message": {
+                    "usage": {"input_tokens": 11, "cache_read_input_tokens": 7,
+                              "output_tokens": 3},
+                    "content": [
+                        {"type": "thinking", "thinking": "private-claude-reasoning"},
+                        {"type": "tool_use", "id": "tool-1", "name": "Bash",
+                         "input": {"command": "printf claude-secret"}},
+                    ],
+                },
+            },
+            {
+                "type": "user", "sessionId": "claude-session", "cwd": str(self.root),
+                "message": {"content": [
+                    {"type": "tool_result", "tool_use_id": "tool-1",
+                     "content": "claude-output-secret", "is_error": False},
+                ]},
+            },
+        ]
+        transcript.write_text(
+            "".join(json.dumps(item) + "\n" for item in records), encoding="utf-8"
+        )
+        first = import_claude_transcript(run_dir, transcript_path=transcript)
+        self.assertEqual(first["calls_seen"], 1)
+        self.assertEqual(first["started_imported"], 1)
+        self.assertEqual(first["finished_imported"], 1)
+        self.assertEqual(first["reasoning_records_skipped"], 1)
+        self.assertEqual(first["usage"]["input_tokens"], 11)
+        self.assertEqual(first["usage"]["cached_input_tokens"], 7)
+        second = import_claude_transcript(run_dir, transcript_path=transcript)
+        self.assertEqual(second["started_imported"], 0)
+        self.assertEqual(second["finished_imported"], 0)
+        trace = run_paths(run_dir)["events"].read_text(encoding="utf-8")
+        self.assertNotIn("private-claude-reasoning", trace)
+        self.assertNotIn("claude-secret", trace)
+        self.assertNotIn("claude-output-secret", trace)
+
+    def test_kimi_adapter_imports_all_agents_and_native_usage(self):
+        run_dir, _ = self.start(name="kimi-native")
+        session = self.root / "session-kimi"
+        self.write_json(session / "state.json", {"workDir": str(self.root)})
+        main = session / "agents" / "main" / "wire.jsonl"
+        child = session / "agents" / "agent-0" / "wire.jsonl"
+        main.parent.mkdir(parents=True)
+        child.parent.mkdir(parents=True)
+        main_records = [
+            {"type": "context.append_loop_event", "event": {
+                "type": "content.part", "part": {"type": "think", "think": "kimi-private"}}},
+            {"type": "context.append_loop_event", "event": {
+                "type": "tool.call", "toolCallId": "call-1", "name": "Shell",
+                "args": {"command": "printf kimi-main-secret"}}},
+            {"type": "context.append_loop_event", "event": {
+                "type": "tool.result", "toolCallId": "call-1",
+                "result": "kimi-main-output"}},
+            {"type": "usage.record", "usage": {
+                "inputOther": 100, "inputCacheCreation": 10,
+                "inputCacheRead": 40, "output": 20}},
+        ]
+        child_records = [
+            {"type": "context.append_loop_event", "event": {
+                "type": "tool.call", "toolCallId": "call-1", "name": "Read",
+                "args": {"path": "kimi-child-secret"}}},
+            {"type": "context.append_loop_event", "event": {
+                "type": "tool.result", "toolCallId": "call-1",
+                "result": "kimi-child-output"}},
+        ]
+        main.write_text("".join(json.dumps(item) + "\n" for item in main_records), encoding="utf-8")
+        child.write_text("".join(json.dumps(item) + "\n" for item in child_records), encoding="utf-8")
+        outcome = import_kimi_session(run_dir, session_path=session)
+        self.assertEqual(outcome["calls_seen"], 2)
+        self.assertEqual(outcome["started_imported"], 2)
+        self.assertEqual(outcome["finished_imported"], 2)
+        self.assertEqual(outcome["reasoning_records_skipped"], 1)
+        self.assertEqual(outcome["usage"]["input_tokens"], 110)
+        self.assertEqual(outcome["usage"]["cached_input_tokens"], 40)
+        events = read_jsonl(run_paths(run_dir)["events"], "events")
+        agents = {
+            event["payload"].get("native_agent_id") for event in events
+            if event["type"] == "tool.started"
+        }
+        self.assertEqual(agents, {"main", "agent-0"})
+        self.assertTrue(all(
+            event["payload"].get("agent_run_id") == "kimi-native"
+            for event in events if event["type"] == "tool.started"
+        ))
+        trace = run_paths(run_dir)["events"].read_text(encoding="utf-8")
+        for secret in ("kimi-private", "kimi-main-secret", "kimi-main-output",
+                       "kimi-child-secret", "kimi-child-output"):
+            self.assertNotIn(secret, trace)
 
     def test_runtime_skills_have_no_observability_dependency(self):
         for path in (ROOT / "skills").glob("*/scripts/*.py"):

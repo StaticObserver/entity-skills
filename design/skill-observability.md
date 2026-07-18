@@ -347,7 +347,7 @@ v1 完成时必须满足：
 
 ## 15. v1 默认决定
 
-- 核心 collector 保持平台无关，接受标准事件；Codex/Claude transcript 导入作为独立 adapter，不进入核心 schema；
+- 核心 collector 保持平台无关，接受标准事件；Codex、Claude 和 Kimi transcript 导入作为独立 adapter，不进入核心 schema；
 - 本地命令 wrapper 先覆盖确定性工具调用，transcript adapter 补全路由和 Agent/Worker 调用链；
 - 真实任务默认只保存用户输入 hash 和外部引用；冻结评测题的原文保存在独立测试集；
 - Agent 可选提交 `contract_ref`，但 validator 根据行为和领域事实给出的判定才是权威结果；
@@ -363,7 +363,10 @@ tools/skill_observability/
 ├── contracts.py
 ├── evidence.py
 ├── adapters/
-│   └── codex_rollout.py
+│   ├── codex_rollout.py
+│   ├── claude_transcript.py
+│   ├── kimi_wire.py
+│   └── tool_trace.py
 └── schemas/
     ├── manifest.schema.json
     ├── event.schema.json
@@ -372,7 +375,6 @@ tools/skill_observability/
 ```
 
 `tests/test_skill_observability.py` 覆盖完整 owner 证据链、secret 脱敏、多进程
-写入序列化、崩溃后 incomplete 判定、产物指纹漂移、Codex rollout
-增量导入与零侵入运行时边界。Codex adapter 明确忽略 message、reasoning、
-encrypted reasoning 和 `agent_reasoning`，只导入可观测的 tool call/output 指纹，
-并排除 observability CLI 自身调用以避免递归观测。
+写入序列化、崩溃后 incomplete 判定、产物指纹漂移、三种 provider 的增量导入与
+零侵入运行时边界。所有 adapter 只导入可观测的 tool call/output 指纹；Kimi adapter
+遍历 main 和子 agent wire，并读取平台原生 usage，但不保留 `think` 内容。

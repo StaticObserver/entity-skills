@@ -21,6 +21,15 @@ import tempfile
 SITE_SCHEMA_VERSION = 1
 REGISTRY_SCHEMA_VERSION = 1
 
+ACTOR_ENVIRONMENT = {
+    "run_id": "ENTITY_AGENT_RUN_ID",
+    "provider": "ENTITY_AGENT_PROVIDER",
+    "client": "ENTITY_AGENT_CLIENT",
+    "session_id": "ENTITY_AGENT_SESSION_ID",
+    "model": "ENTITY_AGENT_MODEL",
+    "bundle_hash": "ENTITY_SKILLS_BUNDLE_HASH",
+}
+
 
 class RouterError(Exception):
     pass
@@ -37,6 +46,36 @@ def absolute(path):
 
 def router_home(value=None):
     return absolute(value or os.environ.get("ENTITY_ROUTER_HOME", "~/.entity-router"))
+
+
+def actor_identity(values=None):
+    """Return a stable, non-secret Agent run identity for state provenance.
+
+    ``values`` may be an argparse namespace or a mapping.  Explicit values win
+    over environment variables.  Missing legacy identity is recorded as
+    ``unattributed`` rather than guessed from a process or client directory.
+    """
+    result = {}
+    for key, environment in ACTOR_ENVIRONMENT.items():
+        explicit = None
+        if isinstance(values, dict):
+            explicit = values.get("actor_" + key)
+        elif values is not None:
+            explicit = getattr(values, "actor_" + key, None)
+        value = explicit if explicit is not None else os.environ.get(environment, "")
+        result[key] = str(value or "").strip()
+    if not result["run_id"]:
+        result["run_id"] = "unattributed"
+    return result
+
+
+def require_attributed_actor(actor):
+    if os.environ.get("ENTITY_ROUTER_REQUIRE_ACTOR", "") == "1":
+        if not actor or actor.get("run_id") == "unattributed":
+            raise RouterError(
+                "mutation requires ENTITY_AGENT_RUN_ID or --actor-run-id"
+            )
+    return actor
 
 
 def atomic_write_json(path, value):

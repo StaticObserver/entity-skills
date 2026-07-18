@@ -318,6 +318,67 @@ class RouterV3CLITest(unittest.TestCase):
         code, shown = self.cli(STATE, "show", "--case", created["case_uid"])
         self.assertEqual(code, 0, shown)
 
+    def test_writer_lease_blocks_parallel_mutation_and_supports_handoff(self):
+        created = self.create_case("writer-lease")
+        case = created["case_dir"]
+        codex = ["--actor-run-id", "codex-run", "--actor-provider", "codex"]
+        claude = ["--actor-run-id", "claude-run", "--actor-provider", "claude"]
+
+        code, acquired = self.cli(
+            STATE, *(codex + [
+                "acquire-writer", "--case", case, "--expected-revision", "0",
+                "--lease-id", "lease-codex", "--ttl-seconds", "300",
+            ])
+        )
+        self.assertEqual(code, 0, acquired)
+        self.assertEqual(acquired["writer_lease"]["holder"]["run_id"], "codex-run")
+
+        code, rejected = self.cli(
+            STATE, *(claude + [
+                "suspend", "--case", case, "--expected-revision", "1",
+                "--summary", "must not win",
+            ])
+        )
+        self.assertEqual(code, 2)
+        self.assertIn("another Agent run", rejected["error"])
+
+        code, suspended = self.cli(
+            STATE, *(codex + [
+                "--writer-lease-id", "lease-codex", "suspend", "--case", case,
+                "--expected-revision", "1", "--summary", "handoff ready",
+            ])
+        )
+        self.assertEqual(code, 0, suspended)
+        code, handed = self.cli(
+            STATE, *(codex + [
+                "--writer-lease-id", "lease-codex", "handoff-writer", "--case", case,
+                "--expected-revision", "2", "--new-lease-id", "lease-claude",
+                "--to-run-id", "claude-run", "--to-provider", "claude",
+                "--ttl-seconds", "300",
+            ])
+        )
+        self.assertEqual(code, 0, handed)
+        self.assertEqual(handed["writer_lease"]["holder"]["run_id"], "claude-run")
+
+        code, resumed = self.cli(
+            STATE, *(claude + [
+                "--writer-lease-id", "lease-claude", "resume", "--case", case,
+                "--expected-revision", "3",
+            ])
+        )
+        self.assertEqual(code, 0, resumed)
+        code, released = self.cli(
+            STATE, *(claude + [
+                "--writer-lease-id", "lease-claude", "release-writer", "--case", case,
+                "--expected-revision", "4",
+            ])
+        )
+        self.assertEqual(code, 0, released)
+        code, status = self.cli(STATE, "writer-status", "--case", case)
+        self.assertEqual(code, 0, status)
+        self.assertFalse(status["active"])
+        self.assertIsNone(status["lease"])
+
     def test_control_root_inside_source_is_rejected(self):
         forbidden = os.path.join(self.source, "router-control")
         code, payload = self.cli(

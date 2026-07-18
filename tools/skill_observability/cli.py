@@ -26,6 +26,8 @@ from .evidence import (
     validate_router_action,
 )
 from .adapters.codex_rollout import import_codex_rollout
+from .adapters.claude_transcript import import_claude_transcript
+from .adapters.kimi_wire import import_kimi_session
 
 
 def _json_out(value: Any, stream: Any = sys.stdout) -> None:
@@ -139,6 +141,26 @@ def command_import_codex(args: argparse.Namespace) -> int:
     outcome = import_codex_rollout(
         args.run_dir,
         rollout_path=args.rollout,
+        parent_span_id=args.parent_span_id,
+    )
+    _json_out({"ok": True, **outcome})
+    return 0
+
+
+def command_import_claude(args: argparse.Namespace) -> int:
+    outcome = import_claude_transcript(
+        args.run_dir,
+        transcript_path=args.transcript,
+        parent_span_id=args.parent_span_id,
+    )
+    _json_out({"ok": True, **outcome})
+    return 0
+
+
+def command_import_kimi(args: argparse.Namespace) -> int:
+    outcome = import_kimi_session(
+        args.run_dir,
+        session_path=args.session,
         parent_span_id=args.parent_span_id,
     )
     _json_out({"ok": True, **outcome})
@@ -302,6 +324,22 @@ def build_parser() -> argparse.ArgumentParser:
     _add_parent_span(codex)
     codex.add_argument("--rollout", type=Path, required=True)
     codex.set_defaults(func=command_import_codex)
+
+    claude = sub.add_parser(
+        "import-claude", help="Import observable tool calls from Claude Code JSONL"
+    )
+    _add_run_dir(claude)
+    _add_parent_span(claude)
+    claude.add_argument("--transcript", type=Path, required=True)
+    claude.set_defaults(func=command_import_claude)
+
+    kimi = sub.add_parser(
+        "import-kimi", help="Import observable tool calls from a Kimi Code session"
+    )
+    _add_run_dir(kimi)
+    _add_parent_span(kimi)
+    kimi.add_argument("--session", type=Path, required=True)
+    kimi.set_defaults(func=command_import_kimi)
 
     artifact = sub.add_parser("artifact", help="Fingerprint and link an existing artifact")
     _add_run_dir(artifact)

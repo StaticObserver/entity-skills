@@ -12,6 +12,7 @@ The controller is the single writer. The default root is
 ```text
 ~/.entity-router/
 ├── registry.json
+├── project-bindings.json
 ├── sites/<site_id>.json
 └── cases/<case_uid>-<label>/
     ├── case.json
@@ -24,6 +25,22 @@ The controller is the single writer. The default root is
 `registry.json` is a rebuildable index. `case.json` is the control snapshot.
 Workers never write this tree. A remote Worker receives an immutable request
 under that site's staging root and returns owner artifacts/evidence.
+
+`case.json.control.writer_lease` is an optional short-lived coordination record,
+not a second writer. The state CLI remains the only writer and changes the holder
+only under the Case lock and expected revision. Expired leases do not block
+recovery; handoff and release remain visible in `events.jsonl`.
+
+`project-bindings.json` is the controller-local public mapping from normalized
+project roots to Case UIDs. It lets Codex, Claude Code, Kimi Code, and shell
+agents on the same machine discover one Case from any project subdirectory.
+It contains no readiness or evidence copy and resolves the Case through
+`registry.json`. Use `scripts/entity_router_project.py`; never create a
+provider-specific binding under `.codex`, `.claude`, or `.kimi-code`.
+
+Controller files default to the Agent machine. If an execution site is offline,
+the Case, Action history, and last verified evidence remain readable locally;
+the old evidence must not be reported as a live remote observation.
 
 ## Site profile
 
@@ -75,3 +92,7 @@ defaults to the data site.
 No source checkout may contain Router control state merely to make discovery
 work. Managed-path detection queries the controller registry and Locator
 envelope.
+
+PGen/TOML/design remain the versioned project facts. Session exports, Agent
+memory, full skill copies, mutable Case files, and remote raw data do not belong
+in the source checkout.

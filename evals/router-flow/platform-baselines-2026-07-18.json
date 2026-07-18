@@ -1,0 +1,32 @@
+{
+  "schema_version": 1,
+  "scope": "Observed native bh-reconnection sessions; diagnostic baselines, not matched-scenario comparisons",
+  "sessions": [
+    {
+      "provider": "kimi",
+      "baseline_id": "kimi-bh-reconnection-diagnostic-20260718",
+      "agents": 4,
+      "tool_roundtrips": 418,
+      "tool_input_bytes": 221964,
+      "tool_output_bytes": 466698,
+      "usage": {
+        "input_tokens": 690839,
+        "cached_input_tokens": 26664960,
+        "output_tokens": 171757
+      }
+    },
+    {
+      "provider": "claude",
+      "baseline_id": "claude-bh-reconnection-diagnostic-20260718",
+      "agents": 1,
+      "tool_roundtrips": 38,
+      "tool_input_bytes": 8510,
+      "tool_output_bytes": 95248,
+      "usage": {
+        "input_tokens": 178673,
+        "cached_input_tokens": 2716544,
+        "output_tokens": 25072
+      }
+    }
+  ]
+}

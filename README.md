@@ -12,11 +12,10 @@ Simulation 的准备、运行、续跑和状态恢复由 Router 按自身 `playb
 
 初版 Router 将专业工作和 Router-owned run 操作放入 Case-bound Worker；Router 只保留控制上下文。`skills/entity-router/scripts/entity_router_state.py` 负责 Case、Workflow、Action Contract、revision、事件和 stale 状态。
 
-确定性 flow façade 已实现为显式试运行路径。设置
-`ENTITY_ROUTER_FLOW_V1=1` 后，Router 可用 `entity_router_flow.py` 完成 compact
-inspect/check、allowlisted execute、scheduler-safe launch/watch、nt2 inventory 和
-model Worker prepare/resume；Case mutation 仍全部经 state CLI。未设置该 flag 时继续
-使用原 Standard loop。
+确定性 flow façade 是受管事务的默认路径。Router 通过 `entityctl.py flow` 完成
+compact inspect/check、allowlisted execute、scheduler-safe launch/watch、nt2
+inventory 和 model Worker prepare/resume；Case mutation 仍全部经 state CLI。
+`ENTITY_ROUTER_LEGACY_LOOP=1` 只用于恢复缺少 flow orchestration 字段的历史 Action。
 
 ```text
 entity-skills/
@@ -37,7 +36,43 @@ entity-skills/
 └── legacy/
 ```
 
-当前整体设计见 `design/architecture.md`，workspace 和状态细节见 `design/workspace-and-state.md`，模型高效执行流程见 `design/model-efficient-router-flow.md`，skill 执行观测和日志合同见 `design/skill-observability.md`。`design/` 和 `legacy/` 不属于 Router 运行时上下文。
+当前共享状态与高层入口设计见 `design/architecture-v4.md`；v3 资源图基准见
+`design/architecture.md`，workspace 和状态细节见 `design/workspace-and-state.md`，
+模型高效执行流程见 `design/model-efficient-router-flow.md`，skill 执行观测和日志
+合同见 `design/skill-observability.md`。`design/` 和 `legacy/` 不属于 Router 运行时上下文。
+
+## 公共控制状态
+
+Codex、Claude Code、Kimi Code 和普通 shell 默认共享控制机上的
+`~/.entity-router`。Case、Action、事件、evidence 和 project binding 不写入客户端
+私有目录或源码仓库。远端不可用时仍可读取最后一次控制快照，但缓存 evidence 不代表
+当前远端事实。
+
+```bash
+python3 skills/entity-router/scripts/entityctl.py doctor
+python3 skills/entity-router/scripts/entityctl.py \
+  --actor-run-id <run-id> --actor-provider <provider> \
+  bundle install --source-root /path/to/entity-skills/skills
+python3 skills/entity-router/scripts/entityctl.py project bind \
+  --project-root /absolute/project --case <case_uid>
+python3 skills/entity-router/scripts/entityctl.py inspect \
+  --project-root /absolute/project
+python3 skills/entity-router/scripts/entityctl.py \
+  --actor-run-id <run-id> --actor-provider <provider> \
+  writer acquire --case <case_uid> --expected-revision <n> \
+  --lease-id <lease-id> --ttl-seconds 900
+python3 skills/entity-router/scripts/entityctl.py \
+  --actor-run-id <run-id> --actor-provider <provider> \
+  --writer-lease-id <lease-id> flow execute --request <flow-request.json>
+```
+
+`entityctl inspect` 是紧凑只读入口；`entityctl run-status` 从 Case 推导当前 run
+Locator，并最多执行一次远端调用。详细存放合同、provenance 和迁移计划见
+`design/architecture-v4.md`。
+
+`entityctl bundle install` 将一个经过 hash 验证的运行版本发布到
+`~/.entity-skills/bundles/`；Codex、Claude Code 和 Kimi Code 的 discovery 目录只保留
+指向同一 bundle 的符号链接投影，不再分别维护三套文件。
 
 `entity-pgen` 的直接调用分为只读和 standalone 修改。它在写入前必须运行自身的 preflight；preflight 查询 Router registry 和 Locator envelope，注册源码只有当前有效、site 匹配的 `pgen.*` Action 才允许修改。Router 控制状态位于独立 control root，不依赖源码祖先目录中的 `_case/` 标记。
 
@@ -107,14 +142,22 @@ python3 tools/skill_observability/skill_observer.py validate \
 `evidence` 同时支持 `router-action`、`env-build` 和 `nt2py-inventory`。
 完整协议与证据等级见 `design/skill-observability.md`。
 
-已有 Codex rollout 可增量导入。adapter 只保留 tool call/output 的 hash、大小、
-顺序和关联 ID，显式忽略对话文本、reasoning 和 encrypted reasoning，
-并排除 observer 自身调用：
+已有 Codex、Claude Code 和 Kimi Code 记录均可增量导入。adapter 只保留 tool
+call/output 的 hash、大小、顺序、原生 session/agent ID 和平台原始 usage，显式忽略
+对话文本和 reasoning，并排除 observer 自身调用：
 
 ```bash
 python3 tools/skill_observability/skill_observer.py import-codex \
   --run-dir <run-dir> \
   --rollout /absolute/path/to/codex-rollout.jsonl
+
+python3 tools/skill_observability/skill_observer.py import-claude \
+  --run-dir <run-dir> \
+  --transcript /absolute/path/to/claude-session.jsonl
+
+python3 tools/skill_observability/skill_observer.py import-kimi \
+  --run-dir <run-dir> \
+  --session /absolute/path/to/kimi-session-directory
 ```
 
 本地验证：

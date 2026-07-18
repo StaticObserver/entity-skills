@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "required": [
+    "public_project_binding",
+    "controller_local_source",
+    "no_remote_contact",
+    "case_state_unchanged",
+    "bounded_summary",
+    "one_tool_roundtrip"
+  ]
+}

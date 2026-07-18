@@ -7,7 +7,11 @@
   "created_at": "",
   "updated_at": "",
   "last_opened_at": "",
-  "control": {"site_id": "local", "root": "/absolute/control/case"},
+  "control": {
+    "site_id": "local",
+    "root": "/absolute/control/case",
+    "writer_lease": null
+  },
   "identity": {"name": "", "summary": "", "tags": []},
   "memory": {
     "goal": "",
