@@ -21,11 +21,17 @@ from entity_router_common import (
     RouterError,
     absolute,
     actor_identity,
+    atomic_write_json,
+    list_site_profiles,
+    load_json,
     load_site_profile,
     now_utc,
     require_attributed_actor,
     router_home,
 )
+from entity_router_operation import apply_plan, status_for_project
+from entity_router_planner import PlanError, load_goal, plan_goal
+from entity_router_store import OperationStore, migrate_v3, store_path
 from entity_router_project import (
     bind_project,
     list_projects,
@@ -344,6 +350,22 @@ def doctor(args):
     actor = actor_identity(args)
     if actor["run_id"] == "unattributed":
         warnings.append("mutations will be unattributed unless an Agent run ID is supplied")
+    database = store_path(home)
+    profiles = []
+    if os.path.isfile(database):
+        profiles = OperationStore(home, create=False).export()["sites"]
+    elif os.path.isdir(os.path.join(home, "sites")):
+        profiles = list_site_profiles(home)
+        warnings.append("v5 store is unavailable; run migrate --from-v3")
+    for profile in profiles:
+        policy = profile.get("policy", {})
+        if (profile.get("scheduler", {}).get("kind") == "slurm"
+                and not policy.get("default_partition")):
+            warnings.append("Site %s has no policy.default_partition" % profile["site_id"])
+        if (profile.get("transport", {}).get("kind") == "ssh"
+                and profile.get("scheduler", {}).get("kind") == "slurm"
+                and not policy.get("default_submit_user")):
+            warnings.append("Site %s has no policy.default_submit_user" % profile["site_id"])
     installs = []
     for provider, path in installed_bundle_roots():
         identity = bundle_hash(path) if os.path.isdir(path) else {"hash": "", "files": 0}
@@ -363,6 +385,8 @@ def doctor(args):
         "controller": {
             "router_home": home,
             "available": os.path.isdir(home),
+            "v5_store": database,
+            "v5_store_available": os.path.isfile(database),
             "case_registry": os.path.join(home, "registry.json"),
             "project_registry": project_registry_path(home),
         },
@@ -376,6 +400,55 @@ def doctor(args):
         "client_installs": installs,
         "warnings": warnings,
     }
+
+
+def plan_operation(args):
+    store = OperationStore(args.router_home, create=False)
+    goal = load_goal(args.goal)
+    result = plan_goal(store, args.project_root, goal, [args.output])
+    atomic_write_json(args.output, result)
+    result["output"] = absolute(args.output)
+    result["artifact_written"] = True
+    return result
+
+
+def apply_operation(args):
+    envelope = load_json(args.plan, "Operation Plan")
+    if (envelope.get("kind") != "entity-router.plan"
+            or not isinstance(envelope.get("goal"), dict)
+            or not isinstance(envelope.get("plan"), dict)):
+        raise EntityCtlError("--plan must be an entity-router.plan envelope")
+    actor = require_attributed_actor(actor_identity(args))
+    store = OperationStore(args.router_home, create=False)
+    operation = apply_plan(
+        store, envelope["goal"], envelope["plan"], actor, plan_path=args.plan
+    )
+    return {
+        "schema_version": 1, "kind": "entity-router.apply", "ok": True,
+        "state_mutated": True, "operation": operation,
+    }
+
+
+def project_status(args):
+    store = OperationStore(args.router_home, create=False)
+    return status_for_project(store, args.project_root, args.live)
+
+
+def migrate_controller(args):
+    if args.export:
+        store = OperationStore(args.router_home, create=False)
+        payload = store.export()
+        atomic_write_json(args.export, payload)
+        return {
+            "schema_version": 1, "kind": "entity-router.export", "ok": True,
+            "state_mutated": False, "output": absolute(args.export),
+            "cases": len(payload["cases"]), "operations": len(payload["operations"]),
+        }
+    if not args.from_v3:
+        raise EntityCtlError("migrate requires --from-v3 or --export")
+    result = migrate_v3(args.router_home, args.dry_run)
+    result["ok"] = True
+    return result
 
 
 def selected_case(home, case_value=None, project_root=None):
@@ -525,7 +598,8 @@ def add_actor_arguments(parser):
     parser.add_argument("--actor-model")
     parser.add_argument("--actor-bundle-hash")
     parser.add_argument(
-        "--writer-lease-id", default=os.environ.get("ENTITY_ROUTER_WRITER_LEASE_ID", "")
+        "--writer-lease-id", default=os.environ.get("ENTITY_ROUTER_WRITER_LEASE_ID", ""),
+        help=argparse.SUPPRESS,
     )
 
 
@@ -533,9 +607,36 @@ def build_parser():
     parser = argparse.ArgumentParser(description="Entity public control-plane CLI")
     parser.add_argument("--router-home", default=router_home())
     add_actor_arguments(parser)
-    sub = parser.add_subparsers(dest="command")
+    sub = parser.add_subparsers(
+        dest="command", metavar="{doctor,plan,apply,status,migrate,install}"
+    )
     doctor_parser = sub.add_parser("doctor")
     doctor_parser.set_defaults(func=doctor)
+
+    plan = sub.add_parser("plan")
+    plan.add_argument("--project-root", required=True)
+    plan.add_argument("--goal", required=True)
+    plan.add_argument("--output", required=True)
+    plan.set_defaults(func=plan_operation)
+
+    apply = sub.add_parser("apply")
+    apply.add_argument("--plan", required=True)
+    apply.set_defaults(func=apply_operation)
+
+    current_status = sub.add_parser("status")
+    current_status.add_argument("--project-root", required=True)
+    current_status.add_argument("--live", action="store_true")
+    current_status.set_defaults(func=project_status)
+
+    migrate = sub.add_parser("migrate")
+    migrate.add_argument("--from-v3", action="store_true")
+    migrate.add_argument("--dry-run", action="store_true")
+    migrate.add_argument("--export")
+    migrate.set_defaults(func=migrate_controller)
+
+    direct_install = sub.add_parser("install")
+    direct_install.add_argument("--source-root", default=DEFAULT_BUNDLE_ROOT)
+    direct_install.set_defaults(func=install_bundle)
 
     bundle = sub.add_parser("bundle")
     bundle_sub = bundle.add_subparsers(dest="bundle_command")
@@ -610,8 +711,13 @@ def main(argv=None):
         if exit_code is not None:
             return exit_code
         return 0 if payload.get("ok", True) else 2
+    except PlanError as exc:
+        emit({"ok": False, "status": exc.status, "error": str(exc),
+              "decisions": exc.decisions, "state_mutated": False})
+        return 2
     except (IOError, OSError, ValueError, KeyError, RouterError) as exc:
-        emit({"ok": False, "error": str(exc), "state_mutated": False})
+        emit({"ok": False, "status": "anomaly", "error": str(exc),
+              "state_mutated": False})
         return 2
 
 

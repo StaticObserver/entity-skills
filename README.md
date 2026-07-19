@@ -2,20 +2,19 @@
 
 一套帮助 Agent 使用 [Entity](https://github.com/entity-toolkit/entity) 完成天体物理模拟的 skills package。
 
-`skills/entity-router/SKILL.md` 是受管 simulation 工作流的控制入口。需要 Case 状态、跨领域交接、构建运行、恢复或持续追踪时，由 Router 选择 playbook 并按需调用三个同级子 skill。边界明确的领域任务可以直接调用对应 skill；一旦目标属于受管 Case，修改操作必须持有 Router Action Contract。
+`skills/entity-router/SKILL.md` 是受管 simulation 工作流的控制入口。Router v5
+把公共模型收敛为 `Project → Goal → Operation → Evidence`：主 Agent 只提供用户语义，
+程序派生 Case/Operation ID、路径、hash、Locator、claim、Step 和恢复状态。边界明确的
+只读或 standalone 领域任务仍可直接调用对应 owner skill。
 
 - `entity-pgen`：PGen、匹配 TOML 和设计记录；
 - `entity-env-build`：依赖环境与 Entity 编译；
 - `entity-nt2py`：nt2py 数据访问、绘图和导出。
 
-Simulation 的准备、运行、续跑和状态恢复由 Router 按自身 `playbooks/` 管理，不单独建立 run skill。
-
-初版 Router 将专业工作和 Router-owned run 操作放入 Case-bound Worker；Router 只保留控制上下文。`skills/entity-router/scripts/entity_router_state.py` 负责 Case、Workflow、Action Contract、revision、事件和 stale 状态。
-
-确定性 flow façade 是受管事务的默认路径。Router 通过 `entityctl.py flow` 完成
-compact inspect/check、allowlisted execute、scheduler-safe launch/watch、nt2
-inventory 和 model Worker prepare/resume；Case mutation 仍全部经 state CLI。
-`ENTITY_ROUTER_LEGACY_LOOP=1` 只用于恢复缺少 flow orchestration 字段的历史 Action。
+Simulation run 的计划、提交、续接和状态恢复统一由 `entityctl.py plan/apply/status`
+管理，不单独建立 run skill。SQLite `router.db` 是唯一结构化 controller authority；
+Local 与 SSH 使用同一个内容寻址 executor 和同一份 StepSpec。旧 Case v3、Action 和
+deterministic flow 只保留为一次性迁移及历史恢复材料。
 
 ```text
 entity-skills/
@@ -36,41 +35,40 @@ entity-skills/
 └── legacy/
 ```
 
-当前共享状态与高层入口设计见 `design/architecture-v4.md`；v3 资源图基准见
-`design/architecture.md`，workspace 和状态细节见 `design/workspace-and-state.md`，
-模型高效执行流程见 `design/model-efficient-router-flow.md`，skill 执行观测和日志
-合同见 `design/skill-observability.md`。`design/` 和 `legacy/` 不属于 Router 运行时上下文。
+当前实施合同见 `design/router-v5-goal-operation-architecture.md`；改造前基线见
+`design/current-entity-router-architecture-2026-07-19.md`。`architecture-v4.md`、
+`architecture.md` 和 `model-efficient-router-flow.md` 是历史设计，不代表当前公共入口。
+skill 执行观测合同见 `design/skill-observability.md`。`design/` 和 `legacy/` 不属于
+Router 运行时上下文。
 
 ## 公共控制状态
 
 Codex、Claude Code、Kimi Code 和普通 shell 默认共享控制机上的
-`~/.entity-router`。Case、Action、事件、evidence 和 project binding 不写入客户端
-私有目录或源码仓库。远端不可用时仍可读取最后一次控制快照，但缓存 evidence 不代表
-当前远端事实。
+`~/.entity-router/router.db`。Operation、identity、事件和 evidence reference 不写入
+客户端私有目录或源码仓库。远端不可用时仍可读取最后一次控制快照，但缓存 evidence
+不代表当前远端事实。
 
 ```bash
 python3 skills/entity-router/scripts/entityctl.py doctor
 python3 skills/entity-router/scripts/entityctl.py \
   --actor-run-id <run-id> --actor-provider <provider> \
-  bundle install --source-root /path/to/entity-skills/skills
-python3 skills/entity-router/scripts/entityctl.py project bind \
-  --project-root /absolute/project --case <case_uid>
-python3 skills/entity-router/scripts/entityctl.py inspect \
-  --project-root /absolute/project
+  install --source-root /path/to/entity-skills/skills
+python3 skills/entity-router/scripts/entityctl.py migrate --from-v3 --dry-run
+python3 skills/entity-router/scripts/entityctl.py migrate --from-v3
+python3 skills/entity-router/scripts/entityctl.py plan \
+  --project-root /absolute/project --goal goal.json --output plan.json
 python3 skills/entity-router/scripts/entityctl.py \
   --actor-run-id <run-id> --actor-provider <provider> \
-  writer acquire --case <case_uid> --expected-revision <n> \
-  --lease-id <lease-id> --ttl-seconds 900
-python3 skills/entity-router/scripts/entityctl.py \
-  --actor-run-id <run-id> --actor-provider <provider> \
-  --writer-lease-id <lease-id> flow execute --request <flow-request.json>
+  apply --plan plan.json
+python3 skills/entity-router/scripts/entityctl.py status \
+  --project-root /absolute/project --live
 ```
 
-`entityctl inspect` 是紧凑只读入口；`entityctl run-status` 从 Case 推导当前 run
-Locator，并最多执行一次远端调用。详细存放合同、provenance 和迁移计划见
-`design/architecture-v4.md`。
+`plan` 只写指定的 Plan artifact，不推进 controller 状态；同一 Plan 重复 `apply`
+会根据 Step receipt 恢复，不重复 `sbatch`。`status` 默认只读本地 controller；
+`--live` 最多执行一次远端调用。
 
-`entityctl bundle install` 将一个经过 hash 验证的运行版本发布到
+`entityctl install` 将一个经过 hash 验证的运行版本发布到
 `~/.entity-skills/bundles/`；Codex、Claude Code 和 Kimi Code 的 discovery 目录只保留
 指向同一 bundle 的符号链接投影，不再分别维护三套文件。
 

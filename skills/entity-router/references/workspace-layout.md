@@ -1,98 +1,54 @@
 # Multi-site Workspace Contract
 
-Router v3 models a Case as locators and immutable identities, not as one
-directory. A `Locator` is always `{site_id, path}` in JSON and
-`site_id:/absolute/path` on the CLI.
+A resource identity is always the pair `(site_id, absolute path)` plus its
+fingerprint. A Site may be a local machine or one SSH access boundary covering
+an HPC login node, scheduler, compute nodes, and shared filesystem.
 
-## Controller state
-
-The controller is the single writer. The default root is
-`$ENTITY_ROUTER_HOME` or `~/.entity-router`:
+## Controller layout
 
 ```text
 ~/.entity-router/
-├── registry.json
-├── project-bindings.json
-├── sites/<site_id>.json
-└── cases/<case_uid>-<label>/
-    ├── case.json
-    ├── events.jsonl
-    ├── actions/<action_id>/{request.json,result.json}
-    ├── history/
-    └── evidence/
+├── router.db                         # v5 authority
+├── registry.json                    # preserved v3 evidence after migration
+├── project-bindings.json            # preserved v3 evidence after migration
+├── sites/*.json                     # preserved v3 evidence after migration
+└── cases/*/                          # preserved v3 evidence after migration
 ```
 
-`registry.json` is a rebuildable index. `case.json` is the control snapshot.
-Workers never write this tree. A remote Worker receives an immutable request
-under that site's staging root and returns owner artifacts/evidence.
+`router.db` contains compact facts and evidence references only. It never lives
+inside a source checkout and is never copied into provider-private roots such
+as `.codex`, `.claude`, or `.kimi-code`.
 
-`case.json.control.writer_lease` is an optional short-lived coordination record,
-not a second writer. The state CLI remains the only writer and changes the holder
-only under the Case lock and expected revision. Expired leases do not block
-recovery; handoff and release remain visible in `events.jsonl`.
+## Owner-site layout
 
-`project-bindings.json` is the controller-local public mapping from normalized
-project roots to Case UIDs. It lets Codex, Claude Code, Kimi Code, and shell
-agents on the same machine discover one Case from any project subdirectory.
-It contains no readiness or evidence copy and resolves the Case through
-`registry.json`. Use `scripts/entity_router_project.py`; never create a
-provider-specific binding under `.codex`, `.claude`, or `.kimi-code`.
-
-Controller files default to the Agent machine. If an execution site is offline,
-the Case, Action history, and last verified evidence remain readable locally;
-the old evidence must not be reported as a live remote observation.
-
-## Site profile
-
-A logical execution site represents one access boundary, including an HPC
-login node, its scheduler, compute nodes, and a shared filesystem. It records:
-
-- `site_id`, local or SSH transport, SSH alias, and scheduler kind;
-- independent `source_root`, `build_root`, `run_root`, `deps_root`,
-  `staging_root`, and `analysis_root` values;
-- no password, private key, token, or site-specific repair in the core skill.
-
-Roots may be absent until a phase needs them and never need a common parent.
-Recommended immutable paths are:
+Roots are independent and need not share a parent:
 
 ```text
 <build_root>/<case_uid>/<build_id>
 <run_root>/<case_uid>/<run_id>
-<staging_root>/<case_uid>/<snapshot_id>
+<staging_root>/<case_uid>/<operation_id>/
+<analysis_root>/<case_uid>/<analysis_id>
 ```
 
-Existing compatible paths may be registered directly.
+Builds and runs are immutable once their identities are committed. Raw data
+remains authoritative at the execution/data Site; fetch only inventory, logs,
+figures, reports, or an explicitly selected subset.
 
-## Source authority and replicas
+## Source authority
 
-Each Case has exactly one editable source authority. PGen, TOML, and design
-locators must be inside that authority root. Other checkouts are replicas and
-are never silently treated as current.
+Each Case has one editable source authority. A clean Git tree or a
+content-addressed manifest identifies its exact content. Dirty and untracked
+files are included in the manifest; `dirty=true` alone is not an identity.
+Other checkouts are replicas until exact equality is proven. PGen, TOML, and
+design edits occur only at the source authority.
 
-Materialization modes are explicit:
+## Execution envelope
 
-- `git-ref`: checkout an exact commit; default for formal build/run.
-- `snapshot`: package dirty/untracked files into an immutable manifest-hashed
-  directory and verify every file after transfer.
-- `shared`: accept a shared-filesystem mapping only after revision/hash proof.
-- `external`: accept a user-managed copy only after revision/hash proof.
+The controller derives allowed roots and immutable Step requests. The Site
+executor may write only beneath those roots and never writes `router.db`.
+Receipts remain under the Operation staging root so Apply can recover after a
+lost controller process.
 
-Mutable rsync/tar directories are transport mechanisms, not source identity.
-Authority transfer is a separate `source.transfer-authority` Action and
-requires matching clean Git commit/tree evidence.
-
-## Build, run, data, and analysis
-
-These are independent resources. A build records an immutable `build_id` and
-source revision. A run records a new immutable `run_id` and the referenced
-`build_id`. Raw data remains authoritative at its data site; inventory, logs,
-figures, reports, or an explicitly selected subset may be fetched. Analysis
-defaults to the data site.
-
-No source checkout may contain Router control state merely to make discovery
-work. Managed-path detection queries the controller registry and Locator
-envelope.
-
-PGen/TOML/design remain the versioned project facts. Session exports, Agent
-memory, full skill copies, mutable Case files, and remote raw data do not belong
-in the source checkout.
+Site-local module setup or policy belongs in a trusted Site adapter, not in the
+GoalSpec or generic Router core. Passwords, tokens, private keys, mutable session
+memory, and full skill copies do not belong in project or controller state.

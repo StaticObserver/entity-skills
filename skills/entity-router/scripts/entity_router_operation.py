@@ -1,0 +1,517 @@
+#!/usr/bin/env python3
+"""Apply immutable v5 Operation Plans and expose compact controller status."""
+
+from __future__ import print_function
+
+import json
+import os
+import shlex
+import shutil
+import tempfile
+import threading
+
+from entity_router_common import (
+    RouterError,
+    absolute,
+    atomic_write_json,
+    now_utc,
+    run_command,
+    run_on_site,
+    sha256_file,
+)
+from entity_router_planner import _source_identity, validate_goal, validate_plan
+from entity_router_store import StoreError, canonical_hash
+
+
+class OperationError(RouterError):
+    pass
+
+
+def _json_from_stdout(stdout, label):
+    for line in reversed((stdout or "").splitlines()):
+        try:
+            value = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(value, dict):
+            return value
+    raise OperationError("%s returned invalid JSON" % label)
+
+
+def _copy_verified(source, target, expected):
+    if sha256_file(source) != expected:
+        raise OperationError("payload changed since planning: %s" % source)
+    parent = os.path.dirname(target)
+    if not os.path.isdir(parent):
+        os.makedirs(parent)
+    if os.path.isfile(target):
+        if sha256_file(target) != expected:
+            raise OperationError("staged payload exists with another identity: %s" % target)
+        return
+    descriptor, temporary = tempfile.mkstemp(prefix=".payload-", dir=parent)
+    os.close(descriptor)
+    try:
+        shutil.copy2(source, temporary)
+        if sha256_file(temporary) != expected:
+            raise OperationError("copied payload failed identity verification")
+        os.replace(temporary, target)
+    finally:
+        try:
+            os.unlink(temporary)
+        except OSError:
+            pass
+
+
+class ExecutorClient(object):
+    def __init__(self, profile):
+        self.profile = profile
+        self.transport = profile.get("transport", {}).get("kind")
+        self.alias = profile.get("transport", {}).get("ssh_alias", "")
+        self.script = os.path.join(os.path.dirname(__file__), "entity_router_executor.py")
+        self.digest = sha256_file(self.script)
+        staging = profile.get("roots", {}).get("staging_root")
+        if not staging:
+            raise OperationError("execution Site has no staging_root")
+        self.remote_script = os.path.join(
+            staging, ".entity-router-executor", self.digest, "entity_router_executor.py"
+        )
+
+    def _remote_hash(self, path):
+        script = (
+            "import hashlib,os,sys; p=sys.argv[1]; "
+            "print(hashlib.sha256(open(p,'rb').read()).hexdigest() if os.path.isfile(p) else '')"
+        )
+        code, stdout, stderr = run_on_site(self.profile, ["python3", "-c", script, path])
+        if code != 0:
+            raise OperationError("cannot verify remote file: %s" % (stderr.strip() or stdout.strip()))
+        return stdout.strip()
+
+    def _scp(self, source, target):
+        code, unused, stderr = run_command([
+            "scp", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10",
+            source, "%s:%s" % (self.alias, shlex.quote(target)),
+        ])
+        if code != 0:
+            raise OperationError("cannot stage remote file: %s" % stderr.strip())
+
+    def ensure_executor(self):
+        if self.transport == "local":
+            _copy_verified(self.script, self.remote_script, self.digest)
+            return self.remote_script
+        parent = os.path.dirname(self.remote_script)
+        code, unused, stderr = run_on_site(self.profile, ["mkdir", "-p", parent])
+        if code != 0:
+            raise OperationError("cannot prepare remote executor directory: %s" % stderr.strip())
+        current = self._remote_hash(self.remote_script)
+        if current:
+            if current != self.digest:
+                raise OperationError("content-addressed remote executor has wrong identity")
+            return self.remote_script
+        temporary = self.remote_script + ".tmp-%d" % os.getpid()
+        self._scp(self.script, temporary)
+        if self._remote_hash(temporary) != self.digest:
+            raise OperationError("remote executor failed identity verification")
+        code, unused, stderr = run_on_site(
+            self.profile, ["python3", "-c", "import os,sys; os.replace(sys.argv[1],sys.argv[2])",
+                           temporary, self.remote_script]
+        )
+        if code != 0:
+            raise OperationError("cannot activate remote executor: %s" % stderr.strip())
+        return self.remote_script
+
+    def stage_payload(self, payload):
+        source = absolute(payload["source"])
+        target = payload["target"]
+        expected = payload["sha256"]
+        if self.transport == "local":
+            _copy_verified(source, target, expected)
+            return
+        if sha256_file(source) != expected:
+            raise OperationError("payload changed since planning: %s" % source)
+        parent = os.path.dirname(target)
+        code, unused, stderr = run_on_site(self.profile, ["mkdir", "-p", parent])
+        if code != 0:
+            raise OperationError("cannot prepare remote payload directory: %s" % stderr.strip())
+        current = self._remote_hash(target)
+        if current:
+            if current != expected:
+                raise OperationError("staged payload exists with another identity")
+            return
+        temporary = target + ".tmp-%d" % os.getpid()
+        self._scp(source, temporary)
+        if self._remote_hash(temporary) != expected:
+            raise OperationError("remote payload failed identity verification")
+        code, unused, stderr = run_on_site(
+            self.profile, ["python3", "-c", "import os,sys; os.replace(sys.argv[1],sys.argv[2])",
+                           temporary, target]
+        )
+        if code != 0:
+            raise OperationError("cannot activate remote payload: %s" % stderr.strip())
+
+    def _stage_envelope(self, envelope):
+        request_path = os.path.join(
+            os.path.dirname(envelope["receipt"]), envelope["step_id"] + "-request.json"
+        )
+        if self.transport == "local":
+            atomic_write_json(request_path, envelope)
+            return request_path
+        descriptor, local_path = tempfile.mkstemp(prefix="entity-step-", suffix=".json")
+        try:
+            with os.fdopen(descriptor, "w") as handle:
+                json.dump(envelope, handle, indent=2, sort_keys=True)
+                handle.write("\n")
+            parent = os.path.dirname(request_path)
+            code, unused, stderr = run_on_site(self.profile, ["mkdir", "-p", parent])
+            if code != 0:
+                raise OperationError("cannot prepare remote request directory: %s" % stderr.strip())
+            self._scp(local_path, request_path)
+            return request_path
+        finally:
+            try:
+                os.unlink(local_path)
+            except OSError:
+                pass
+
+    def invoke(self, command, envelope):
+        executor = self.ensure_executor()
+        request_path = self._stage_envelope(envelope)
+        code, stdout, stderr = run_on_site(
+            self.profile, ["python3", executor, command, "--request", request_path]
+        )
+        result = _json_from_stdout(stdout, "Site executor")
+        if code != 0 or result.get("status") not in {"completed", "verified"}:
+            raise OperationError(
+                result.get("message") or stderr.strip() or "Site executor failed"
+            )
+        return result
+
+
+class ClaimHeartbeat(object):
+    def __init__(self, store, operation_id, token, ttl_seconds=90):
+        self.store = store
+        self.operation_id = operation_id
+        self.token = token
+        self.ttl_seconds = ttl_seconds
+        self.stop_event = threading.Event()
+        self.error = None
+        self.thread = threading.Thread(target=self._run)
+        self.thread.daemon = True
+
+    def _run(self):
+        while not self.stop_event.wait(max(5, self.ttl_seconds // 3)):
+            try:
+                self.store.renew_claim(self.operation_id, self.token, self.ttl_seconds)
+            except Exception as exc:
+                self.error = exc
+                return
+
+    def start(self):
+        self.thread.start()
+
+    def stop(self):
+        self.stop_event.set()
+        self.thread.join(timeout=2)
+
+    def check(self):
+        if self.error is not None:
+            raise OperationError("Operation claim heartbeat failed: %s" % self.error)
+
+
+def _verify_source(plan):
+    source_root = plan["source_identity"]["root"]["path"]
+    artifacts = [os.path.join(source_root, path)
+                 for path in plan.get("controller_artifacts", [])]
+    current, unused = _source_identity(source_root, artifacts)
+    if current != plan["source_identity"]["fingerprint"]:
+        raise OperationError("project source changed after planning; create a new plan")
+
+
+def _validate_derivations(goal, plan, profile, source_profile, plan_path):
+    project_root = absolute(plan["project_root"])
+    case_spec = plan["case"]
+    if set(case_spec) != {"case_uid", "case_id", "project_root", "source", "current"}:
+        raise OperationError("Plan Case keys differ from schema")
+    if (case_spec["case_uid"] != plan["case_uid"]
+            or absolute(case_spec["project_root"]) != project_root):
+        raise OperationError("Plan Case does not match the project")
+    source_identity = plan["source_identity"]
+    authority = case_spec.get("source", {}).get("authority", {})
+    if (source_identity.get("id") != plan["source_id"]
+            or source_identity.get("kind") != "source"
+            or source_identity.get("root") != authority):
+        raise OperationError("Plan source identity differs from source authority")
+    source_root = absolute(authority.get("path", ""))
+    declared_source_root = absolute(
+        source_profile.get("roots", {}).get("source_root", "")
+    )
+    try:
+        source_inside = os.path.commonpath(
+            [source_root, os.path.normpath(declared_source_root)]
+        ) == os.path.normpath(declared_source_root)
+    except (TypeError, ValueError):
+        source_inside = False
+    if (source_profile.get("transport", {}).get("kind") != "local" or not source_inside):
+        raise OperationError("source authority is outside the local source Site")
+    expected_artifacts = []
+    if plan_path:
+        normalized_plan = absolute(plan_path)
+        try:
+            if os.path.commonpath([normalized_plan, source_root]) == source_root:
+                expected_artifacts = [os.path.relpath(normalized_plan, source_root)]
+        except ValueError:
+            pass
+    if plan.get("controller_artifacts") != expected_artifacts:
+        raise OperationError("Plan source exclusions do not match the Plan artifact")
+    input_path = absolute(
+        goal["input"] if os.path.isabs(goal["input"])
+        else os.path.join(project_root, goal["input"])
+    )
+    prepare = plan["steps"][1]
+    launch = plan["steps"][2]
+    preflight = plan["steps"][0]
+    run_spec = prepare.get("request", {}).get("run_spec", {})
+    run_identity = prepare.get("identity", {})
+    compute = run_spec.get("compute", {})
+    build_id = run_identity.get("parents", {}).get("build_id", "")
+    input_sha256 = sha256_file(input_path)
+    seed = {
+        "case_uid": plan["case_uid"], "source_id": plan["source_id"],
+        "input_sha256": input_sha256, "site_id": plan["site_id"],
+        "executable": run_spec.get("executable"), "build_id": build_id,
+        "compute": compute,
+    }
+    digest = canonical_hash(seed).split(":", 1)[1][:16]
+    if plan["run_id"] != "run-" + digest or plan["operation_id"] != "op-" + digest:
+        raise OperationError("derived Operation or run identity is invalid")
+    roots = profile.get("roots", {})
+    expected_run = os.path.join(roots["run_root"], plan["case_uid"], plan["run_id"])
+    expected_stage = os.path.join(
+        roots["staging_root"], plan["case_uid"], plan["operation_id"]
+    )
+    expected_receipts = [
+        os.path.join(expected_stage, "receipts", "run-preflight.json"),
+        os.path.join(expected_stage, "receipts", "run-prepare.json"),
+        os.path.join(expected_stage, "receipts", "run-launch.json"),
+    ]
+    expected_allowed = [[expected_stage], [expected_stage, expected_run],
+                        [expected_stage, expected_run]]
+    for index, step in enumerate(plan["steps"]):
+        if step.get("site_id") != plan["site_id"]:
+            raise OperationError("Step Site differs from Operation Site")
+        if step.get("receipt") != expected_receipts[index]:
+            raise OperationError("derived Step receipt is invalid")
+        if step.get("allowed_roots") != expected_allowed[index]:
+            raise OperationError("derived Step allowed roots are invalid")
+    executable = run_spec.get("executable", "")
+    try:
+        executable_inside = os.path.commonpath(
+            [os.path.normpath(executable), os.path.normpath(roots["build_root"])]
+        ) == os.path.normpath(roots["build_root"])
+    except (TypeError, ValueError):
+        executable_inside = False
+    if not executable_inside:
+        raise OperationError("Plan executable is outside the Site build_root")
+    payloads = prepare.get("payloads", [])
+    expected_input_target = os.path.join(expected_stage, "payloads", "input.toml")
+    if payloads != [{"source": input_path, "target": expected_input_target,
+                     "sha256": input_sha256}]:
+        raise OperationError("derived input payload is invalid")
+    expected_submit = os.path.join(expected_run, "run.sbatch")
+    expected_manifest = os.path.join(expected_run, "run-manifest.json")
+    expected_job_name = "entity-%s" % plan["operation_id"]
+    if (preflight["request"].get("run_spec") != run_spec
+            or preflight["request"].get("job_name") != expected_job_name
+            or preflight["request"].get("staging_root") != expected_stage
+            or prepare["request"].get("run_root") != expected_run
+            or prepare["request"].get("staged_input") != expected_input_target
+            or prepare["request"].get("submit_script") != expected_submit
+            or prepare["request"].get("manifest") != expected_manifest
+            or prepare["request"].get("staging_root") != expected_stage
+            or launch["request"].get("run_root") != expected_run
+            or launch["request"].get("submit_script") != expected_submit
+            or launch["request"].get("job_name") != expected_job_name
+            or launch["request"].get("submit_user") != compute.get("submit_user")):
+        raise OperationError("derived run paths are invalid")
+    if run_identity.get("id") != plan["run_id"] or run_identity.get("root") != {
+            "site_id": plan["site_id"], "path": expected_run}:
+        raise OperationError("derived run identity payload is invalid")
+    if launch.get("identity") != run_identity:
+        raise OperationError("prepare and launch run identities differ")
+    expected_manifest_payload = {
+        "schema_version": 3, "case_uid": plan["case_uid"], "run_id": plan["run_id"],
+        "source_id": plan["source_id"], "build_id": build_id,
+        "site_id": plan["site_id"], "input_sha256": input_sha256,
+        "executable": run_spec.get("executable"), "compute": compute,
+        "created_by_operation": plan["operation_id"],
+    }
+    if prepare["request"].get("manifest_payload") != expected_manifest_payload:
+        raise OperationError("derived run manifest is invalid")
+
+
+def _ensure_case(store, plan, actor):
+    try:
+        case = store.get_case(plan["case_uid"])
+    except StoreError:
+        if not plan.get("create_case"):
+            raise
+        case_spec = plan["case"]
+        with store.transaction() as connection:
+            store.upsert_case(
+                case_spec["case_uid"], case_spec["case_id"], case_spec["project_root"],
+                case_spec["source"], case_spec["current"], {}, connection=connection,
+            )
+            identity = plan["source_identity"]
+            store.add_identity(
+                plan["case_uid"], "source", identity["id"], identity, True, connection,
+            )
+            store._event(connection, plan["case_uid"], None, "case.created", {}, actor)
+        case = store.get_case(plan["case_uid"])
+    return case
+
+
+def _identity_projection(step, effect):
+    identity = dict(step.get("identity") or {})
+    if not identity:
+        return []
+    if step["kind"] == "run.prepare.v2":
+        identity["status"] = "prepared"
+    elif step["kind"] == "run.launch.v2":
+        identity["status"] = "submitted"
+        identity["scheduler"] = effect
+    return [{"dimension": "run", "identity_id": identity["id"],
+             "payload": identity, "current": True}]
+
+
+def apply_plan(store, goal, plan, actor, claim_ttl=90, plan_path=None):
+    goal = validate_goal(goal)
+    plan = validate_plan(plan)
+    if canonical_hash(goal) != plan["goal_hash"]:
+        raise OperationError("GoalSpec does not match Operation Plan")
+    profile = store.get_site(plan["site_id"])
+    if canonical_hash(profile) != plan["site_profile_hash"]:
+        raise OperationError("Site profile changed after planning; create a new plan")
+    source_profile = store.get_site(plan["source_identity"]["root"]["site_id"])
+    if canonical_hash(source_profile) != plan["source_site_profile_hash"]:
+        raise OperationError("source Site profile changed after planning; create a new plan")
+    _validate_derivations(goal, plan, profile, source_profile, plan_path)
+    _verify_source(plan)
+    _ensure_case(store, plan, actor)
+    source_identity = plan["source_identity"]
+    store.add_identity(
+        plan["case_uid"], "source", source_identity["id"], source_identity, True
+    )
+    operation = store.create_operation(plan["case_uid"], goal, plan, actor)
+    if operation["status"] == "completed":
+        return operation
+    token = store.claim_operation(operation["operation_id"], actor, claim_ttl)
+    if not token:
+        return store.get_operation(operation["operation_id"])
+    heartbeat = ClaimHeartbeat(store, operation["operation_id"], token, claim_ttl)
+    heartbeat.start()
+    client = ExecutorClient(profile)
+    active_index = -1
+    try:
+        for index, step in enumerate(plan["steps"]):
+            active_index = index
+            heartbeat.check()
+            current_operation = store.get_operation(operation["operation_id"])
+            if current_operation["steps"][index]["status"] == "committed":
+                continue
+            store.update_step(
+                operation["operation_id"], index, "intent_written", actor=actor
+            )
+            for payload in step.get("payloads", []):
+                client.stage_payload(payload)
+            envelope = {
+                "schema_version": 1,
+                "operation_id": operation["operation_id"],
+                "plan_hash": plan["plan_hash"],
+                "step_index": index,
+                "step_id": step["step_id"],
+                "kind": step["kind"],
+                "site_id": step["site_id"],
+                "receipt": step["receipt"],
+                "allowed_roots": step["allowed_roots"],
+                "request": step["request"],
+            }
+            executed = client.invoke("execute", envelope)
+            heartbeat.check()
+            verified = client.invoke("verify", envelope)
+            receipt = verified.get("receipt", {})
+            for key in ["operation_id", "plan_hash", "step_index", "step_id", "kind"]:
+                if receipt.get(key) != envelope.get(key):
+                    raise OperationError("verified receipt identity differs from Step")
+            case = store.get_case(plan["case_uid"])
+            current = dict(case["current"])
+            identities = _identity_projection(step, verified.get("effect", {}))
+            if identities:
+                current["source_id"] = plan["source_id"]
+                current["run_id"] = plan["run_id"]
+                current["active_run"] = step["identity"]["root"]
+                readiness = dict(current.get("readiness", {}))
+                readiness["run"] = "ready" if step["kind"] == "run.prepare.v2" else "submitted"
+                current["readiness"] = readiness
+            store.commit_step(
+                operation["operation_id"], index, verified.get("effect", {}),
+                verified.get("outputs", []), identities, current, actor,
+            )
+        result = {
+            "run_id": plan["run_id"], "site_id": plan["site_id"],
+            "completed_at": now_utc(), "steps": len(plan["steps"]),
+        }
+        store.finish_operation(operation["operation_id"], "completed", result, actor)
+        return store.get_operation(operation["operation_id"])
+    except Exception as exc:
+        error = {"message": str(exc), "observed_at": now_utc()}
+        if "multiple scheduler jobs match" in str(exc):
+            store.finish_operation(operation["operation_id"], "anomaly", error, actor)
+        elif active_index >= 0:
+            try:
+                store.update_step(
+                    operation["operation_id"], active_index, "anomaly",
+                    error=error, actor=actor,
+                )
+            except Exception:
+                pass
+        raise
+    finally:
+        heartbeat.stop()
+        store.release_claim(operation["operation_id"], token, actor)
+
+
+def status_for_project(store, project_root, live=False):
+    case = store.resolve_project(project_root)
+    current = case["current"]
+    run_id = current.get("run_id", "")
+    run_identity = None
+    for item in case.get("identities", {}).get("run", {}).get("items", []):
+        if item.get("id") == run_id or item.get("identity_id") == run_id:
+            run_identity = item
+            break
+    result = {
+        "schema_version": 1, "kind": "entity-router.status", "ok": True,
+        "state_mutated": False, "remote_calls": 0,
+        "project_root": case.get("project_root"), "case_uid": case["case_uid"],
+        "active_operation": case.get("active_operation"), "current": current,
+        "run": run_identity, "live": None,
+    }
+    if not live or not run_identity:
+        return result
+    scheduler = run_identity.get("scheduler", {})
+    job_id = scheduler.get("job_id", "")
+    if not job_id:
+        return result
+    profile = store.get_site(run_identity["site_id"])
+    if profile.get("scheduler", {}).get("kind") != "slurm":
+        raise OperationError("live status currently supports Slurm only")
+    code, stdout, stderr = run_on_site(
+        profile, ["squeue", "-h", "-j", job_id, "-o", "%T"]
+    )
+    if profile.get("transport", {}).get("kind") == "ssh":
+        result["remote_calls"] = 1
+    if code != 0:
+        raise OperationError("scheduler status failed: %s" % (stderr.strip() or stdout.strip()))
+    result["live"] = {"scheduler": "slurm", "job_id": job_id,
+                      "state": stdout.strip().splitlines()[0] if stdout.strip() else "NOT_FOUND",
+                      "observed_at": now_utc()}
+    return result

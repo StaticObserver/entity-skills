@@ -33,7 +33,13 @@ class RouterContractTest(unittest.TestCase):
             "scripts/entity_router_flow_runners.py",
             "scripts/entity_router_flow_metrics.py",
             "scripts/entity_router_project.py",
+            "scripts/entity_router_store.py",
+            "scripts/entity_router_planner.py",
+            "scripts/entity_router_operation.py",
+            "scripts/entity_router_executor.py",
             "scripts/entityctl.py",
+            "templates/goal.schema.json",
+            "templates/operation-plan.schema.json",
             "templates/flow-request.schema.json",
             "templates/flow-result.schema.json",
             "templates/flow-check.schema.json",
@@ -107,28 +113,27 @@ class RouterContractTest(unittest.TestCase):
         self.assertFalse(envelope["additionalProperties"])
         self.assertFalse(receipt["additionalProperties"])
 
+    def test_v5_goal_schema_excludes_controller_mechanics(self):
+        goal = self.read_json("templates/goal.schema.json")
+        plan = self.read_json("templates/operation-plan.schema.json")
+        self.assertFalse(goal["additionalProperties"])
+        self.assertEqual(goal["properties"]["kind"]["const"], "run")
+        for field in ["operation_id", "case_uid", "locator", "owner", "lease", "plan_hash"]:
+            self.assertNotIn(field, goal["properties"])
+        self.assertEqual(plan["properties"]["kind"]["const"], "entity-router.plan")
+
     def test_router_declares_all_execution_domains(self):
         with open(os.path.join(ROUTER_ROOT, "SKILL.md"), "r") as handle:
             skill = handle.read()
-        for value in [
-            "entity-pgen",
-            "entity-env-build",
-            "entity-nt2py",
-            "playbook-run",
-            "playbook-analysis",
-            "failure-triage",
-        ]:
+        for value in ["entity-pgen", "entity-env-build", "entity-nt2py"]:
             self.assertIn(value, skill)
 
-    def test_run_status_is_a_non_delegated_read_only_fast_path(self):
+    def test_status_is_controller_local_by_default(self):
         with open(os.path.join(ROUTER_ROOT, "SKILL.md"), "r") as handle:
             skill = handle.read()
-        with open(os.path.join(ROUTER_ROOT, "playbooks", "run-simulation.md"), "r") as handle:
-            playbook = handle.read()
-        self.assertIn("run.status", skill)
-        self.assertIn("run.status", playbook)
-        self.assertIn("Do not dispatch", playbook)
-        self.assertIn("does not create an Action", playbook)
+        self.assertIn("status", skill)
+        self.assertIn("controller-local", skill)
+        self.assertIn("at most one remote call", skill)
 
     def test_action_prefixes_have_fixed_execution_contracts(self):
         expected = {

@@ -1,4 +1,4 @@
 interface:
   display_name: "Entity Router"
   short_description: "Orchestrate multi-site Entity simulation cases"
-  default_prompt: "Use $entity-router to recover or execute this Entity simulation workflow with controller-authoritative Case state, explicit sites and Locators, immutable identities, and isolated workers; use the direct read-only run.status fast path for a simple progress check."
+  default_prompt: "Use $entity-router to express this managed Entity task as a minimal GoalSpec, create one immutable Plan, Apply or recover the same Operation, and report controller-local Status unless one live scheduler observation is needed."

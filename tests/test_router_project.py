@@ -193,7 +193,7 @@ class RouterProjectBindingTest(unittest.TestCase):
         environment["HOME"] = fake_home
         environment["ENTITY_SKILLS_HOME"] = os.path.join(fake_home, ".entity-skills")
         installed = self.cli(
-            ENTITYCTL, "bundle", "install", "--source-root", source_root,
+            ENTITYCTL, "install", "--source-root", source_root,
             environment=environment,
         )
         self.assertTrue(installed["bundle_hash"].startswith("sha256:"))
@@ -212,6 +212,16 @@ class RouterProjectBindingTest(unittest.TestCase):
                     os.path.realpath(target),
                     os.path.join(installed["bundle_root"], skill),
                 )
+
+    def test_entityctl_help_exposes_only_the_small_v5_surface(self):
+        process = subprocess.Popen(
+            [sys.executable, ENTITYCTL, "--help"], stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE, universal_newlines=True,
+        )
+        stdout, unused = process.communicate()
+        self.assertEqual(process.returncode, 0)
+        self.assertIn("{doctor,plan,apply,status,migrate,install}", stdout)
+        self.assertNotIn("flow,writer", stdout)
 
 
 if __name__ == "__main__":
