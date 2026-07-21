@@ -1,11 +1,10 @@
 # E2E 对照测试 Runbook（轻量 A/B）
 
-一个任务、两种条件、每轮三条命令。本文件是唯一设置文档；原有 `pre_gold`
-脚手架（submission oracle、thresholds 冻结）留待以后需要正式对照时再用。
+一个任务、两种条件、每轮三条命令。本文件是唯一设置文档。
 
 ## 任务规定（随任务文本发给被测 agent）
 
-按 `task.md` 和 `fixtures/physics-spec.json` 完成 Entity 模拟全流程：
+按 `task.md` 和 `physics-spec.json`（本目录）完成 Entity 模拟全流程：
 
 1. 确认评测站点环境，生成编译环境脚本；
 2. 产出一致的 `docs/design.md` + `pgen.hpp` + 输入 TOML；
@@ -45,7 +44,8 @@ python3 $OBS start \
   --agent-configuration <config-sha256> \
   --tool-profile claude-code-default --tool-configuration <tools-sha256> \
   --skill skills/entity-router --skill skills/entity-pgen \
-  --skill skills/entity-env-build --skill skills/entity-nt2py
+  --skill skills/entity-env-build --skill skills/entity-nt2py \
+  --trace-home ~/entity-eval-runs/<run>/traces
 # → 输出 <run-dir>（N 组去掉 --skill 行，--variant no-entity-skills）
 # 注：--agent-configuration / --tool-configuration 要求小写 SHA-256 hex，
 #     例如 shasum -a 256 <claude-settings.json> | cut -d' ' -f1
@@ -58,13 +58,26 @@ python3 $OBS finish --run-dir <run-dir> --status completed \
   --input-tokens <n> --output-tokens <n> --wall-time-ms <ms>
 ```
 
+## 每轮目录约定（仓库外）
+
+每轮一个独立目录，例如 `~/entity-eval-runs/2026-07-22-S1/`：
+
+```text
+├── project/       # Agent 工作区（PGen、TOML、docs、分析脚本）
+├── controller/    # S 组 Router home（export ENTITY_ROUTER_HOME 指到这里；N 组不用）
+└── traces/        # skill_observer --trace-home 指到这里
+```
+
+远端 `siyuan` 上的 source/build/run/analysis 根由 site profile 的 `roots`
+决定（S 组用 `entityctl site add` 注册时指定，建议每轮换路径，如
+`~/entity-eval/<run-name>/`）；Slurm 日志在远端 run root 的 `logs/`。
+
 ## 每轮归档
 
-`traces/<date>-<S|N>-<n>/`：
+轮次结束后把 `summary.json` 放进该轮目录：
 
-- trace run 目录（上一步生成）；
 - `summary.json`：变体、模型、开始/结束时间、wall-clock、input/output token、
   Slurm job ID、完成与否、一句话结果；
-- agent 最终自报摘要（原文）。
+- agent 最终自报摘要（原文，可放 `agent-summary.md`）。
 
 Slurm 排队时间单独注明，不计入 agent 执行时间。

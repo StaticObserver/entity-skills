@@ -145,15 +145,10 @@ receipts、controller status 和独立 scheduler snapshot。
 
 ## 端到端 Skill 对照评测
 
-`evals/e2e-neutral-streaming/` 保存 skill/no-skill 共用的冻结任务、物理语义、
-公共 `submission.json` schema、独立 oracle 和 fake Slurm。当前状态为 `pre_gold`：
-本地证据链可运行，但在维护者 gold run 固定 Entity commit、时间步和物理容差前，
-physics oracle 会 fail closed，正式对照被禁止。
-
-```bash
-python3 evals/e2e-neutral-streaming/oracle/validate_submission.py \
-  --submission /absolute/path/submission.json
-```
+`evals/e2e-neutral-streaming/` 是轻量 A/B 对照：skill/no-skill 两组跑同一个
+模拟任务，对照 trace、token 消耗和完成时间。任务文本、物理参数和启动方式见
+`evals/e2e-neutral-streaming/RUNBOOK.md`。正式对照脚手架（oracle、schema、
+fake Slurm）已于 2026-07-21 移除，历史版本见 git 记录。
 
 已有 Codex、Claude Code 和 Kimi Code 记录均可增量导入。adapter 只保留 tool
 call/output 的 hash、大小、顺序、原生 session/agent ID 和平台原始 usage，显式忽略
@@ -181,7 +176,5 @@ python3 -m unittest discover -s skills/entity-pgen/tests -v
 python3 -m unittest discover -s skills/entity-env-build/tests -v
 python3 -m py_compile \
   tools/skill_observability/*.py \
-  tools/skill_observability/adapters/*.py \
-  evals/e2e-neutral-streaming/fixtures/*.py \
-  evals/e2e-neutral-streaming/oracle/*.py
+  tools/skill_observability/adapters/*.py
 ```

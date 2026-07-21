@@ -33,17 +33,12 @@ python3 -m unittest discover -s skills/entity-env-build/tests -v
 python3 -m py_compile \
   tools/skill_observability/*.py \
   tools/skill_observability/adapters/*.py \
-  evals/e2e-neutral-streaming/fixtures/*.py \
-  evals/e2e-neutral-streaming/oracle/*.py \
   skills/entity-router/scripts/*.py \
   skills/entity-pgen/scripts/*.py \
   skills/entity-env-build/scripts/*.py \
   skills/entity-nt2py/scripts/*.py
 
 for schema in tools/skill_observability/schemas/*.json; do
-  python3 -m json.tool "$schema" >/dev/null
-done
-for schema in evals/e2e-neutral-streaming/schemas/*.json; do
   python3 -m json.tool "$schema" >/dev/null
 done
 ```

@@ -23,8 +23,6 @@ jobs:
           python3 -m py_compile \
             tools/skill_observability/*.py \
             tools/skill_observability/adapters/*.py \
-            evals/e2e-neutral-streaming/fixtures/*.py \
-            evals/e2e-neutral-streaming/oracle/*.py \
             skills/entity-router/scripts/*.py \
             skills/entity-pgen/scripts/*.py \
             skills/entity-env-build/scripts/*.py \
@@ -43,16 +41,6 @@ jobs:
         run: |
           for schema in tools/skill_observability/schemas/*.json; do
             python3 -m json.tool "$schema" >/dev/null
-          done
-          for schema in evals/e2e-neutral-streaming/schemas/*.json; do
-            python3 -m json.tool "$schema" >/dev/null
-          done
-          for document in \
-            evals/e2e-neutral-streaming/experiment.json \
-            evals/e2e-neutral-streaming/fixtures/*.json \
-            evals/e2e-neutral-streaming/variants/*.json \
-            evals/e2e-neutral-streaming/oracle/thresholds.json; do
-            python3 -m json.tool "$document" >/dev/null
           done
 
       - name: Check skill frontmatter
