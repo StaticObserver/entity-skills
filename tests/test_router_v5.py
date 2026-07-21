@@ -18,9 +18,9 @@ if SCRIPTS not in sys.path:
 
 from entity_router_operation import ExecutorClient, OperationError, apply_plan, status_for_project
 from entity_router_planner import PlanError, plan_goal, validate_goal
-from entity_router_common import atomic_write_json, save_site_profile
+from entity_router_common import atomic_write_json
 import entity_router_common
-from entity_router_store import OperationStore, canonical_hash, migrate_v3
+from entity_router_store import OperationStore, canonical_hash
 
 
 class RouterV5Test(unittest.TestCase):
@@ -133,6 +133,39 @@ else:
         stdout, stderr = process.communicate()
         self.assertTrue(stdout.strip(), stderr)
         return process.returncode, json.loads(stdout)
+
+    def test_site_add_and_list_via_cli(self):
+        profile = dict(self.profile, site_id="cli-site")
+        profile_path = os.path.join(self.temp, "cli-site.json")
+        atomic_write_json(profile_path, profile)
+        code, payload = self.cli("site", "add", "--profile", profile_path)
+        self.assertEqual(code, 0)
+        self.assertEqual(payload["site_id"], "cli-site")
+
+        code, listing = self.cli("site", "list")
+        self.assertEqual(code, 0)
+        site_ids = [site["site_id"] for site in listing["sites"]]
+        self.assertIn("cli-site", site_ids)
+        self.assertIn("local-slurm", site_ids)
+
+        goal = dict(self.goal, site="cli-site")
+        goal_path = os.path.join(self.temp, "goal.json")
+        atomic_write_json(goal_path, goal)
+        code, planned = self.cli(
+            "plan", "--project-root", self.project,
+            "--goal", goal_path, "--output", self.plan_file,
+        )
+        self.assertEqual(code, 0)
+        self.assertEqual(planned["plan"]["site_id"], "cli-site")
+
+    def test_site_add_rejects_invalid_profile(self):
+        profile = dict(self.profile, site_id="bad site!")
+        profile_path = os.path.join(self.temp, "bad-site.json")
+        atomic_write_json(profile_path, profile)
+        code, payload = self.cli("site", "add", "--profile", profile_path)
+        self.assertEqual(code, 2)
+        self.assertFalse(payload["ok"])
+        self.assertFalse(payload["state_mutated"])
 
     def test_goal_rejects_controller_fields_and_reports_decisions(self):
         invalid = dict(self.goal, operation_id="chosen-by-user")
@@ -320,53 +353,6 @@ else:
         self.assertEqual(before, after)
         self.assertEqual(self.store.get_operation(operation["operation_id"])["steps"][0]["status"],
                          "pending")
-
-    def test_v3_migration_is_one_time_and_does_not_dual_write(self):
-        legacy_home = os.path.join(self.temp, "legacy-controller")
-        case_uid = "legacy-case"
-        case_dir = os.path.join(legacy_home, "cases", case_uid)
-        os.makedirs(os.path.join(case_dir, "actions", "active"))
-        legacy_profile = dict(self.profile, site_id="legacy-local")
-        save_site_profile(legacy_home, legacy_profile)
-        state = {
-            "schema_version": 3, "case_uid": case_uid, "case_id": "legacy",
-            "created_at": "2026-01-01T00:00:00Z", "revision": 7,
-            "source": {"authority": {"site_id": "legacy-local", "path": self.project},
-                       "revision": {"kind": "git", "commit": "abc"}},
-            "workflow": {"active_action_id": "active", "status": "active"},
-            "readiness": {"run": {"status": "submitted"}},
-            "resources": {
-                "build": {"current_id": "", "identities": []},
-                "run": {"current_id": "run-old", "active": {
-                    "site_id": "legacy-local", "path": self.run_root},
-                    "identities": [{"id": "run-old", "kind": "run"}]},
-                "data": {"current_id": "", "identities": []},
-                "analysis": {"current_id": "", "identities": []},
-            },
-        }
-        atomic_write_json(os.path.join(case_dir, "case.json"), state)
-        atomic_write_json(os.path.join(case_dir, "actions", "active", "result.json"),
-                          {"status": "completed"})
-        atomic_write_json(os.path.join(legacy_home, "registry.json"), {
-            "schema_version": 1, "updated_at": "2026-01-01T00:00:00Z",
-            "cases": {case_uid: {"case_uid": case_uid, "case_id": "legacy",
-                                  "control_root": case_dir}},
-        })
-        atomic_write_json(os.path.join(legacy_home, "project-bindings.json"), {
-            "schema_version": 1, "projects": {self.project: {"case_uid": case_uid}}
-        })
-        first = migrate_v3(legacy_home)
-        self.assertTrue(first["state_mutated"])
-        migrated = OperationStore(legacy_home, create=False)
-        imported = migrated.resolve_project(self.project)
-        self.assertEqual(imported["current"]["run_id"], "run-old")
-        self.assertTrue(imported["legacy"]["result_on_active"])
-        state["resources"]["run"]["current_id"] = "changed-only-in-v3"
-        atomic_write_json(os.path.join(case_dir, "case.json"), state)
-        second = migrate_v3(legacy_home)
-        self.assertTrue(second["already_imported"])
-        self.assertFalse(second["state_mutated"])
-        self.assertEqual(migrated.resolve_project(self.project)["current"]["run_id"], "run-old")
 
     def test_ssh_uses_the_same_steps_and_live_status_has_one_remote_call(self):
         local_plan = self.make_plan()["plan"]

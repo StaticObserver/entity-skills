@@ -13,8 +13,7 @@
 
 Simulation run 的计划、提交、续接和状态恢复统一由 `entityctl.py plan/apply/status`
 管理，不单独建立 run skill。SQLite `router.db` 是唯一结构化 controller authority；
-Local 与 SSH 使用同一个内容寻址 executor 和同一份 StepSpec。旧 Case v3、Action 和
-deterministic flow 只保留为一次性迁移及历史恢复材料。
+Local 与 SSH 使用同一个内容寻址 executor 和同一份 StepSpec。
 
 ```text
 entity-skills/
@@ -24,13 +23,13 @@ entity-skills/
 │   │   ├── agents/
 │   │   ├── scripts/
 │   │   ├── references/
-│   │   ├── playbooks/
 │   │   └── templates/
 │   ├── entity-pgen/
 │   ├── entity-env-build/
 │   └── entity-nt2py/
 ├── tests/
 ├── tools/skill_observability/
+├── evals/e2e-neutral-streaming/
 ├── design/
 └── legacy/
 ```
@@ -53,8 +52,11 @@ python3 skills/entity-router/scripts/entityctl.py doctor
 python3 skills/entity-router/scripts/entityctl.py \
   --actor-run-id <run-id> --actor-provider <provider> \
   install --source-root /path/to/entity-skills/skills
-python3 skills/entity-router/scripts/entityctl.py migrate --from-v3 --dry-run
-python3 skills/entity-router/scripts/entityctl.py migrate --from-v3
+python3 skills/entity-router/scripts/entityctl.py \
+  --actor-run-id <run-id> --actor-provider <provider> \
+  site add --profile /absolute/site-profile.json
+python3 skills/entity-router/scripts/entityctl.py site list
+python3 skills/entity-router/scripts/entityctl.py export --output /absolute/export.json
 python3 skills/entity-router/scripts/entityctl.py plan \
   --project-root /absolute/project --goal goal.json --output plan.json
 python3 skills/entity-router/scripts/entityctl.py \
@@ -72,7 +74,7 @@ python3 skills/entity-router/scripts/entityctl.py status \
 `~/.entity-skills/bundles/`；Codex、Claude Code 和 Kimi Code 的 discovery 目录只保留
 指向同一 bundle 的符号链接投影，不再分别维护三套文件。
 
-`entity-pgen` 的直接调用分为只读和 standalone 修改。它在写入前必须运行自身的 preflight；preflight 查询 Router registry 和 Locator envelope，注册源码只有当前有效、site 匹配的 `pgen.*` Action 才允许修改。Router 控制状态位于独立 control root，不依赖源码祖先目录中的 `_case/` 标记。
+`entity-pgen` 的直接调用分为只读和 standalone 修改。它在写入前必须运行自身的 preflight；preflight 查询 Router v5 store，target 落在注册 Case 的 source/identity/active-run Locator 内即视为受管。受管写入当前 fail-closed（v5 pgen Goal 尚未实现），只读与 standalone 路径不受影响。Router 控制状态位于独立 control root，不依赖源码祖先目录中的 `_case/` 标记。
 
 ## 仓库与发布
 
@@ -127,8 +129,7 @@ python3 tools/skill_observability/skill_observer.py tool \
 python3 tools/skill_observability/skill_observer.py evidence pgen-preflight \
   --run-dir <run-dir> \
   --result <run-dir>/evidence/pgen-preflight.json \
-  --expect allowed \
-  --action-request /absolute/router-case/actions/<action-id>/request.json
+  --expect allowed
 
 python3 tools/skill_observability/skill_observer.py finish \
   --run-dir <run-dir> --status completed
@@ -137,8 +138,22 @@ python3 tools/skill_observability/skill_observer.py validate \
   --run-dir <run-dir>
 ```
 
-`evidence` 同时支持 `router-action`、`env-build` 和 `nt2py-inventory`。
+`evidence` 同时支持历史 `router-action`、v5 `router-operation`、`env-build`
+和 `nt2py-inventory`。v5 验证器核对 Plan hash、Operation/Step journal、owner-site
+receipts、controller status 和独立 scheduler snapshot。
 完整协议与证据等级见 `design/skill-observability.md`。
+
+## 端到端 Skill 对照评测
+
+`evals/e2e-neutral-streaming/` 保存 skill/no-skill 共用的冻结任务、物理语义、
+公共 `submission.json` schema、独立 oracle 和 fake Slurm。当前状态为 `pre_gold`：
+本地证据链可运行，但在维护者 gold run 固定 Entity commit、时间步和物理容差前，
+physics oracle 会 fail closed，正式对照被禁止。
+
+```bash
+python3 evals/e2e-neutral-streaming/oracle/validate_submission.py \
+  --submission /absolute/path/submission.json
+```
 
 已有 Codex、Claude Code 和 Kimi Code 记录均可增量导入。adapter 只保留 tool
 call/output 的 hash、大小、顺序、原生 session/agent ID 和平台原始 usage，显式忽略
@@ -166,5 +181,7 @@ python3 -m unittest discover -s skills/entity-pgen/tests -v
 python3 -m unittest discover -s skills/entity-env-build/tests -v
 python3 -m py_compile \
   tools/skill_observability/*.py \
-  tools/skill_observability/adapters/*.py
+  tools/skill_observability/adapters/*.py \
+  evals/e2e-neutral-streaming/fixtures/*.py \
+  evals/e2e-neutral-streaming/oracle/*.py
 ```

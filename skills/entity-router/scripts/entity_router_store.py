@@ -19,10 +19,6 @@ import uuid
 from entity_router_common import (
     RouterError,
     absolute,
-    ensure_home,
-    list_site_profiles,
-    load_json,
-    load_registry,
     now_utc,
     router_home,
 )
@@ -159,7 +155,8 @@ class OperationStore(object):
         self.home = router_home(home)
         self.path = store_path(self.home)
         if create:
-            ensure_home(self.home)
+            if not os.path.isdir(self.home):
+                os.makedirs(self.home)
             self._initialize()
         elif not os.path.isfile(self.path):
             raise StoreError("Router v5 store does not exist; run entityctl migrate")
@@ -601,117 +598,3 @@ class OperationStore(object):
             return result
         finally:
             connection.close()
-
-
-def _legacy_project_bindings(home):
-    path = os.path.join(router_home(home), "project-bindings.json")
-    if not os.path.isfile(path):
-        return {}
-    payload = load_json(path, "legacy project bindings")
-    return payload.get("projects", {})
-
-
-def migrate_v3(home=None, dry_run=False):
-    """Import v3 controller facts once without changing preserved v3 files."""
-    home = router_home(home)
-    database = store_path(home)
-    if os.path.isfile(database):
-        existing_store = OperationStore(home, create=False)
-        connection = existing_store._connect()
-        try:
-            imported = connection.execute(
-                "SELECT value FROM meta WHERE key='v3_imported_at'"
-            ).fetchone()
-        finally:
-            connection.close()
-        if imported is not None:
-            exported = existing_store.export()
-            return {
-                "schema_version": 1, "kind": "entity-router.v3-migration",
-                "router_home": home, "sites": len(exported["sites"]),
-                "cases": len(exported["cases"]), "projects": len(exported["projects"]),
-                "dry_run": bool(dry_run), "already_imported": True,
-                "imported_at": imported["value"], "state_mutated": False,
-            }
-    registry = load_registry(home)
-    sites = list_site_profiles(home)
-    bindings = _legacy_project_bindings(home)
-    summary = {
-        "schema_version": 1, "kind": "entity-router.v3-migration",
-        "router_home": home, "sites": len(sites), "cases": len(registry.get("cases", {})),
-        "projects": len(bindings), "dry_run": bool(dry_run), "state_mutated": not dry_run,
-        "already_imported": False,
-    }
-    if dry_run:
-        return summary
-    store = OperationStore(home, create=True)
-    with store.transaction() as connection:
-        for profile in sites:
-            store.upsert_site(profile, connection)
-        project_by_case = {}
-        for root, record in bindings.items():
-            project_by_case.setdefault(record.get("case_uid", ""), []).append(root)
-        for case_uid, record in registry.get("cases", {}).items():
-            case_path = os.path.join(record["control_root"], "case.json")
-            state = load_json(case_path, "legacy Case")
-            roots = project_by_case.get(case_uid, [])
-            project_root = sorted(roots, key=len)[0] if roots else None
-            resources = state.get("resources", {})
-            current = {
-                "source_id": canonical_hash(state.get("source", {}).get("revision", {})),
-                "build_id": resources.get("build", {}).get("current_id", ""),
-                "run_id": resources.get("run", {}).get("current_id", ""),
-                "active_run": resources.get("run", {}).get("active"),
-                "data_id": resources.get("data", {}).get("current_id", ""),
-                "analysis_id": resources.get("analysis", {}).get("current_id", ""),
-                "readiness": dict((key, value.get("status", ""))
-                                  for key, value in state.get("readiness", {}).items()),
-            }
-            active_action = state.get("workflow", {}).get("active_action_id", "")
-            result_on_active = False
-            if active_action:
-                result_on_active = os.path.isfile(os.path.join(
-                    record["control_root"], "actions", active_action, "result.json"
-                ))
-            legacy = {
-                "schema_version": state.get("schema_version"),
-                "control_root": record["control_root"],
-                "revision": state.get("revision"),
-                "workflow": state.get("workflow", {}),
-                "readiness": state.get("readiness", {}),
-                "result_on_active": result_on_active,
-                "imported_at": now_utc(),
-            }
-            store.upsert_case(
-                case_uid, state.get("case_id", record.get("case_id", case_uid)),
-                project_root, state.get("source", {}), current, legacy,
-                state.get("created_at"), connection,
-            )
-            source_revision = state.get("source", {}).get("revision", {})
-            if source_revision:
-                source_id = current["source_id"]
-                store.add_identity(case_uid, "source", source_id, {
-                    "id": source_id, "identity_id": source_id, "dimension": "source",
-                    "payload": source_revision,
-                }, True, connection)
-            for dimension in ["build", "run", "data", "analysis"]:
-                resource = resources.get(dimension, {})
-                for identity in resource.get("identities", []):
-                    store.add_identity(
-                        case_uid, dimension, identity.get("id", ""), identity,
-                        identity.get("id", "") == resource.get("current_id", ""), connection,
-                    )
-            store._event(connection, case_uid, None, "case.v3_imported", {
-                "legacy_revision": state.get("revision"),
-                "result_on_active": result_on_active,
-            }, {"run_id": "migration", "provider": "entityctl"})
-        for root, record in bindings.items():
-            if record.get("case_uid") in registry.get("cases", {}):
-                connection.execute(
-                    "INSERT OR REPLACE INTO projects(project_root,case_uid,updated_at) VALUES(?,?,?)",
-                    (absolute(root), record["case_uid"], now_utc()),
-                )
-        connection.execute(
-            "INSERT OR REPLACE INTO meta(key,value) VALUES('v3_imported_at',?)", (now_utc(),)
-        )
-    return summary

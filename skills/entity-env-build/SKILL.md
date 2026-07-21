@@ -41,9 +41,9 @@ same logical site:
 Schema v1 `checkout_root/workdir` is accepted only for explicit legacy
 migration. Never generate new state from the old monolithic convention.
 
-When invoked by Router, read the Action request first. Execute only at
-`execution_site_id`, use only Locator-authorized paths, and never write Router
-control state. A remote Worker returns evidence; the controller commits state.
+Execute only at the execution Site and Locator-authorized paths supplied by
+the caller, and never write Router control state. A remote Worker returns
+evidence; the controller commits state.
 
 ## Hard gates
 
@@ -152,8 +152,8 @@ module stack, or SSH credential.
 
 Diagnose from the first causal error and current JSON/log evidence. Repair only
 build-owned state. PGen/TOML errors return to `entity-pgen`; source divergence
-or materialization errors return to Router `source.*`; scheduler/run errors
-return to Router playbooks; unknown cross-layer causes return as
+or materialization errors return to `entity-router`; scheduler/run errors
+return to `entity-router`; unknown cross-layer causes return as
 `failure.triage` evidence.
 
 Success requires:

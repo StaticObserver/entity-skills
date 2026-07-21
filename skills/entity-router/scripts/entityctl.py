@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
 """Compact public control-plane entrypoint for Entity simulation projects.
 
-Read-only commands return controller-local summaries and never create Actions.
-Mutating project bindings are stored in the shared Router home, not in source
-checkouts or provider-specific directories.
+Read-only commands return controller-local summaries. The SQLite router.db in
+the Router home is the sole structured controller authority.
 """
 
 from __future__ import print_function
@@ -13,7 +12,6 @@ import hashlib
 import json
 import os
 import shutil
-import subprocess
 import sys
 import tempfile
 
@@ -22,25 +20,15 @@ from entity_router_common import (
     absolute,
     actor_identity,
     atomic_write_json,
-    list_site_profiles,
     load_json,
-    load_site_profile,
     now_utc,
     require_attributed_actor,
     router_home,
+    validate_site_profile,
 )
 from entity_router_operation import apply_plan, status_for_project
 from entity_router_planner import PlanError, load_goal, plan_goal
-from entity_router_store import OperationStore, migrate_v3, store_path
-from entity_router_project import (
-    bind_project,
-    list_projects,
-    project_registry_path,
-    resolve_project,
-    unbind_project,
-)
-from entity_router_state import load_state, resolve_case
-from entity_router_status import build_config, build_profile, collect_site_status
+from entity_router_store import OperationStore, store_path
 
 
 SCHEMA_VERSION = 1
@@ -249,97 +237,6 @@ def install_bundle(args):
     }
 
 
-def run_flow(args):
-    values = list(args.flow_args)
-    if values and values[0] == "--":
-        values = values[1:]
-    if not values:
-        raise EntityCtlError("flow requires inspect, check, execute, or watch arguments")
-    if values[0] in {"execute", "watch"}:
-        require_attributed_actor(actor_identity(args))
-        if not args.writer_lease_id:
-            raise EntityCtlError(
-                "mutating flow requires a writer lease; acquire one and pass --writer-lease-id"
-            )
-    script = os.path.join(SCRIPT_DIR, "entity_router_flow.py")
-    environment = os.environ.copy()
-    actor = actor_identity(args)
-    for key, value in [
-        ("ENTITY_AGENT_RUN_ID", actor["run_id"]),
-        ("ENTITY_AGENT_PROVIDER", actor["provider"]),
-        ("ENTITY_AGENT_CLIENT", actor["client"]),
-        ("ENTITY_AGENT_SESSION_ID", actor["session_id"]),
-        ("ENTITY_AGENT_MODEL", actor["model"]),
-        ("ENTITY_SKILLS_BUNDLE_HASH", actor["bundle_hash"]),
-        ("ENTITY_ROUTER_WRITER_LEASE_ID", args.writer_lease_id),
-    ]:
-        if value:
-            environment[key] = value
-    process = subprocess.Popen(
-        [sys.executable, script, "--router-home", args.router_home] + values,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        universal_newlines=True,
-        env=environment,
-    )
-    stdout, stderr = process.communicate()
-    try:
-        payload = json.loads(stdout)
-    except ValueError:
-        raise EntityCtlError(
-            "flow façade returned invalid JSON: %s" % (stderr.strip() or stdout.strip())
-        )
-    payload["_entityctl_exit_code"] = process.returncode
-    return payload
-
-
-def run_writer(args):
-    values = list(args.writer_args)
-    if values and values[0] == "--":
-        values = values[1:]
-    if not values:
-        raise EntityCtlError("writer requires status, acquire, handoff, or release")
-    aliases = {
-        "status": "writer-status",
-        "acquire": "acquire-writer",
-        "handoff": "handoff-writer",
-        "release": "release-writer",
-    }
-    if values[0] not in aliases:
-        raise EntityCtlError("unknown writer command: %s" % values[0])
-    state_command = aliases[values[0]]
-    script = os.path.join(SCRIPT_DIR, "entity_router_state.py")
-    environment = os.environ.copy()
-    actor = actor_identity(args)
-    for key, value in [
-        ("ENTITY_AGENT_RUN_ID", actor["run_id"]),
-        ("ENTITY_AGENT_PROVIDER", actor["provider"]),
-        ("ENTITY_AGENT_CLIENT", actor["client"]),
-        ("ENTITY_AGENT_SESSION_ID", actor["session_id"]),
-        ("ENTITY_AGENT_MODEL", actor["model"]),
-        ("ENTITY_SKILLS_BUNDLE_HASH", actor["bundle_hash"]),
-        ("ENTITY_ROUTER_WRITER_LEASE_ID", args.writer_lease_id),
-    ]:
-        if value:
-            environment[key] = value
-    process = subprocess.Popen(
-        [sys.executable, script, "--router-home", args.router_home, state_command] + values[1:],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        universal_newlines=True,
-        env=environment,
-    )
-    stdout, stderr = process.communicate()
-    try:
-        payload = json.loads(stdout)
-    except ValueError:
-        raise EntityCtlError(
-            "writer command returned invalid JSON: %s" % (stderr.strip() or stdout.strip())
-        )
-    payload["_entityctl_exit_code"] = process.returncode
-    return payload
-
-
 def doctor(args):
     home = router_home(args.router_home)
     runtime_bundle = bundle_hash(DEFAULT_BUNDLE_ROOT)
@@ -354,9 +251,8 @@ def doctor(args):
     profiles = []
     if os.path.isfile(database):
         profiles = OperationStore(home, create=False).export()["sites"]
-    elif os.path.isdir(os.path.join(home, "sites")):
-        profiles = list_site_profiles(home)
-        warnings.append("v5 store is unavailable; run migrate --from-v3")
+    else:
+        warnings.append("v5 store is unavailable; register Sites with entityctl site add")
     for profile in profiles:
         policy = profile.get("policy", {})
         if (profile.get("scheduler", {}).get("kind") == "slurm"
@@ -387,8 +283,6 @@ def doctor(args):
             "available": os.path.isdir(home),
             "v5_store": database,
             "v5_store_available": os.path.isfile(database),
-            "case_registry": os.path.join(home, "registry.json"),
-            "project_registry": project_registry_path(home),
         },
         "trace_home": trace_home(),
         "runtime_bundle": {
@@ -399,6 +293,32 @@ def doctor(args):
         "actor": actor,
         "client_installs": installs,
         "warnings": warnings,
+    }
+
+
+def site_add(args):
+    actor = require_attributed_actor(actor_identity(args))
+    profile = validate_site_profile(load_json(args.profile, "Site profile"))
+    store = OperationStore(args.router_home)
+    store.upsert_site(profile)
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "ok": True,
+        "kind": "entityctl.site.add",
+        "state_mutated": True,
+        "actor": actor,
+        "site_id": profile["site_id"],
+    }
+
+
+def site_list(args):
+    store = OperationStore(args.router_home, create=False)
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "ok": True,
+        "kind": "entityctl.site.list",
+        "state_mutated": False,
+        "sites": store.export()["sites"],
     }
 
 
@@ -434,160 +354,15 @@ def project_status(args):
     return status_for_project(store, args.project_root, args.live)
 
 
-def migrate_controller(args):
-    if args.export:
-        store = OperationStore(args.router_home, create=False)
-        payload = store.export()
-        atomic_write_json(args.export, payload)
-        return {
-            "schema_version": 1, "kind": "entity-router.export", "ok": True,
-            "state_mutated": False, "output": absolute(args.export),
-            "cases": len(payload["cases"]), "operations": len(payload["operations"]),
-        }
-    if not args.from_v3:
-        raise EntityCtlError("migrate requires --from-v3 or --export")
-    result = migrate_v3(args.router_home, args.dry_run)
-    result["ok"] = True
-    return result
-
-
-def selected_case(home, case_value=None, project_root=None):
-    if case_value and project_root:
-        raise EntityCtlError("use either --case or --project-root, not both")
-    binding = None
-    if case_value:
-        case_dir = resolve_case(home, case_value)
-    else:
-        binding = resolve_project(home, project_root or os.getcwd())
-        case_dir = binding["case_dir"]
-    return case_dir, load_state(case_dir), binding
-
-
-def compact_case_summary(home, case_dir, state, binding=None):
-    resources = state["resources"]
-    summary = {
-        "schema_version": SCHEMA_VERSION,
-        "ok": True,
-        "kind": "entityctl.inspect",
-        "state_mutated": False,
-        "controller": {
-            "router_home": router_home(home),
-            "case_dir": case_dir,
-            "source": "controller-local",
-            "remote_contacted": False,
-        },
-        "writer": {
-            "lease": state.get("control", {}).get("writer_lease"),
-        },
-        "project": None if not binding else {
-            "project_id": binding["project_id"],
-            "project_root": binding["project_root"],
-        },
-        "case": {
-            "case_uid": state["case_uid"],
-            "case_id": state["case_id"],
-            "revision": state["revision"],
-            "status": state["case_status"],
-        },
-        "workflow": {
-            "workflow_id": state["workflow"]["workflow_id"],
-            "status": state["workflow"]["status"],
-            "phase": state["workflow"]["phase"],
-            "owner": state["workflow"]["owner"],
-            "active_action_id": state["workflow"].get("active_action_id", ""),
-            "next_action": state["workflow"].get("next_action", ""),
-            "allowed_actions": state["workflow"].get("allowed_actions", []),
-            "blockers": state["workflow"].get("blockers", []),
-        },
-        "readiness": dict(
-            (key, value.get("status", ""))
-            for key, value in sorted(state["readiness"].items())
-        ),
-        "source": {
-            "authority": state["source"]["authority"],
-            "transfer_policy": state["source"].get("transfer_policy", ""),
-        },
-        "current": {
-            "build_id": resources["build"].get("current_id", ""),
-            "run_id": resources["run"].get("current_id", ""),
-            "active_run": resources["run"].get("active"),
-            "data_id": resources["data"].get("current_id", ""),
-            "analysis_id": resources["analysis"].get("current_id", ""),
-        },
-        "artifacts": state["artifacts"],
-        "offline_semantics": "cached evidence is readable but is not a current remote observation",
+def export_store(args):
+    store = OperationStore(args.router_home, create=False)
+    payload = store.export()
+    atomic_write_json(args.output, payload)
+    return {
+        "schema_version": 1, "kind": "entity-router.export", "ok": True,
+        "state_mutated": False, "output": absolute(args.output),
+        "cases": len(payload["cases"]), "operations": len(payload["operations"]),
     }
-    return summary
-
-
-def bounded_summary(summary, max_bytes):
-    rendered = json.dumps(summary, sort_keys=True, separators=(",", ":"))
-    if len(rendered.encode("utf-8")) <= max_bytes:
-        summary["summary_bytes"] = len(rendered.encode("utf-8"))
-        return summary
-    compact = dict(summary)
-    compact.pop("artifacts", None)
-    compact["summary_truncated"] = True
-    rendered = json.dumps(compact, sort_keys=True, separators=(",", ":"))
-    compact["summary_bytes"] = len(rendered.encode("utf-8"))
-    if compact["summary_bytes"] > max_bytes:
-        raise EntityCtlError("compact Case summary exceeds --max-bytes")
-    return compact
-
-
-def inspect_case(args):
-    home = router_home(args.router_home)
-    case_dir, state, binding = selected_case(home, args.case, args.project_root)
-    return bounded_summary(
-        compact_case_summary(home, case_dir, state, binding), args.max_bytes
-    )
-
-
-def run_status(args):
-    home = router_home(args.router_home)
-    unused_case_dir, state, binding = selected_case(home, args.case, args.project_root)
-    active = state["resources"]["run"].get("active")
-    if not active:
-        raise EntityCtlError("Case has no active run Locator")
-    profile = load_site_profile(home, active["site_id"])
-    status_args = argparse.Namespace(
-        router_home=home,
-        site_id=active["site_id"],
-        ssh_alias=None,
-        scheduler=args.scheduler,
-        run_id=state["resources"]["run"].get("current_id", ""),
-        run_root=active["path"],
-        job_id=args.job_id,
-        pid=args.pid,
-        pid_start_ticks=args.pid_start_ticks,
-        progress_log=args.progress_log,
-        stderr_log=args.stderr_log,
-        fields_root=args.fields_root,
-        checkpoint_root=args.checkpoint_root,
-        field_pattern=args.field_pattern,
-        checkpoint_pattern=args.checkpoint_pattern,
-        total_steps=args.total_steps,
-        target_time=args.target_time,
-        tail_bytes=args.tail_bytes,
-        profile=args.profile,
-    )
-    unused_home, effective_profile = build_profile(status_args)
-    config = build_config(status_args, effective_profile)
-    result = collect_site_status(home, profile if not args.scheduler else effective_profile, config)
-    result.update({
-        "ok": True,
-        "case_uid": state["case_uid"],
-        "case_revision": state["revision"],
-        "project_id": binding["project_id"] if binding else "",
-        "state_mutated": False,
-    })
-    return result
-
-
-def add_case_selector(parser):
-    selector = parser.add_mutually_exclusive_group()
-    selector.add_argument("--case")
-    selector.add_argument("--project-root")
 
 
 def add_actor_arguments(parser):
@@ -597,10 +372,6 @@ def add_actor_arguments(parser):
     parser.add_argument("--actor-session-id")
     parser.add_argument("--actor-model")
     parser.add_argument("--actor-bundle-hash")
-    parser.add_argument(
-        "--writer-lease-id", default=os.environ.get("ENTITY_ROUTER_WRITER_LEASE_ID", ""),
-        help=argparse.SUPPRESS,
-    )
 
 
 def build_parser():
@@ -608,7 +379,7 @@ def build_parser():
     parser.add_argument("--router-home", default=router_home())
     add_actor_arguments(parser)
     sub = parser.add_subparsers(
-        dest="command", metavar="{doctor,plan,apply,status,migrate,install}"
+        dest="command", metavar="{doctor,plan,apply,status,site,export,install}"
     )
     doctor_parser = sub.add_parser("doctor")
     doctor_parser.set_defaults(func=doctor)
@@ -628,11 +399,17 @@ def build_parser():
     current_status.add_argument("--live", action="store_true")
     current_status.set_defaults(func=project_status)
 
-    migrate = sub.add_parser("migrate")
-    migrate.add_argument("--from-v3", action="store_true")
-    migrate.add_argument("--dry-run", action="store_true")
-    migrate.add_argument("--export")
-    migrate.set_defaults(func=migrate_controller)
+    site = sub.add_parser("site")
+    site_sub = site.add_subparsers(dest="site_command")
+    site_add_parser = site_sub.add_parser("add")
+    site_add_parser.add_argument("--profile", required=True)
+    site_add_parser.set_defaults(func=site_add)
+    site_list_parser = site_sub.add_parser("list")
+    site_list_parser.set_defaults(func=site_list)
+
+    export = sub.add_parser("export")
+    export.add_argument("--output", required=True)
+    export.set_defaults(func=export_store)
 
     direct_install = sub.add_parser("install")
     direct_install.add_argument("--source-root", default=DEFAULT_BUNDLE_ROOT)
@@ -643,59 +420,6 @@ def build_parser():
     install = bundle_sub.add_parser("install")
     install.add_argument("--source-root", default=DEFAULT_BUNDLE_ROOT)
     install.set_defaults(func=install_bundle)
-
-    flow = sub.add_parser("flow")
-    flow.add_argument("flow_args", nargs=argparse.REMAINDER)
-    flow.set_defaults(func=run_flow)
-
-    writer = sub.add_parser("writer")
-    writer.add_argument("writer_args", nargs=argparse.REMAINDER)
-    writer.set_defaults(func=run_writer)
-
-    project = sub.add_parser("project")
-    project_sub = project.add_subparsers(dest="project_command")
-    bind = project_sub.add_parser("bind")
-    bind.add_argument("--project-root", required=True)
-    bind.add_argument("--case", required=True)
-    bind.add_argument("--replace", action="store_true")
-    bind.set_defaults(func=lambda args: bind_project(
-        args.router_home, args.project_root, args.case, args.replace,
-        actor_identity(args),
-    ))
-    resolve = project_sub.add_parser("resolve")
-    resolve.add_argument("--project-root", required=True)
-    resolve.set_defaults(func=lambda args: resolve_project(args.router_home, args.project_root))
-    listing = project_sub.add_parser("list")
-    listing.set_defaults(func=lambda args: list_projects(args.router_home))
-    unbind = project_sub.add_parser("unbind")
-    unbind.add_argument("--project-root", required=True)
-    unbind.set_defaults(func=lambda args: unbind_project(
-        args.router_home, args.project_root, actor_identity(args)
-    ))
-
-    inspect_parser = sub.add_parser("inspect")
-    add_case_selector(inspect_parser)
-    inspect_parser.add_argument("--max-bytes", type=int, default=4096)
-    inspect_parser.set_defaults(func=inspect_case)
-
-    status = sub.add_parser("run-status")
-    add_case_selector(status)
-    identity = status.add_mutually_exclusive_group(required=True)
-    identity.add_argument("--job-id")
-    identity.add_argument("--pid", type=int)
-    status.add_argument("--pid-start-ticks")
-    status.add_argument("--scheduler", choices=["none", "slurm", "pbs"])
-    status.add_argument("--progress-log", default="logs/stdout.log")
-    status.add_argument("--stderr-log", default="logs/stderr.log")
-    status.add_argument("--fields-root", default="data/fields")
-    status.add_argument("--checkpoint-root", default="data/checkpoints")
-    status.add_argument("--field-pattern", default="fields.*.bp")
-    status.add_argument("--checkpoint-pattern", default="step-*.bp")
-    status.add_argument("--total-steps", type=int)
-    status.add_argument("--target-time", type=float)
-    status.add_argument("--tail-bytes", type=int, default=131072)
-    status.add_argument("--profile", choices=["quick", "full"], default="quick")
-    status.set_defaults(func=run_status)
     return parser
 
 

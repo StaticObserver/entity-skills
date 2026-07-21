@@ -1,6 +1,6 @@
 ---
 name: entity-pgen
-description: Design, implement, explain, review, and modify Entity problem generators together with matching TOML configurations and docs/design.md. Use directly for bounded PGen-domain work with an exact target, including standalone new or existing PGens, initial fields or particles, boundaries, custom behavior, output, normalization, and PGen-TOML consistency. For writes inside a Router-managed Case, require a valid active pgen.* Action; route Case lifecycle, cross-domain work, builds, runs, untriaged failures, Entity core changes, and scientific analysis to their owners.
+description: Design, implement, explain, review, and modify Entity problem generators together with matching TOML configurations and docs/design.md. Use directly for bounded PGen-domain work with an exact target, including standalone new or existing PGens, initial fields or particles, boundaries, custom behavior, output, normalization, and PGen-TOML consistency. Writes inside a Router-managed Case are currently refused (the v5 pgen Goal is not yet implemented); route Case lifecycle, cross-domain work, builds, runs, untriaged failures, Entity core changes, and scientific analysis to their owners.
 ---
 
 # Entity PGen
@@ -19,8 +19,9 @@ Classify the task before loading domain references or modifying files:
   run directly in standalone or managed paths. Do not create process artifacts.
 - **Standalone write**: modify only PGen-owned artifacts at an exact target
   that is not inside a Router-managed Case. This may run directly.
-- **Managed write**: modify a source Locator registered by Router v3. Require a
-  valid active `pgen.*` Action Contract on that Case's source authority site.
+- **Managed write**: modify a source Locator registered by the Router v5
+  store. Currently refused: managed writes require a v5 pgen Goal, which is
+  not yet implemented. Route the request to `entity-router`.
 
 Before every write, run:
 
@@ -28,21 +29,18 @@ Before every write, run:
 python3 <entity-pgen-skill>/scripts/pgen_preflight.py \
   --router-home <controller-root> \
   --operation write \
-  --target <site_id:/exact/absolute/path> \
-  [--action-request <controller-case/actions/<id>/request.json>]
+  --target <site_id:/exact/absolute/path>
 ```
 
 Resolve `<entity-pgen-skill>` from this `SKILL.md`; do not assume the current
 working directory is the skill directory.
 Run the preflight for each intended target or for their narrow common parent.
 Proceed only when it returns `"allowed": true`. The preflight queries the
-Router registry and verifies Case UID, revision, execution site, owner, and
-Locator envelope; it never infers managed state from ancestor directories. If
-it reports `router-required`, do not write; return the target, detected Case,
-requested change, and reason to `entity-router`. Never modify Router control
-state.
-Do not accept a whole-Case write root: a managed `pgen.*` Action may authorize
-only the exact `pgen.hpp`, matching TOML, and affected paths under `docs/`.
+Router v5 store and checks whether the target Locator falls under a registered
+Case source, identity root, or active run; it never infers managed state from
+ancestor directories. If it reports `router-required`, do not write; return
+the target, detected Case, requested change, and reason to `entity-router`.
+Never modify Router control state.
 
 For a target not registered by Router, treat it as standalone only
 when the user selected an exact location and requested PGen-domain deliverables
@@ -53,7 +51,7 @@ request that continues into build, run, recovery, or analysis to Router.
 
 Handle:
 
-- designing a new PGen and matching TOML in standalone or managed mode;
+- designing a new PGen and matching TOML in standalone mode;
 - modifying or reviewing an existing PGen/TOML pair;
 - maintaining `docs/design.md` alongside implementation changes;
 - checking normalization, coordinate basis, API usage, and PGen-TOML consistency;
@@ -65,7 +63,7 @@ Route elsewhere:
 - dependency setup, CMake configuration, and compilation execution -> `entity-env-build`;
 - failures whose owner is still unclear -> return evidence to the package Router;
 - Entity engine or framework changes -> return a scoped handoff to the package Router;
-- simulation output access and visualization -> `entity-nt2py`; scientific analysis remains in the Router playbook.
+- simulation output access and visualization -> `entity-nt2py`; scientific analysis routes to `entity-router`.
 
 Do not add platform-specific metadata or invocation configuration to the core skill.
 

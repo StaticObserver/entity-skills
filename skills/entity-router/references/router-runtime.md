@@ -13,20 +13,8 @@ artifacts and logs remain at their owner Sites.
 Export without changing controller state:
 
 ```bash
-python3 scripts/entityctl.py migrate --export /absolute/router-export.json
+python3 scripts/entityctl.py export --output /absolute/router-export.json
 ```
-
-## One-time v3 import
-
-```bash
-python3 scripts/entityctl.py migrate --from-v3 --dry-run
-python3 scripts/entityctl.py migrate --from-v3
-```
-
-The import reads `registry.json`, `project-bindings.json`, site profiles, and
-Case v3 files once. It records `v3_imported_at`; later calls return
-`already_imported=true` and do not overwrite v5 facts. Old files are preserved
-and are not dual-written.
 
 ## Operation journal
 
@@ -62,13 +50,15 @@ pre-command, or script text is rejected.
 
 ## Site profiles
 
-During migration, v3 site JSON is imported into SQLite. Required run roots are
-`build_root`, `run_root`, and `staging_root`; a Slurm run Site also declares
-transport and scheduler. Policy may supply `default_cpus_per_gpu`,
-`default_partition`, `default_qos`, `default_submit_user`, and
-`max_cpu_per_gpu`. Secrets and cluster
-repair commands never belong in the profile.
+Sites are registered directly into the store:
 
-The v3 tools (`entity_router_state.py`, `entity_router_flow.py`, project binding,
-writer lease, and old run-status façade) remain only for explicit recovery of a
-pre-import Case. They are not part of the v5 public workflow.
+```bash
+python3 scripts/entityctl.py site add --profile /absolute/site-profile.json
+python3 scripts/entityctl.py site list
+```
+
+Required run roots are `build_root`, `run_root`, and `staging_root`; a Slurm
+run Site also declares transport and scheduler. Policy may supply
+`default_cpus_per_gpu`, `default_partition`, `default_qos`,
+`default_submit_user`, and `max_cpu_per_gpu`. Secrets and cluster
+repair commands never belong in the profile.

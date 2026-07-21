@@ -104,3 +104,20 @@ controller，不触碰 live 状态。
 v5 当前完整执行的 Goal kind 是 `run`。PGen、build、data、analysis 继续由三个 owner skill
 承担领域工作，并遵循“自由探索，严格收束”；把它们全部纳入同一 GoalSpec 外层合同是后续
 扩展，不应通过重新暴露 Action/flow 细节来实现。
+
+## 退役记录（2026-07-21）
+
+v3/v4 代码面已全部删除：`entity_router_state.py`、`entity_router_flow*.py`、
+`entity_router_status.py`、`entity_router_project.py`、`entity_router_site.py`，
+entityctl 兼容命令（`flow`、`writer`、`project`、`inspect`、`run-status`、
+`migrate --from-v3`），v3/v4 模板与全部 playbooks，以及 `evals/router-flow/`
+v4 评测脚手架。`migrate --export` 由 `entityctl export --output` 取代；Site 注册由
+`entityctl site add/list`（直写 v5 store）取代 `entity_router_site.py`。
+
+线上控制器 `~/.entity-router` 的 v3 导入已于 2026-07-19 完成（4 Cases、2 Projects、
+7 Sites），2026-07-21 复核 `doctor` 与两个活跃项目的 `status` 均正常；备份位于
+`~/.entity-router.backup-20260721-132112/`（含 `v5-export.json` 快照）。v3 旧文件
+按迁移语义原地保留为只读证据，v5 不再读取。
+
+`entity-pgen` preflight 改为查询 v5 store；受管写入在 v5 pgen Goal 落地前一律
+fail-closed（`router-required`），只读与 standalone 路径不变。

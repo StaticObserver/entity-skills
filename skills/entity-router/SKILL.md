@@ -24,9 +24,7 @@ resource. Enter an owner skill directly only for a bounded read-only task or a
 clearly standalone edit with no managed lifecycle effect.
 
 Read `references/workspace-layout.md` only when Site/root ownership is unclear.
-Read `references/router-runtime.md` only for migration or internal debugging.
-The old playbooks and v3 state/flow scripts are compatibility material, not the
-normal interface.
+Read `references/router-runtime.md` only for internal debugging.
 
 ## Public interface
 
@@ -43,17 +41,8 @@ python3 scripts/entityctl.py \
 python3 scripts/entityctl.py status --project-root <project> [--live]
 ```
 
-Administrative commands are `doctor`, `install`, and one-time `migrate`.
-
-Before the first v5 Operation on an existing controller:
-
-```bash
-python3 scripts/entityctl.py migrate --from-v3 --dry-run
-python3 scripts/entityctl.py migrate --from-v3
-```
-
-Migration imports v3 facts into `~/.entity-router/router.db`, preserves the old
-files as read-only evidence, and never dual-writes them.
+Administrative commands are `doctor`, `install`, `site add/list`, and
+`export`.
 
 ## GoalSpec
 

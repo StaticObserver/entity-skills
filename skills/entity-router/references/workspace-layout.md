@@ -8,16 +8,14 @@ an HPC login node, scheduler, compute nodes, and shared filesystem.
 
 ```text
 ~/.entity-router/
-├── router.db                         # v5 authority
-├── registry.json                    # preserved v3 evidence after migration
-├── project-bindings.json            # preserved v3 evidence after migration
-├── sites/*.json                     # preserved v3 evidence after migration
-└── cases/*/                          # preserved v3 evidence after migration
+└── router.db                         # v5 authority
 ```
 
 `router.db` contains compact facts and evidence references only. It never lives
 inside a source checkout and is never copied into provider-private roots such
-as `.codex`, `.claude`, or `.kimi-code`.
+as `.codex`, `.claude`, or `.kimi-code`. Controllers imported from v3 may still
+carry the preserved pre-migration files (`registry.json`, `sites/`, `cases/`);
+they are read-only historical evidence and are never read or written by v5.
 
 ## Owner-site layout
 
