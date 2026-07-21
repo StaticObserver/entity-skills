@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 import os
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
@@ -40,6 +42,23 @@ def _within(path: Path, root: Path) -> bool:
         return True
     except ValueError:
         return False
+
+
+def _canonical_hash(value: Any) -> str:
+    encoded = json.dumps(value, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return "sha256:" + hashlib.sha256(encoded).hexdigest()
+
+
+def _operation_from_snapshot(snapshot: Mapping[str, Any], operation_id: str) -> Mapping[str, Any]:
+    if snapshot.get("operation_id") == operation_id:
+        return snapshot
+    operations = snapshot.get("operations")
+    if isinstance(operations, list):
+        matches = [item for item in operations
+                   if isinstance(item, dict) and item.get("operation_id") == operation_id]
+        if len(matches) == 1:
+            return matches[0]
+    return {}
 
 
 def _record(
@@ -193,6 +212,224 @@ def validate_router_action(
             "action_type": action_type,
             "execution_site_id": request.get("execution_site_id", ""),
             "anchor": "result" if result_path else ("case-state" if case_state_path else "none"),
+        },
+        artifacts=artifacts,
+        parent_span_id=parent_span_id,
+    )
+
+
+def validate_router_operation(
+    run_dir: Path,
+    *,
+    plan_path: Path,
+    operation_path: Path,
+    receipt_paths: Sequence[Path],
+    status_path: Optional[Path] = None,
+    scheduler_path: Optional[Path] = None,
+    parent_span_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Validate a Router v5 Goal/Plan/Operation/receipt evidence chain."""
+
+    plan_path = plan_path.expanduser().resolve()
+    operation_path = operation_path.expanduser().resolve()
+    envelope = load_json(plan_path, "Router v5 Plan envelope")
+    snapshot = load_json(operation_path, "Router v5 Operation snapshot")
+    checks: List[Dict[str, Any]] = []
+    artifacts: List[ArtifactSpec] = [
+        (plan_path, "operation-plan", "entity-router-v5-plan", "controller"),
+        (operation_path, "operation-snapshot", "entity-router-v5-store-export", "controller"),
+    ]
+
+    _check(checks, "plan.envelope",
+           envelope.get("schema_version") == 1
+           and envelope.get("kind") == "entity-router.plan"
+           and envelope.get("status") == "ready"
+           and envelope.get("state_mutated") is False,
+           "Plan artifact is a read-only ready v5 Plan envelope")
+    goal = envelope.get("goal") if isinstance(envelope.get("goal"), dict) else {}
+    plan = envelope.get("plan") if isinstance(envelope.get("plan"), dict) else {}
+    _check(checks, "goal.schema", goal.get("schema_version") == 1 and goal.get("kind") == "run",
+           "GoalSpec is a v1 run Goal")
+    forbidden_goal = {
+        "case_uid", "operation_id", "run_id", "plan_hash", "locator", "binding",
+        "owner", "execution_domain", "lease", "command", "shell", "script_text",
+    }
+    _check(checks, "goal.semantic-only", not (set(goal) & forbidden_goal),
+           "GoalSpec contains no controller-derived or executable command fields")
+
+    unsigned = dict(plan)
+    actual_plan_hash = unsigned.pop("plan_hash", "")
+    unsigned.pop("generated_at", None)
+    _check(checks, "plan.hash", bool(actual_plan_hash)
+           and _canonical_hash(unsigned) == actual_plan_hash,
+           "Plan hash matches the canonical immutable Plan")
+    _check(checks, "plan.goal-hash", plan.get("goal_hash") == _canonical_hash(goal),
+           "Plan binds the exact GoalSpec")
+    operation_id = str(plan.get("operation_id") or "")
+    case_uid = str(plan.get("case_uid") or "")
+    run_id = str(plan.get("run_id") or "")
+    _check(checks, "plan.identities", bool(operation_id and case_uid and run_id),
+           "Plan derives Case, Operation, and run identities")
+    steps = plan.get("steps") if isinstance(plan.get("steps"), list) else []
+    _check(checks, "plan.steps", [item.get("kind") for item in steps
+                                  if isinstance(item, dict)] == [
+                                      "run.preflight.v1", "run.prepare.v2", "run.launch.v2"
+                                  ], "Plan has the fixed three-step run sequence")
+
+    operation = _operation_from_snapshot(snapshot, operation_id)
+    _check(checks, "operation.present", bool(operation),
+           "controller snapshot contains exactly the planned Operation")
+    _check(checks, "operation.identity",
+           operation.get("case_uid") == case_uid
+           and operation.get("goal_hash") == plan.get("goal_hash")
+           and operation.get("plan_hash") == actual_plan_hash,
+           "Operation binds the planned Case, Goal, and Plan hashes")
+    _check(checks, "operation.embedded",
+           operation.get("goal") == goal and operation.get("plan") == plan,
+           "controller snapshot preserves the exact Goal and Plan")
+    _check(checks, "operation.completed", operation.get("status") == "completed",
+           "Operation has a successful terminal state")
+    operation_steps = operation.get("steps") if isinstance(operation.get("steps"), list) else []
+    _check(checks, "operation.steps", len(operation_steps) == len(steps)
+           and all(isinstance(item, dict) and item.get("status") == "committed"
+                   for item in operation_steps),
+           "every planned Step is committed")
+
+    supplied_receipts: Dict[int, Tuple[Path, Mapping[str, Any]]] = {}
+    duplicate_receipt_index = False
+    for path in receipt_paths:
+        resolved = path.expanduser().resolve()
+        receipt = load_json(resolved, "Router v5 Step receipt")
+        index = receipt.get("step_index")
+        if isinstance(index, int) and not isinstance(index, bool):
+            if index in supplied_receipts:
+                duplicate_receipt_index = True
+            supplied_receipts[index] = (resolved, receipt)
+    _check(checks, "receipts.complete",
+           len(receipt_paths) == len(steps)
+           and not duplicate_receipt_index
+           and set(supplied_receipts) == set(range(len(steps))),
+           "one owner-site receipt is supplied for every planned Step")
+    launch_receipt: Mapping[str, Any] = {}
+    for index, step in enumerate(steps):
+        path, receipt = supplied_receipts.get(index, (Path("."), {}))
+        matches = (
+            receipt.get("schema_version") == 1
+            and receipt.get("operation_id") == operation_id
+            and receipt.get("plan_hash") == actual_plan_hash
+            and receipt.get("step_index") == index
+            and receipt.get("step_id") == step.get("step_id")
+            and receipt.get("kind") == step.get("kind")
+        )
+        _check(checks, "receipt.%d.identity" % index, matches,
+               "receipt matches its Operation and Step identity")
+        _check(checks, "receipt.%d.verified" % index,
+               receipt.get("state") == "outputs_verified",
+               "receipt reached independently verifiable output state")
+        if index < len(operation_steps):
+            stored = operation_steps[index]
+            _check(checks, "receipt.%d.effect" % index,
+                   stored.get("effect") == receipt.get("effect_identity", {}),
+                   "controller committed the receipt effect")
+            _check(checks, "receipt.%d.outputs" % index,
+                   stored.get("evidence") == receipt.get("outputs", []),
+                   "controller committed the verified receipt outputs")
+        if path.is_file():
+            artifacts.append((path, "step-receipt", "entity-router-v5-site-receipt",
+                              str(step.get("site_id") or "execution-site")))
+        if step.get("kind") == "run.launch.v2":
+            launch_receipt = receipt
+
+    launch = steps[2] if len(steps) == 3 and isinstance(steps[2], dict) else {}
+    launch_request = launch.get("request") if isinstance(launch.get("request"), dict) else {}
+    expected_comment = "entity-router:%s:%s" % (
+        operation_id, actual_plan_hash.split(":", 1)[-1][:16]
+    )
+    effect = launch_receipt.get("effect_identity") \
+        if isinstance(launch_receipt.get("effect_identity"), dict) else {}
+    _check(checks, "launch.effect",
+           effect.get("scheduler") == "slurm" and bool(effect.get("job_id"))
+           and effect.get("job_name") == launch_request.get("job_name")
+           and effect.get("submit_user") == launch_request.get("submit_user")
+           and effect.get("run_root") == launch_request.get("run_root")
+           and effect.get("comment") == expected_comment,
+           "launch receipt carries the exact scheduler effect identity")
+
+    if scheduler_path is not None:
+        scheduler_path = scheduler_path.expanduser().resolve()
+        scheduler = load_json(scheduler_path, "scheduler snapshot")
+        artifacts.append((scheduler_path, "scheduler-snapshot",
+                          "independent-slurm-snapshot", str(plan.get("site_id") or "execution-site")))
+        jobs = scheduler.get("jobs") if isinstance(scheduler.get("jobs"), list) else []
+        query = scheduler.get("query") if isinstance(scheduler.get("query"), dict) else {}
+        _check(checks, "scheduler.schema",
+               scheduler.get("schema_version") == 1 and scheduler.get("scheduler") == "slurm",
+               "scheduler evidence is a v1 Slurm snapshot")
+        _check(checks, "scheduler.query",
+               query == {"job_name": launch_request.get("job_name"),
+                         "submit_user": launch_request.get("submit_user"),
+                         "run_root": launch_request.get("run_root"),
+                         "comment": expected_comment},
+               "scheduler snapshot uses the immutable launch identity")
+        _check(checks, "scheduler.single-effect", len(jobs) == 1,
+               "exactly one scheduler job matches the launch identity")
+        if len(jobs) == 1:
+            job = jobs[0]
+            _check(checks, "scheduler.matches-receipt",
+                   all(job.get(key) == effect.get(key)
+                       for key in ("job_id", "job_name", "submit_user", "run_root", "comment")),
+                   "independent scheduler job matches the launch receipt")
+    else:
+        _check(checks, "scheduler.snapshot", False,
+               "completed Operation requires an independent scheduler snapshot")
+
+    status_anchor = "none"
+    if status_path is not None:
+        status_path = status_path.expanduser().resolve()
+        status = load_json(status_path, "Router v5 status snapshot")
+        artifacts.append((status_path, "router-status", "entity-router-v5-status", "controller"))
+        status_anchor = "status"
+        current = status.get("current") if isinstance(status.get("current"), dict) else {}
+        run_identity = status.get("run") if isinstance(status.get("run"), dict) else {}
+        _check(checks, "status.schema",
+               status.get("schema_version") == 1
+               and status.get("kind") == "entity-router.status"
+               and status.get("state_mutated") is False,
+               "status is a read-only v5 status snapshot")
+        _check(checks, "status.identity",
+               status.get("case_uid") == case_uid
+               and current.get("source_id") == plan.get("source_id")
+               and current.get("run_id") == run_id,
+               "status preserves the planned Case/source/run identity")
+        _check(checks, "status.scheduler",
+               run_identity.get("id") == run_id
+               and run_identity.get("scheduler", {}).get("job_id") == effect.get("job_id"),
+               "status run identity carries the verified scheduler effect")
+    else:
+        _check(checks, "status.snapshot", False,
+               "completed Operation requires a controller-local status snapshot")
+
+    run_identity = steps[1].get("identity", {}) if len(steps) > 1 else {}
+    parents = run_identity.get("parents") if isinstance(run_identity.get("parents"), dict) else {}
+    _check(checks, "identity.source-run",
+           run_identity.get("id") == run_id
+           and parents.get("source_id") == plan.get("source_id")
+           and "build_id" in parents,
+           "run identity binds its source and declared build parent field")
+
+    return _record(
+        run_dir,
+        validator="entity-router-operation-v5",
+        status=_status(checks),
+        checks=checks,
+        summary={
+            "case_uid": case_uid,
+            "operation_id": operation_id,
+            "run_id": run_id,
+            "site_id": plan.get("site_id", ""),
+            "operation_status": operation.get("status", "missing"),
+            "job_id": effect.get("job_id", ""),
+            "status_anchor": status_anchor,
         },
         artifacts=artifacts,
         parent_span_id=parent_span_id,

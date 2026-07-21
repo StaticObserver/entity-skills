@@ -1,0 +1,71 @@
+{
+  "schema_version": 1,
+  "experiment_id": "e2e-neutral-streaming-v1",
+  "pgen": "neutral_streaming",
+  "engine": "SRPIC",
+  "metric": "Minkowski",
+  "coordinates": "Cartesian",
+  "dimension": 1,
+  "domain": {
+    "x1": [0.0, 16.0],
+    "active_cells": [128],
+    "field_boundaries": ["periodic", "periodic"],
+    "particle_boundaries": ["periodic", "periodic"]
+  },
+  "species": [
+    {
+      "name": "electron",
+      "charge_sign": -1,
+      "mass_ratio": 1.0,
+      "density": 1.0,
+      "ppc0": 32,
+      "temperature": 0.001,
+      "four_velocity": [0.2, 0.0, 0.0]
+    },
+    {
+      "name": "positron",
+      "charge_sign": 1,
+      "mass_ratio": 1.0,
+      "density": 1.0,
+      "ppc0": 32,
+      "temperature": 0.001,
+      "four_velocity": [0.2, 0.0, 0.0]
+    }
+  ],
+  "initial_fields": {
+    "E": [0.0, 0.0, 0.0],
+    "B": [1.0, 0.0, 0.0]
+  },
+  "random_seed": 20260719,
+  "compile": {
+    "backend": "cuda",
+    "precision": "single",
+    "deposit": "zigzag",
+    "shape_order": 1,
+    "output": true,
+    "mpi": false,
+    "debug": false,
+    "tests": false,
+    "cxx_standard": 20
+  },
+  "resource_ceiling": {
+    "nodes": 1,
+    "tasks": 1,
+    "gpus": 1,
+    "walltime": "00:10:00"
+  },
+  "required_outputs": {
+    "field_snapshots_min": 2,
+    "particle_snapshots_min": 2,
+    "field_quantities": ["E", "B", "J", "Rho"],
+    "particle_quantities": ["x1", "ux1", "ux2", "ux3", "weight", "species"]
+  },
+  "runtime": {
+    "status": "to_be_frozen_by_gold_run",
+    "final_time": null,
+    "timestep": null,
+    "field_interval": null,
+    "particle_interval": null,
+    "stats_interval": null
+  }
+}

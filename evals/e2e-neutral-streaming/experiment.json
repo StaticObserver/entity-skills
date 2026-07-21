@@ -1,0 +1,38 @@
+{
+  "schema_version": 1,
+  "experiment_id": "e2e-neutral-streaming-v1",
+  "task": "task.md",
+  "physics_spec": "fixtures/physics-spec.json",
+  "submission_schema": "schemas/submission.schema.json",
+  "source": {
+    "project": "entity-toolkit/entity",
+    "ref": "v1.4.4",
+    "commit": "",
+    "source_cache_sha256": ""
+  },
+  "analysis": {
+    "nt2py_version": "1.5.3",
+    "nt2py_revision": "403437a"
+  },
+  "variants": [
+    "variants/skills-v5.json",
+    "variants/no-entity-skills.json"
+  ],
+  "protocol": {
+    "pilot_pairs": 1,
+    "formal_pairs": 3,
+    "randomize_pair_order": true,
+    "primary_environment_mode": "warm-dependencies-cold-entity",
+    "qualification_environment_mode": "cold-dependencies-cold-entity"
+  },
+  "freeze": {
+    "status": "pre_gold",
+    "formal_execution_allowed": false,
+    "unresolved": [
+      "source.commit",
+      "source.source_cache_sha256",
+      "physics runtime timestep and output cadence",
+      "oracle physics thresholds"
+    ]
+  }
+}

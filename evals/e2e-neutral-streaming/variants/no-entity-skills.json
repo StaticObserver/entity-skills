@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "variant": "no-entity-skills",
+  "entity_skills": {
+    "exposure": "absent",
+    "source": "not-mounted",
+    "package_revision": null,
+    "required": []
+  },
+  "live_install_allowed": false,
+  "prior_conversation_allowed": false
+}

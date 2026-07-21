@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Neutral streaming frozen physics semantics",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version", "experiment_id", "pgen", "engine", "metric",
+    "coordinates", "dimension", "domain", "species", "initial_fields",
+    "random_seed", "compile", "resource_ceiling", "required_outputs", "runtime"
+  ],
+  "properties": {
+    "schema_version": {"const": 1},
+    "experiment_id": {"const": "e2e-neutral-streaming-v1"},
+    "pgen": {"const": "neutral_streaming"},
+    "engine": {"const": "SRPIC"},
+    "metric": {"const": "Minkowski"},
+    "coordinates": {"const": "Cartesian"},
+    "dimension": {"const": 1},
+    "domain": {"type": "object"},
+    "species": {"type": "array", "minItems": 2, "maxItems": 2},
+    "initial_fields": {"type": "object"},
+    "random_seed": {"type": "integer"},
+    "compile": {"type": "object"},
+    "resource_ceiling": {"type": "object"},
+    "required_outputs": {"type": "object"},
+    "runtime": {"type": "object"}
+  }
+}

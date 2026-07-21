@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "profile_id": "entity-e2e-common-tools-v1",
+  "required": [
+    "filesystem",
+    "shell",
+    "git",
+    "ssh",
+    "scp"
+  ],
+  "network": "disabled-except-configured-evaluation-site",
+  "source_docs": "frozen-local-copy",
+  "credentials": "runtime-only-not-captured",
+  "forbidden": [
+    "public-network-download",
+    "cross-variant-workspace-read",
+    "other-variant-result-read"
+  ]
+}

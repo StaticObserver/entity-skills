@@ -1,0 +1,24 @@
+{
+  "schema_version": 1,
+  "site_id": "eval-v100",
+  "display_name": "Evaluation V100 Site",
+  "transport": {
+    "kind": "ssh",
+    "ssh_alias": "injected-at-runtime"
+  },
+  "scheduler": {
+    "kind": "slurm"
+  },
+  "roots": {
+    "source_root": "/evaluation/source",
+    "build_root": "/evaluation/build",
+    "run_root": "/evaluation/run",
+    "staging_root": "/evaluation/staging"
+  },
+  "policy": {
+    "default_cpus_per_gpu": 4,
+    "default_partition": "injected-at-runtime",
+    "default_submit_user": "injected-at-runtime"
+  },
+  "shared_mappings": []
+}

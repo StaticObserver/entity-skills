@@ -326,7 +326,8 @@ v1 只实现最小闭环：
    `artifact` / `evidence` / `finish` / `validate`；
 3. 安全脱敏和内容 hash；
 4. 工具调用、决策、artifact 和 validator 的事件录入；
-5. Router Action、PGen preflight、env-build result、nt2py inventory 四种现有证据的引用；
+5. 历史 Router Action、Router v5 Operation、PGen preflight、env-build result、
+   nt2py inventory 五种现有证据的引用；
 6. schema、顺序、崩溃恢复、脱敏和单写者测试。
 
 v1 不实现 dashboard、隐藏思维抓取、自动评分、A/B 调度、跨机日志服务或
@@ -374,7 +375,8 @@ tools/skill_observability/
     └── result.schema.json
 ```
 
-`tests/test_skill_observability.py` 覆盖完整 owner 证据链、secret 脱敏、多进程
+`tests/test_skill_observability.py` 与 `tests/test_e2e_evaluation.py` 覆盖完整 owner
+证据链、Router v5 Plan/Operation/receipt/scheduler 证据、secret 脱敏、多进程
 写入序列化、崩溃后 incomplete 判定、产物指纹漂移、三种 provider 的增量导入与
 零侵入运行时边界。所有 adapter 只导入可观测的 tool call/output 指纹；Kimi adapter
 遍历 main 和子 agent wire，并读取平台原生 usage，但不保留 `think` 内容。
