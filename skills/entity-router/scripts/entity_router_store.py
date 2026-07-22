@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Transactional v5 controller store for Entity Router operations.
+"""Transactional controller store for Entity Router operations.
 
 The database contains only compact control facts and evidence references.  Raw
 simulation data, long logs, build trees, and run artifacts remain on their
@@ -159,7 +159,10 @@ class OperationStore(object):
                 os.makedirs(self.home)
             self._initialize()
         elif not os.path.isfile(self.path):
-            raise StoreError("Router v5 store does not exist; run entityctl migrate")
+            raise StoreError(
+                "Entity Router store does not exist; initialize it with "
+                "entityctl site add (run entityctl doctor for diagnostics)"
+            )
 
     def _connect(self):
         connection = sqlite3.connect(self.path, timeout=30)
@@ -226,7 +229,7 @@ class OperationStore(object):
                 "SELECT profile_json FROM sites WHERE site_id=?", (site_id,)
             ).fetchone()
             if row is None:
-                raise StoreError("unknown v5 site_id: %s" % site_id)
+                raise StoreError("unknown site_id: %s" % site_id)
             return _load(row["profile_json"])
         finally:
             connection.close()
@@ -318,7 +321,7 @@ class OperationStore(object):
         try:
             row = connection.execute("SELECT * FROM cases WHERE case_uid=?", (case_uid,)).fetchone()
             if row is None:
-                raise StoreError("unknown v5 Case: %s" % case_uid)
+                raise StoreError("unknown Case: %s" % case_uid)
             return self._case_from_row(connection, row)
         finally:
             connection.close()
@@ -337,7 +340,7 @@ class OperationStore(object):
                 if within:
                     matches.append((len(root), row["case_uid"]))
             if not matches:
-                raise StoreError("no v5 Case covers project path: %s" % query)
+                raise StoreError("no Case covers project path: %s" % query)
             matches.sort(reverse=True)
             row = connection.execute(
                 "SELECT * FROM cases WHERE case_uid=?", (matches[0][1],)
@@ -569,6 +572,61 @@ class OperationStore(object):
             )
             self._event(connection, row["case_uid"], operation_id,
                         "operation.%s" % status, result or {}, actor)
+
+    def reopen_operation(self, operation_id, actor):
+        """Re-activate a terminal non-completed Operation so the same Plan can
+        be applied again; committed Steps are still skipped on resume."""
+        with self.transaction() as connection:
+            row = connection.execute(
+                "SELECT case_uid,status FROM operations WHERE operation_id=?",
+                (operation_id,),
+            ).fetchone()
+            if row is None:
+                raise StoreError("unknown Operation: %s" % operation_id)
+            if row["status"] == "completed":
+                raise StoreError("completed Operation cannot be reopened")
+            if row["status"] in {"pending", "running"}:
+                return
+            active = connection.execute(
+                "SELECT active_operation_id FROM cases WHERE case_uid=?",
+                (row["case_uid"],),
+            ).fetchone()
+            if (active and active["active_operation_id"]
+                    and active["active_operation_id"] != operation_id):
+                raise StoreError(
+                    "Case has another active Operation: %s" % active["active_operation_id"]
+                )
+            connection.execute(
+                "UPDATE operations SET status='pending',result_json='{}',updated_at=? "
+                "WHERE operation_id=?",
+                (now_utc(), operation_id),
+            )
+            connection.execute(
+                "UPDATE cases SET active_operation_id=?,updated_at=? WHERE case_uid=?",
+                (operation_id, now_utc(), row["case_uid"]),
+            )
+            self._event(connection, row["case_uid"], operation_id,
+                        "operation.reopened", {"previous_status": row["status"]}, actor)
+
+    def cancel_operation(self, operation_id, actor, reason=""):
+        """Terminal escape hatch: cancel a pending/running Operation and release
+        the Case so a different Plan can proceed."""
+        with self.transaction() as connection:
+            row = connection.execute(
+                "SELECT status FROM operations WHERE operation_id=?", (operation_id,)
+            ).fetchone()
+            if row is None:
+                raise StoreError("unknown Operation: %s" % operation_id)
+            if row["status"] == "cancelled":
+                return
+            if row["status"] not in {"pending", "running"}:
+                raise StoreError(
+                    "Operation is already %s and cannot be cancelled" % row["status"]
+                )
+        self.finish_operation(
+            operation_id, "cancelled",
+            {"reason": reason or "cancelled via entityctl"}, actor,
+        )
 
     def _event(self, connection, case_uid, operation_id, event_type, payload, actor):
         connection.execute(

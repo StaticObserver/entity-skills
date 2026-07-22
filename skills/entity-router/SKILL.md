@@ -41,13 +41,19 @@ python3 scripts/entityctl.py \
 python3 scripts/entityctl.py status --project-root <project> [--live]
 ```
 
-Administrative commands are `doctor`, `install`, `site add/list`, and
-`export`.
+Administrative commands are `doctor`, `install`, `site add/list/discover`,
+`operation cancel <id>`, `store migrate`, `submission create/verify`, and
+`export`. Use `site discover` to enumerate legal Slurm partitions/QoS before
+writing site policy. Use `operation cancel` only to abandon an active
+Operation and release the Case; a failed Apply already releases the Case, and
+re-applying the same Plan resumes it. `submission create` recomputes all
+fingerprints from the final artifacts; `submission verify` fails on any later
+drift.
 
 ## GoalSpec
 
-GoalSpec contains only user semantics. The current executable Goal kind is
-`run`:
+GoalSpec contains only user semantics. The executable Goal kinds are `run`,
+`build`, and `data`:
 
 ```json
 {
@@ -62,6 +68,29 @@ GoalSpec contains only user semantics. The current executable Goal kind is
   }
 }
 ```
+
+A `run` Goal plans only after the simulation parameters are confirmed: the
+pgen skill's `pgen_preflight.py confirm <input> --by <actor>` writes
+`<input>.decisions.json`, and planning fails with `needs_decision` when the
+record is missing or the TOML changed afterwards. Show the parameter card to
+the user before confirming.
+
+```json
+{"schema_version": 1, "kind": "build", "site": "gpu-site",
+ "checkpoint": "/abs/entity-deps.local.json", "executable": "entity.xc"}
+```
+
+A `build` Goal registers a verified env-build checkpoint into the identity
+chain; the checkpoint must have `compatibility: pass` and a confirmed
+`decisions.parameters` record. Once registered, later `run` Goals may omit
+`executable`.
+
+```json
+{"schema_version": 1, "kind": "data", "run": "current"}
+```
+
+A `data` Goal inventories a run's outputs into a hashed manifest and advances
+the data identity. `analysis` is not a Goal yet; it stays with entity-nt2py.
 
 `executable` is optional when the Case has a verified current build identity.
 Site policy supplies safe defaults such as nodes, tasks, CPUs per GPU,

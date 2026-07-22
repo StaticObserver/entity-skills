@@ -8,14 +8,15 @@ an HPC login node, scheduler, compute nodes, and shared filesystem.
 
 ```text
 ~/.entity-router/
-└── router.db                         # v5 authority
+└── router.db                         # controller authority
 ```
 
 `router.db` contains compact facts and evidence references only. It never lives
 inside a source checkout and is never copied into provider-private roots such
 as `.codex`, `.claude`, or `.kimi-code`. Controllers imported from v3 may still
 carry the preserved pre-migration files (`registry.json`, `sites/`, `cases/`);
-they are read-only historical evidence and are never read or written by v5.
+they are read-only historical evidence and are never read or written by the
+current runtime.
 
 ## Owner-site layout
 

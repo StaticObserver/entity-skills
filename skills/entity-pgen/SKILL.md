@@ -76,6 +76,7 @@ Do not add platform-specific metadata or invocation configuration to the core sk
 5. Confirm decisions that materially change the physical model, normalization, or implementation direction. Continue with safe local work when open questions do not block it.
 6. Verify Entity version, API signatures, normalization, and coordinate-basis conventions from the active checkout when available. The bundled references target Entity v1.4.4 and are secondary to current source evidence.
 7. Modify PGen and TOML together when the change affects their shared contract, then update the corresponding design section and current status.
+8. Before any run submission, present the parameter card to the user and record the confirmation with `python3 <entity-pgen-skill>/scripts/pgen_preflight.py confirm <input.toml> --by <actor>` (add `--confirm-defaults` when defaults are accepted without item-by-item review). This writes `<input.toml>.decisions.json`; the Router plan gate refuses to issue a plan when the record is missing or its `input_sha256` no longer matches the TOML. Re-run `confirm` after any TOML edit.
 
 ## Working Method
 

@@ -52,6 +52,72 @@ class HardGateTests(unittest.TestCase):
             },
         }
 
+    def load_parameter_card(self, req: dict) -> dict:
+        sys.path.insert(0, str(ROOT / "scripts"))
+        try:
+            from entity_schema import parameter_card
+        finally:
+            sys.path.remove(str(ROOT / "scripts"))
+        return parameter_card(req)
+
+    def confirmed_parameters(self, req: dict) -> dict:
+        card = self.load_parameter_card(req)
+        return {
+            "digest": card["digest"],
+            "confirmed_by": "test",
+            "confirmed_at": "2026-01-01T00:00:00+00:00",
+            "defaults": False,
+            "card": card,
+        }
+
+    def compat_checkpoint_fixture(self, tmp: Path, req: dict) -> dict:
+        return {
+            "schema_version": 1,
+            "requirements": {"embedded": {
+                "entity": {
+                    "checkout_root": req["entity"]["checkout_root"],
+                    "workdir": req["entity"]["workdir"],
+                    "version_bucket": req["entity"]["version_bucket"],
+                    "dependency_profile": req["entity"]["dependency_profile"],
+                },
+                "environment": {
+                    "backend": "cpu",
+                    "output": False,
+                    "mpi": False,
+                    "gpu_aware_mpi": False,
+                },
+                "compile": {
+                    "pgen": "smoke",
+                    "pgens": "",
+                    "cxx_standard": "20",
+                    "precision": "",
+                    "deposit": "",
+                    "shape_order": "",
+                    "debug": False,
+                    "tests": False,
+                    "build_intent": "",
+                },
+            }},
+            "entity": {
+                "checkout_root": req["entity"]["checkout_root"],
+                "workdir": req["entity"]["workdir"],
+                "version_bucket": req["entity"]["version_bucket"],
+                "dependency_profile": req["entity"]["dependency_profile"],
+            },
+            "selected": {
+                "compiler": {"cxx": sys.executable},
+                "kokkos": {"prefix": str(tmp), "version": "5.0.0"},
+                "adios2": {
+                    "prefix": str(tmp),
+                    "version": "2.11.0",
+                    "compile_config": {"ADIOS2_USE_Kokkos": True},
+                },
+            },
+            "decisions": {"parameters": self.confirmed_parameters(req)},
+            "compatibility": {"status": "unknown"},
+            "env_sh": {"status": "missing"},
+        }
+
     def test_v2_uses_independent_site_paths_without_workdir(self):
         with tempfile.TemporaryDirectory() as td:
             tmp = Path(td)
@@ -455,6 +521,17 @@ class HardGateTests(unittest.TestCase):
             )
             self.assertEqual(create_proc.returncode, 0, create_proc.stdout + create_proc.stderr)
 
+            confirm_proc = run_cmd(
+                "scripts/entity_checkpoint.py",
+                "confirm",
+                str(req_path),
+                "--checkpoint",
+                str(deps_path),
+                "--by",
+                "test",
+            )
+            self.assertEqual(confirm_proc.returncode, 0, confirm_proc.stdout + confirm_proc.stderr)
+
             req["environment"]["backend"] = "cuda"
             req["environment"]["gpu_arch"] = "AMPERE80"
             self.write_json(req_path, req)
@@ -477,54 +554,7 @@ class HardGateTests(unittest.TestCase):
             req_path = tmp / "requirements.json"
             deps_path = tmp / "entity-deps.local.json"
             self.write_json(req_path, req)
-            self.write_json(
-                deps_path,
-                {
-                    "schema_version": 1,
-                    "requirements": {"embedded": {
-                        "entity": {
-                            "checkout_root": req["entity"]["checkout_root"],
-                            "workdir": req["entity"]["workdir"],
-                            "version_bucket": req["entity"]["version_bucket"],
-                            "dependency_profile": req["entity"]["dependency_profile"],
-                        },
-                        "environment": {
-                            "backend": "cpu",
-                            "output": False,
-                            "mpi": False,
-                            "gpu_aware_mpi": False,
-                        },
-                        "compile": {
-                            "pgen": "smoke",
-                            "pgens": "",
-                            "cxx_standard": "20",
-                            "precision": "",
-                            "deposit": "",
-                            "shape_order": "",
-                            "debug": False,
-                            "tests": False,
-                            "build_intent": "",
-                        },
-                    }},
-                    "entity": {
-                        "checkout_root": req["entity"]["checkout_root"],
-                        "workdir": req["entity"]["workdir"],
-                        "version_bucket": req["entity"]["version_bucket"],
-                        "dependency_profile": req["entity"]["dependency_profile"],
-                    },
-                    "selected": {
-                        "compiler": {"cxx": sys.executable},
-                        "kokkos": {"prefix": str(tmp), "version": "5.0.0"},
-                        "adios2": {
-                            "prefix": str(tmp),
-                            "version": "2.11.0",
-                            "compile_config": {"ADIOS2_USE_Kokkos": True},
-                        },
-                    },
-                    "compatibility": {"status": "unknown"},
-                    "env_sh": {"status": "missing"},
-                },
-            )
+            self.write_json(deps_path, self.compat_checkpoint_fixture(tmp, req))
 
             proc = run_cmd(
                 "scripts/entity_compat.py",
@@ -601,6 +631,174 @@ class HardGateTests(unittest.TestCase):
             self.assertTrue(Path(data["build_result"]["runner_log"]).is_file())
             state = json.loads((tmp / ".entity-session.json").read_text(encoding="utf-8"))
             self.assertEqual(state["steps"]["build_executed"]["status"], "fail")
+
+    def test_compat_fails_without_parameters_confirmation(self):
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            req = self.base_requirements(tmp)
+            req_path = tmp / "requirements.json"
+            deps_path = tmp / "entity-deps.local.json"
+            self.write_json(req_path, req)
+            checkpoint = self.compat_checkpoint_fixture(tmp, req)
+            del checkpoint["decisions"]
+            self.write_json(deps_path, checkpoint)
+
+            proc = run_cmd(
+                "scripts/entity_compat.py",
+                str(req_path),
+                "--checkpoint",
+                str(deps_path),
+            )
+
+            self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn("parameters.confirmation", proc.stdout)
+
+    def test_compat_fails_when_parameters_change_after_confirmation(self):
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            req = self.base_requirements(tmp)
+            req_path = tmp / "requirements.json"
+            deps_path = tmp / "entity-deps.local.json"
+            self.write_json(req_path, req)
+
+            create_proc = run_cmd(
+                "scripts/entity_checkpoint.py", "create", str(req_path),
+                "--output", str(deps_path),
+            )
+            self.assertEqual(create_proc.returncode, 0, create_proc.stdout + create_proc.stderr)
+            confirm_proc = run_cmd(
+                "scripts/entity_checkpoint.py", "confirm", str(req_path),
+                "--checkpoint", str(deps_path), "--by", "test",
+            )
+            self.assertEqual(confirm_proc.returncode, 0, confirm_proc.stdout + confirm_proc.stderr)
+
+            req["environment"]["backend"] = "cuda"
+            req["environment"]["gpu_arch"] = "AMPERE80"
+            self.write_json(req_path, req)
+
+            proc = run_cmd(
+                "scripts/entity_compat.py",
+                str(req_path),
+                "--checkpoint",
+                str(deps_path),
+            )
+
+            self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn("parameters.confirmation", proc.stdout)
+            self.assertIn("changed after confirmation", proc.stdout)
+
+    def test_compat_passes_parameters_confirmation_after_confirm(self):
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            req = self.base_requirements(tmp)
+            req_path = tmp / "requirements.json"
+            deps_path = tmp / "entity-deps.local.json"
+            self.write_json(req_path, req)
+            self.write_json(deps_path, self.compat_checkpoint_fixture(tmp, req))
+
+            proc = run_cmd(
+                "scripts/entity_compat.py",
+                str(req_path),
+                "--checkpoint",
+                str(deps_path),
+            )
+
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            compat = json.loads(proc.stdout)
+            by_id = {check["id"]: check["status"] for check in compat["checks"]}
+            self.assertEqual(by_id.get("parameters.confirmation"), "pass")
+
+    def test_confirm_requires_by_actor(self):
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            req_path = tmp / "requirements.json"
+            deps_path = tmp / "entity-deps.local.json"
+            self.write_json(req_path, self.base_requirements(tmp))
+            create_proc = run_cmd(
+                "scripts/entity_checkpoint.py", "create", str(req_path),
+                "--output", str(deps_path),
+            )
+            self.assertEqual(create_proc.returncode, 0, create_proc.stdout + create_proc.stderr)
+
+            proc = run_cmd(
+                "scripts/entity_checkpoint.py", "confirm", str(req_path),
+                "--checkpoint", str(deps_path),
+            )
+
+            self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            data = json.loads(deps_path.read_text(encoding="utf-8"))
+            self.assertNotIn("parameters", data.get("decisions", {}))
+
+    def test_confirm_records_defaults_flag(self):
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            req = self.base_requirements(tmp)
+            req_path = tmp / "requirements.json"
+            deps_path = tmp / "entity-deps.local.json"
+            self.write_json(req_path, req)
+            create_proc = run_cmd(
+                "scripts/entity_checkpoint.py", "create", str(req_path),
+                "--output", str(deps_path),
+            )
+            self.assertEqual(create_proc.returncode, 0, create_proc.stdout + create_proc.stderr)
+
+            plain = run_cmd(
+                "scripts/entity_checkpoint.py", "confirm", str(req_path),
+                "--checkpoint", str(deps_path), "--by", "tester",
+            )
+            self.assertEqual(plain.returncode, 0, plain.stdout + plain.stderr)
+            data = json.loads(deps_path.read_text(encoding="utf-8"))
+            record = data["decisions"]["parameters"]
+            self.assertEqual(record["confirmed_by"], "tester")
+            self.assertFalse(record["defaults"])
+            self.assertEqual(record["digest"], self.load_parameter_card(req)["digest"])
+            self.assertTrue(record["confirmed_at"])
+
+            with_defaults = run_cmd(
+                "scripts/entity_checkpoint.py", "confirm", str(req_path),
+                "--checkpoint", str(deps_path), "--by", "tester",
+                "--confirm-defaults",
+            )
+            self.assertEqual(with_defaults.returncode, 0, with_defaults.stdout + with_defaults.stderr)
+            data = json.loads(deps_path.read_text(encoding="utf-8"))
+            self.assertTrue(data["decisions"]["parameters"]["defaults"])
+
+    def _openmpi_check(self, selected):
+        sys.path.insert(0, str(ROOT / "scripts"))
+        try:
+            import entity_compat
+        finally:
+            sys.path.remove(str(ROOT / "scripts"))
+        checks, issues = [], []
+        entity_compat.run_cross_checks(
+            checks, issues, {"environment": {"mpi": True, "backend": "cpu"}},
+            {"selected": selected},
+        )
+        by_id = {check["id"]: check["status"] for check in checks}
+        return by_id.get("mpi.openmpi_min_version"), issues
+
+    def test_openmpi_below_minimum_fails_compat(self):
+        status, issues = self._openmpi_check(
+            {"mpi": {"prefix": "/opt/openmpi", "version": "4.1.9", "flavor": "openmpi"}}
+        )
+        self.assertEqual(status, "fail")
+        self.assertTrue(any("below minimum" in issue for issue in issues))
+
+    def test_openmpi_at_minimum_passes_compat(self):
+        status, issues = self._openmpi_check(
+            {"mpi": {"prefix": "/opt/openmpi", "version": "5.0.7", "flavor": "OpenMPI"}}
+        )
+        self.assertEqual(status, "pass")
+
+    def test_openmpi_selected_key_identifies_flavor(self):
+        status, issues = self._openmpi_check({"openmpi": {"version": "4.1.1"}})
+        self.assertEqual(status, "fail")
+
+    def test_non_openmpi_mpi_is_not_constrained(self):
+        status, issues = self._openmpi_check(
+            {"mpi": {"prefix": "/opt/mpich", "version": "4.1", "flavor": "mpich"}}
+        )
+        self.assertIsNone(status)
 
 
 if __name__ == "__main__":

@@ -7,6 +7,8 @@ needs updating — scripts pick up the change through their imports.
 references/json-contracts.md is the human-readable mirror of this file.
 """
 
+import hashlib
+import json
 from typing import Any, Dict, List, Tuple
 from pathlib import Path
 
@@ -81,6 +83,69 @@ OPTIONAL_DEFAULTS: Dict[str, str] = {
     "compile.build_intent": "unspecified",
     "compile.cxx_standard": "profile-derived",
 }
+
+# ---------------------------------------------------------------------------
+# Parameter card — compile-parameter confirmation hard gate
+# ---------------------------------------------------------------------------
+
+# Tier 1 fields block the build when they drift after confirmation; tier 2
+# fields are display-level context shown with the confirmation prompt.
+PARAMETER_CARD_TIER1: List[str] = [
+    "compile.pgen",
+    "compile.pgens",
+    "environment.backend",
+    "environment.gpu_arch",
+    "environment.mpi",
+    "environment.gpu_aware_mpi",
+    "environment.output",
+    "compile.precision",
+    "compile.cxx_standard",
+    "compile.build_intent",
+]
+
+PARAMETER_CARD_TIER2: List[str] = [
+    "compile.deposit",
+    "compile.shape_order",
+    "compile.debug",
+    "compile.tests",
+    "environment.dependency_policy",
+]
+
+
+def _card_value(req: Dict[str, Any], dotted: str) -> Any:
+    cur: Any = req
+    for part in dotted.split("."):
+        if isinstance(cur, dict) and part in cur:
+            cur = cur[part]
+        else:
+            return None
+    return cur
+
+
+def parameter_card(req: Dict[str, Any]) -> Dict[str, Any]:
+    """Derive the build parameter card from requirements.json.
+
+    Only fields actually present in *req* are included. The digest covers the
+    fields map exactly, so any parameter change after confirmation fails the
+    parameters.confirmation compatibility check.
+    """
+    fields: Dict[str, Dict[str, Any]] = {}
+    for tier, names in ((1, PARAMETER_CARD_TIER1), (2, PARAMETER_CARD_TIER2)):
+        for dotted in names:
+            value = _card_value(req, dotted)
+            if value is None:
+                continue
+            fields[dotted] = {"value": value, "tier": tier}
+    digest = hashlib.sha256(
+        json.dumps(fields, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+    return {
+        "schema_version": 1,
+        "kind": "entity-parameter-card",
+        "domain": "build",
+        "fields": fields,
+        "digest": "sha256:" + digest,
+    }
 
 
 def requirements_schema(req: Dict[str, Any]) -> int:
@@ -209,6 +274,10 @@ COMPILER_MIN_VERSIONS: CompilerMinVersions = {
 # Minimum CMake version required across all profiles
 MIN_CMAKE_VERSION = (3, 16)
 
+# Minimum OpenMPI version when the selected MPI is OpenMPI. Older 4.x
+# releases have known ORTE/PMI launch failures under srun on several sites.
+MIN_OPENMPI_VERSION = (5, 0)
+
 
 # ---------------------------------------------------------------------------
 # Known-bad compiler versions — blacklist that triggers WARN before build
@@ -241,6 +310,7 @@ def version_satisfies(actual: tuple, minimum: tuple) -> bool:
 # confirmed_at/value/source).
 COMPAT_OVERRIDE_MAP: Dict[str, str] = {
     "compiler.version.nvcc": "nvcc_version_override",
+    "parameters.confirmation": "parameters_confirmation_override",
 }
 
 

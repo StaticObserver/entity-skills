@@ -39,6 +39,7 @@ class RouterV5Test(unittest.TestCase):
         self.executable = os.path.join(self.build_root, "entity.xc")
         with open(self.input, "w") as handle:
             handle.write("[simulation]\nsteps = 2\n")
+        self._confirm_input()
         with open(os.path.join(self.project, "pgen.hpp"), "w") as handle:
             handle.write("// source\n")
         with open(self.executable, "w") as handle:
@@ -110,6 +111,24 @@ if '--format' in sys.argv:
 else:
     print(r['state'])
 """)
+
+    def _confirm_input(self, path=None, sha256=None):
+        import hashlib
+        path = path or self.input
+        if sha256 is None:
+            with open(path, "rb") as handle:
+                sha256 = hashlib.sha256(handle.read()).hexdigest()
+        record = {
+            "schema_version": 1,
+            "kind": "entity-pgen.simulation-confirmation",
+            "input_sha256": sha256,
+            "card": {},
+            "confirmed_by": "test",
+            "confirmed_at": "2026-07-22T00:00:00",
+            "defaults": False,
+        }
+        with open(path + ".decisions.json", "w") as handle:
+            json.dump(record, handle)
 
     def make_plan(self):
         envelope = plan_goal(self.store, self.project, self.goal, [self.plan_file])
@@ -308,7 +327,7 @@ else:
                 apply_plan(self.store, envelope["goal"], envelope["plan"], actor,
                            plan_path=self.plan_file)
         self.assertEqual(self.store.get_operation(envelope["plan"]["operation_id"])["status"],
-                         "running")
+                         "anomaly")
         recovered = apply_plan(self.store, envelope["goal"], envelope["plan"], actor,
                                plan_path=self.plan_file)
         self.assertEqual(recovered["status"], "completed")
@@ -399,6 +418,268 @@ else:
         self.assertEqual(applied["status"], "completed")
         self.assertEqual(status["remote_calls"], 1)
         self.assertEqual(remote_calls.call_count - calls_before_status, 1)
+
+    def test_sbatch_invokes_entity_with_dash_input(self):
+        from entity_router_executor import render_sbatch
+        script = render_sbatch({
+            "executable": self.executable,
+            "input_name": "input.toml",
+            "compute": {"nodes": 1, "tasks": 1, "gpus": 1, "cpus_per_task": 2,
+                        "walltime": "00:10:00", "partition": "test", "qos": "",
+                        "submit_user": "tester", "precision": "double"},
+        })
+        self.assertIn("srun %s -input input.toml" % self.executable, script)
+        self.assertNotIn("srun %s input.toml" % self.executable, script)
+
+    def _fail_first_preflight(self):
+        original = ExecutorClient.invoke
+        def boom(client, command, request):
+            if command == "execute" and request["kind"] == "run.preflight.v1":
+                raise OperationError("simulated preflight failure")
+            return original(client, command, request)
+        return mock.patch.object(ExecutorClient, "invoke", boom)
+
+    def test_failed_apply_releases_case_and_reapply_resumes(self):
+        envelope = self.make_plan()
+        actor = {"run_id": "fail-test", "provider": "unittest"}
+        with self._fail_first_preflight():
+            with self.assertRaises(OperationError):
+                apply_plan(self.store, envelope["goal"], envelope["plan"], actor,
+                           plan_path=self.plan_file)
+        operation = self.store.get_operation(envelope["plan"]["operation_id"])
+        self.assertEqual(operation["status"], "anomaly")
+        self.assertIsNone(
+            self.store.get_case(envelope["plan"]["case_uid"])["active_operation"])
+        recovered = apply_plan(self.store, envelope["goal"], envelope["plan"], actor,
+                               plan_path=self.plan_file)
+        self.assertEqual(recovered["status"], "completed")
+        self.assertEqual(self.submit_count(), 1)
+
+    def test_failed_apply_allows_a_new_plan(self):
+        envelope = self.make_plan()
+        actor = {"run_id": "fail-new-plan", "provider": "unittest"}
+        with self._fail_first_preflight():
+            with self.assertRaises(OperationError):
+                apply_plan(self.store, envelope["goal"], envelope["plan"], actor,
+                           plan_path=self.plan_file)
+        new_goal = dict(self.goal)
+        new_goal["compute"] = dict(self.goal["compute"], walltime="00:20:00")
+        second = plan_goal(self.store, self.project, new_goal, [self.plan_file])
+        with open(self.plan_file, "w") as handle:
+            json.dump(second, handle)
+        applied = apply_plan(self.store, second["goal"], second["plan"], actor,
+                             plan_path=self.plan_file)
+        self.assertEqual(applied["status"], "completed")
+        self.assertEqual(self.submit_count(), 1)
+
+    def test_operation_cancel_releases_case_via_cli(self):
+        envelope = self.make_plan()
+        actor = {"run_id": "cancel-test", "provider": "unittest"}
+        from entity_router_operation import _ensure_case
+        _ensure_case(self.store, envelope["plan"], actor)
+        operation = self.store.create_operation(
+            envelope["plan"]["case_uid"], envelope["goal"], envelope["plan"], actor)
+        code, payload = self.cli("--actor-run-id", "cancel-test",
+                                 "operation", "cancel", operation["operation_id"])
+        self.assertEqual(code, 0, payload)
+        self.assertEqual(payload["operation_status"], "cancelled")
+        self.assertIsNone(
+            self.store.get_case(envelope["plan"]["case_uid"])["active_operation"])
+        new_goal = dict(self.goal)
+        new_goal["compute"] = dict(self.goal["compute"], walltime="00:20:00")
+        second = plan_goal(self.store, self.project, new_goal, [self.plan_file])
+        with open(self.plan_file, "w") as handle:
+            json.dump(second, handle)
+        applied = apply_plan(self.store, second["goal"], second["plan"], actor,
+                             plan_path=self.plan_file)
+        self.assertEqual(applied["status"], "completed")
+
+    def test_missing_store_error_points_to_site_add(self):
+        empty_home = os.path.join(self.temp, "empty-controller")
+        with self.assertRaises(Exception) as caught:
+            OperationStore(empty_home, create=False)
+        self.assertIn("site add", str(caught.exception))
+        self.assertNotIn("migrate", str(caught.exception))
+
+    def test_doctor_reports_bundle_version_and_store_schema(self):
+        code, payload = self.cli("doctor")
+        self.assertEqual(code, 0, payload)
+        self.assertEqual(payload["runtime_bundle"]["version"], "0.4.0")
+        self.assertEqual(payload["controller"]["store_schema_version"], 1)
+
+    def test_store_migrate_shell_reports_current_schema(self):
+        code, payload = self.cli("store", "migrate")
+        self.assertEqual(code, 0, payload)
+        self.assertEqual(payload["store_schema_version"], 1)
+        self.assertFalse(payload["state_mutated"])
+        empty_home = os.path.join(self.temp, "empty-controller")
+        process = __import__("subprocess").Popen(
+            [sys.executable, ENTITYCTL, "--router-home", empty_home,
+             "store", "migrate"],
+            stdout=__import__("subprocess").PIPE,
+            stderr=__import__("subprocess").PIPE, universal_newlines=True,
+        )
+        stdout, _ = process.communicate()
+        self.assertEqual(process.returncode, 2)
+        self.assertIn("nothing to migrate", stdout)
+
+    def test_live_status_degrades_when_scheduler_query_fails(self):
+        envelope = self.make_plan()
+        applied = apply_plan(self.store, envelope["goal"], envelope["plan"],
+                             {"run_id": "live-test"}, plan_path=self.plan_file)
+        self.assertEqual(applied["status"], "completed")
+        self._write_executable("squeue", """import sys
+sys.stderr.write('slurm_load_jobs error: Invalid job id\\n')
+raise SystemExit(1)
+""")
+        status = status_for_project(self.store, self.project, live=True)
+        self.assertTrue(status["ok"])
+        self.assertEqual(status["live"]["state"], "UNKNOWN")
+        self.assertIn("warning", status["live"])
+        self.assertEqual(status["current"]["run_id"], envelope["plan"]["run_id"])
+
+    def test_plan_requires_simulation_confirmation(self):
+        os.unlink(self.input + ".decisions.json")
+        with self.assertRaises(PlanError) as caught:
+            plan_goal(self.store, self.project, self.goal, [self.plan_file])
+        self.assertEqual(caught.exception.status, "needs_decision")
+        self.assertIn("confirm", caught.exception.decisions[0]["question"])
+
+    def test_plan_rejects_stale_simulation_confirmation(self):
+        self._confirm_input(sha256="0" * 64)
+        with self.assertRaises(PlanError) as caught:
+            plan_goal(self.store, self.project, self.goal, [self.plan_file])
+        self.assertEqual(caught.exception.status, "needs_decision")
+        self._confirm_input()
+        envelope = plan_goal(self.store, self.project, self.goal, [self.plan_file])
+        self.assertEqual(
+            envelope["summary"]["simulation_confirmation"]["confirmed_by"], "test")
+
+    def test_site_discover_enumerates_partitions_and_qos(self):
+        self._write_executable("sinfo", """print('debug*|up|00:30:00|gpu:4|8|64')
+print('normal|up|1-00:00:00|gpu:4|32|64')
+""")
+        self._write_executable("sacctmgr", """print('debug')
+print('normal')
+""")
+        code, payload = self.cli("site", "discover", "local-slurm")
+        self.assertEqual(code, 0, payload)
+        self.assertFalse(payload["state_mutated"])
+        names = [item["name"] for item in payload["partitions"]]
+        self.assertEqual(names, ["debug", "normal"])
+        self.assertEqual(payload["qos"], ["debug", "normal"])
+        self.assertEqual(payload["suggested_policy"]["default_partition"], "debug")
+        self.assertTrue(payload["warnings"])
+
+    def test_preflight_qos_rejection_includes_remediation(self):
+        self._write_executable("sbatch", """import sys
+if '--test-only' in sys.argv:
+    sys.stderr.write('sbatch: error: Invalid qos specification\\n')
+    raise SystemExit(1)
+print('42')
+""")
+        envelope = self.make_plan()
+        with self.assertRaises(OperationError) as caught:
+            apply_plan(self.store, envelope["goal"], envelope["plan"],
+                       {"run_id": "qos-test"}, plan_path=self.plan_file)
+        self.assertIn("Invalid qos specification", str(caught.exception))
+        self.assertIn("site discover", str(caught.exception))
+
+    def test_submission_create_and_verify_detects_drift(self):
+        envelope = self.make_plan()
+        applied = apply_plan(self.store, envelope["goal"], envelope["plan"],
+                             {"run_id": "sub-test"}, plan_path=self.plan_file)
+        self.assertEqual(applied["status"], "completed")
+        artifact = os.path.join(self.project, "report.md")
+        with open(artifact, "w") as handle:
+            handle.write("# final report\n")
+        submission = os.path.join(self.temp, "submission.json")
+        code, created = self.cli("--actor-run-id", "sub-test", "submission", "create",
+                                 "--project-root", self.project, "--output", submission,
+                                 "--artifact", artifact)
+        self.assertEqual(code, 0, created)
+        self.assertEqual(created["identities"]["run_id"], envelope["plan"]["run_id"])
+        self.assertEqual(created["artifacts"][0]["path"], os.path.realpath(artifact))
+        code, verified = self.cli("submission", "verify", "--submission", submission)
+        self.assertEqual(code, 0, verified)
+        self.assertTrue(verified["ok"])
+        with open(artifact, "a") as handle:
+            handle.write("late edit\n")
+        code, drifted = self.cli("submission", "verify", "--submission", submission)
+        self.assertEqual(code, 2, drifted)
+        self.assertFalse(drifted["ok"])
+        self.assertEqual(drifted["stale"], [os.path.realpath(artifact)])
+
+    def _write_checkpoint(self, confirmed=True, compat="pass"):
+        checkpoint = {"schema_version": 2, "compatibility": {"status": compat}}
+        if confirmed:
+            checkpoint["decisions"] = {"parameters": {
+                "digest": "sha256:" + "1" * 64, "confirmed_by": "tester"}}
+        path = os.path.join(self.temp, "entity-deps.local.json")
+        with open(path, "w") as handle:
+            json.dump(checkpoint, handle)
+        return path
+
+    def test_build_goal_requires_verified_confirmed_checkpoint(self):
+        unconfirmed = self._write_checkpoint(confirmed=False)
+        goal = {"schema_version": 1, "kind": "build", "site": "local-slurm",
+                "checkpoint": unconfirmed, "executable": self.executable}
+        with self.assertRaises(PlanError) as caught:
+            plan_goal(self.store, self.project, goal)
+        self.assertEqual(caught.exception.status, "needs_decision")
+        failing = self._write_checkpoint(compat="fail")
+        with self.assertRaises(PlanError):
+            plan_goal(self.store, self.project, dict(goal, checkpoint=failing))
+
+    def test_build_goal_registers_build_and_feeds_run_goal(self):
+        checkpoint = self._write_checkpoint()
+        goal = {"schema_version": 1, "kind": "build", "site": "local-slurm",
+                "checkpoint": checkpoint, "executable": self.executable}
+        envelope = plan_goal(self.store, self.project, goal)
+        with open(self.plan_file, "w") as handle:
+            json.dump(envelope, handle)
+        applied = apply_plan(self.store, envelope["goal"], envelope["plan"],
+                             {"run_id": "build-test"}, plan_path=self.plan_file)
+        self.assertEqual(applied["status"], "completed")
+        case = self.store.get_case(envelope["plan"]["case_uid"])
+        self.assertEqual(case["current"]["build_id"], envelope["plan"]["build_id"])
+        self.assertEqual(case["current"]["readiness"]["build"], "verified")
+        # the registered build now feeds a run Goal without an explicit executable
+        run_goal = dict(self.goal)
+        run_goal.pop("executable")
+        run_envelope = plan_goal(self.store, self.project, run_goal, [self.plan_file])
+        self.assertEqual(run_envelope["plan"]["steps"][0]["request"]["run_spec"]["executable"],
+                         self.executable)
+
+    def test_data_goal_inventories_run_outputs(self):
+        envelope = self.make_plan()
+        applied = apply_plan(self.store, envelope["goal"], envelope["plan"],
+                             {"run_id": "data-test"}, plan_path=self.plan_file)
+        self.assertEqual(applied["status"], "completed")
+        data_goal = {"schema_version": 1, "kind": "data", "run": "current"}
+        data_envelope = plan_goal(self.store, self.project, data_goal)
+        with open(self.plan_file, "w") as handle:
+            json.dump(data_envelope, handle)
+        inventoried = apply_plan(self.store, data_envelope["goal"],
+                                 data_envelope["plan"], {"run_id": "data-test"},
+                                 plan_path=self.plan_file)
+        self.assertEqual(inventoried["status"], "completed")
+        case = self.store.get_case(envelope["plan"]["case_uid"])
+        self.assertEqual(case["current"]["data_id"], data_envelope["plan"]["data_id"])
+        self.assertEqual(case["current"]["readiness"]["data"], "inventoried")
+        run_root = envelope["plan"]["steps"][1]["request"]["run_root"]
+        manifest = os.path.join(run_root, "data-inventory.json")
+        with open(manifest, "r") as handle:
+            inventory = json.load(handle)
+        names = [item["path"] for item in inventory["files"]]
+        self.assertIn("input.toml", names)
+        self.assertIn("run.sbatch", names)
+
+    def test_data_goal_requires_existing_case_and_run(self):
+        data_goal = {"schema_version": 1, "kind": "data", "run": "current"}
+        with self.assertRaises(PlanError) as caught:
+            plan_goal(self.store, self.project, data_goal)
+        self.assertEqual(caught.exception.status, "needs_decision")
 
 
 if __name__ == "__main__":

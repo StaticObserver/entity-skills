@@ -43,15 +43,15 @@
     "deposit": "zigzag",
     "shape_order": 1,
     "output": true,
-    "mpi": false,
+    "mpi": true,
     "debug": false,
     "tests": false,
     "cxx_standard": 20
   },
   "resource_ceiling": {
     "nodes": 1,
-    "tasks": 1,
-    "gpus": 1,
+    "tasks": 2,
+    "gpus": 2,
     "walltime": "00:10:00"
   },
   "required_outputs": {
@@ -61,11 +61,12 @@
     "particle_quantities": ["x1", "ux1", "ux2", "ux3", "weight", "species"]
   },
   "runtime": {
-    "status": "to_be_frozen_by_gold_run",
-    "final_time": null,
+    "status": "frozen_by_gold_run_2026-07-21",
+    "final_time": 50.0,
     "timestep": null,
-    "field_interval": null,
-    "particle_interval": null,
-    "stats_interval": null
+    "cfl": 0.45,
+    "field_interval": 5.0,
+    "particle_interval": 5.0,
+    "stats_interval": 10
   }
 }

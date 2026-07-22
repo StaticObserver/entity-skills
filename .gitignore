@@ -11,3 +11,6 @@ htmlcov/
 # Local scratch and remote smoke-test artifacts
 test-wtih-cc/
 .tmp/
+
+# Large evaluation source caches (recorded in MANIFEST.json, not committed)
+evals/e2e-neutral-streaming/source-cache/

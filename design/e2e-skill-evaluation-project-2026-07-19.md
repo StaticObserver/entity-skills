@@ -1,7 +1,8 @@
 # Entity Skills 端到端对照评测项目
 
 日期：2026-07-19  
-状态：第一阶段已实现，等待 gold run
+状态：第一阶段已实现，等待 gold run  
+修订：2026-07-21 起任务契约与过程监控以 `e2e-skill-evaluation-revision-2026-07-21.md` 为准
 
 ## 1. 目的
 

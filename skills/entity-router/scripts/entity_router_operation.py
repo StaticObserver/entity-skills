@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Apply immutable v5 Operation Plans and expose compact controller status."""
+"""Apply immutable Operation Plans and expose compact controller status."""
 
 from __future__ import print_function
 
@@ -19,7 +19,12 @@ from entity_router_common import (
     run_on_site,
     sha256_file,
 )
-from entity_router_planner import _source_identity, validate_goal, validate_plan
+from entity_router_planner import (
+    _source_identity,
+    require_verified_checkpoint,
+    validate_goal,
+    validate_plan,
+)
 from entity_router_store import StoreError, canonical_hash
 
 
@@ -348,6 +353,69 @@ def _validate_derivations(goal, plan, profile, source_profile, plan_path):
         raise OperationError("derived run manifest is invalid")
 
 
+def _validate_asset_derivations(goal, plan, profile):
+    """Recompute and check every derived value for build/data Plans."""
+    case_spec = plan["case"]
+    if set(case_spec) != {"case_uid", "case_id", "project_root", "source", "current"}:
+        raise OperationError("Plan Case keys differ from schema")
+    if case_spec["case_uid"] != plan["case_uid"]:
+        raise OperationError("Plan Case does not match the project")
+    roots = profile.get("roots", {})
+    staging = os.path.join(
+        roots.get("staging_root", ""), plan["case_uid"], plan["operation_id"])
+    step = plan["steps"][0]
+    kind = plan["goal_kind"]
+    if kind == "build":
+        seed = {"case_uid": plan["case_uid"],
+                "checkpoint_sha256": plan["checkpoint_sha256"],
+                "executable": plan["executable"], "site_id": plan["site_id"]}
+        digest = canonical_hash(seed).split(":", 1)[1][:16]
+        if (plan["build_id"] != "build-" + digest
+                or plan["operation_id"] != "op-" + digest):
+            raise OperationError("derived Operation or build identity is invalid")
+        checkpoint_path = absolute(plan["checkpoint"])
+        if (not os.path.isfile(checkpoint_path)
+                or sha256_file(checkpoint_path) != plan["checkpoint_sha256"]):
+            raise OperationError("build checkpoint changed after planning; create a new plan")
+        try:
+            with open(checkpoint_path, "r") as handle:
+                checkpoint = json.load(handle)
+        except (IOError, OSError, ValueError) as exc:
+            raise OperationError("cannot read build checkpoint: %s" % exc)
+        require_verified_checkpoint(checkpoint)
+        build_root = os.path.normpath(roots.get("build_root", ""))
+        try:
+            inside = os.path.commonpath(
+                [os.path.normpath(plan["executable"]), build_root]) == build_root
+        except ValueError:
+            inside = False
+        if not inside:
+            raise OperationError("Plan executable is outside the Site build_root")
+        expected_receipt = os.path.join(staging, "receipts", "build-register.json")
+        expected_allowed = [staging, roots.get("build_root", "")]
+        if step["request"].get("executable") != plan["executable"]:
+            raise OperationError("derived build executable is invalid")
+    else:
+        seed = {"case_uid": plan["case_uid"], "run_id": plan["run_id"]}
+        digest = canonical_hash(seed).split(":", 1)[1][:16]
+        if (plan["data_id"] != "data-" + digest
+                or plan["operation_id"] != "op-" + digest):
+            raise OperationError("derived Operation or data identity is invalid")
+        run_root = step["request"].get("run_root", "")
+        manifest = step["request"].get("manifest", "")
+        if (not run_root
+                or manifest != os.path.join(run_root, "data-inventory.json")):
+            raise OperationError("derived data inventory paths are invalid")
+        expected_receipt = os.path.join(staging, "receipts", "data-inventory.json")
+        expected_allowed = [staging, run_root]
+    if (step.get("site_id") != plan["site_id"]
+            or step.get("receipt") != expected_receipt
+            or step.get("allowed_roots") != expected_allowed
+            or step.get("identity", {}).get("id") != plan.get(
+                "build_id" if kind == "build" else "data_id")):
+        raise OperationError("derived Step is invalid")
+
+
 def _ensure_case(store, plan, actor):
     try:
         case = store.get_case(plan["case_uid"])
@@ -360,10 +428,11 @@ def _ensure_case(store, plan, actor):
                 case_spec["case_uid"], case_spec["case_id"], case_spec["project_root"],
                 case_spec["source"], case_spec["current"], {}, connection=connection,
             )
-            identity = plan["source_identity"]
-            store.add_identity(
-                plan["case_uid"], "source", identity["id"], identity, True, connection,
-            )
+            identity = plan.get("source_identity")
+            if identity:
+                store.add_identity(
+                    plan["case_uid"], "source", identity["id"], identity, True, connection,
+                )
             store._event(connection, plan["case_uid"], None, "case.created", {}, actor)
         case = store.get_case(plan["case_uid"])
     return case
@@ -373,12 +442,28 @@ def _identity_projection(step, effect):
     identity = dict(step.get("identity") or {})
     if not identity:
         return []
-    if step["kind"] == "run.prepare.v2":
-        identity["status"] = "prepared"
-    elif step["kind"] == "run.launch.v2":
-        identity["status"] = "submitted"
-        identity["scheduler"] = effect
-    return [{"dimension": "run", "identity_id": identity["id"],
+    if step["kind"] in {"run.prepare.v2", "run.launch.v2"}:
+        dimension = "run"
+        if step["kind"] == "run.prepare.v2":
+            identity["status"] = "prepared"
+        else:
+            identity["status"] = "submitted"
+            identity["scheduler"] = effect
+    elif step["kind"] == "build.register.v1":
+        dimension = "build"
+        identity["status"] = "verified"
+        identity["outputs"] = [{
+            "kind": "file",
+            "locator": {"site_id": step["site_id"],
+                        "path": step["request"]["executable"]},
+        }]
+    elif step["kind"] == "data.inventory.v1":
+        dimension = "data"
+        identity["status"] = "inventoried"
+        identity["files"] = effect.get("files", 0)
+    else:
+        return []
+    return [{"dimension": dimension, "identity_id": identity["id"],
              "payload": identity, "current": True}]
 
 
@@ -390,19 +475,26 @@ def apply_plan(store, goal, plan, actor, claim_ttl=90, plan_path=None):
     profile = store.get_site(plan["site_id"])
     if canonical_hash(profile) != plan["site_profile_hash"]:
         raise OperationError("Site profile changed after planning; create a new plan")
-    source_profile = store.get_site(plan["source_identity"]["root"]["site_id"])
-    if canonical_hash(source_profile) != plan["source_site_profile_hash"]:
-        raise OperationError("source Site profile changed after planning; create a new plan")
-    _validate_derivations(goal, plan, profile, source_profile, plan_path)
-    _verify_source(plan)
+    kind = plan.get("goal_kind") or "run"
+    if kind == "run":
+        source_profile = store.get_site(plan["source_identity"]["root"]["site_id"])
+        if canonical_hash(source_profile) != plan["source_site_profile_hash"]:
+            raise OperationError("source Site profile changed after planning; create a new plan")
+        _validate_derivations(goal, plan, profile, source_profile, plan_path)
+        _verify_source(plan)
+    else:
+        _validate_asset_derivations(goal, plan, profile)
     _ensure_case(store, plan, actor)
-    source_identity = plan["source_identity"]
-    store.add_identity(
-        plan["case_uid"], "source", source_identity["id"], source_identity, True
-    )
+    if kind == "run":
+        source_identity = plan["source_identity"]
+        store.add_identity(
+            plan["case_uid"], "source", source_identity["id"], source_identity, True
+        )
     operation = store.create_operation(plan["case_uid"], goal, plan, actor)
     if operation["status"] == "completed":
         return operation
+    if operation["status"] not in {"pending", "running"}:
+        store.reopen_operation(operation["operation_id"], actor)
     token = store.claim_operation(operation["operation_id"], actor, claim_ttl)
     if not token:
         return store.get_operation(operation["operation_id"])
@@ -444,28 +536,35 @@ def apply_plan(store, goal, plan, actor, claim_ttl=90, plan_path=None):
             case = store.get_case(plan["case_uid"])
             current = dict(case["current"])
             identities = _identity_projection(step, verified.get("effect", {}))
-            if identities:
-                current["source_id"] = plan["source_id"]
-                current["run_id"] = plan["run_id"]
-                current["active_run"] = step["identity"]["root"]
+            for item in identities:
+                dimension = item["dimension"]
                 readiness = dict(current.get("readiness", {}))
-                readiness["run"] = "ready" if step["kind"] == "run.prepare.v2" else "submitted"
+                if dimension == "run":
+                    current["source_id"] = plan["source_id"]
+                    current["run_id"] = plan["run_id"]
+                    current["active_run"] = step["identity"]["root"]
+                    readiness["run"] = ("ready" if step["kind"] == "run.prepare.v2"
+                                        else "submitted")
+                else:
+                    current[dimension + "_id"] = item["identity_id"]
+                    readiness[dimension] = item["payload"].get("status", "ready")
                 current["readiness"] = readiness
             store.commit_step(
                 operation["operation_id"], index, verified.get("effect", {}),
                 verified.get("outputs", []), identities, current, actor,
             )
         result = {
-            "run_id": plan["run_id"], "site_id": plan["site_id"],
+            "site_id": plan["site_id"],
             "completed_at": now_utc(), "steps": len(plan["steps"]),
         }
+        for key in ["run_id", "build_id", "data_id"]:
+            if plan.get(key):
+                result[key] = plan[key]
         store.finish_operation(operation["operation_id"], "completed", result, actor)
         return store.get_operation(operation["operation_id"])
     except Exception as exc:
         error = {"message": str(exc), "observed_at": now_utc()}
-        if "multiple scheduler jobs match" in str(exc):
-            store.finish_operation(operation["operation_id"], "anomaly", error, actor)
-        elif active_index >= 0:
+        if active_index >= 0:
             try:
                 store.update_step(
                     operation["operation_id"], active_index, "anomaly",
@@ -473,6 +572,12 @@ def apply_plan(store, goal, plan, actor, claim_ttl=90, plan_path=None):
                 )
             except Exception:
                 pass
+        # Never leak an active Operation: finish it so the Case is released
+        # and a new Plan can proceed; re-applying this Plan resumes it.
+        try:
+            store.finish_operation(operation["operation_id"], "anomaly", error, actor)
+        except Exception:
+            pass
         raise
     finally:
         heartbeat.stop()
@@ -510,7 +615,14 @@ def status_for_project(store, project_root, live=False):
     if profile.get("transport", {}).get("kind") == "ssh":
         result["remote_calls"] = 1
     if code != 0:
-        raise OperationError("scheduler status failed: %s" % (stderr.strip() or stdout.strip()))
+        detail = (stderr.strip() or stdout.strip() or "exit %d" % code)
+        result["live"] = {
+            "scheduler": "slurm", "job_id": job_id, "state": "UNKNOWN",
+            "warning": "scheduler query failed (%s); showing cached controller "
+                       "state" % detail,
+            "observed_at": now_utc(),
+        }
+        return result
     result["live"] = {"scheduler": "slurm", "job_id": job_id,
                       "state": stdout.strip().splitlines()[0] if stdout.strip() else "NOT_FOUND",
                       "observed_at": now_utc()}

@@ -54,7 +54,12 @@ evidence; the controller commits state.
 - Ask/confirm: PGen, backend (`cpu/cuda/hip`), MPI, GPU-aware MPI, output,
   build intent/optimization, precision, deposit, shape order, debug, tests,
   dependency policy, and jobs. For GPU builds also confirm architecture; for
-  HIP confirm ROCm/DTK preference and optimization.
+  HIP confirm ROCm/DTK preference and optimization. Record the confirmation
+  with `entity_checkpoint.py confirm <requirements.json> --checkpoint
+  <entity-deps.local.json> --by <actor>`; compatibility fails
+  `parameters.confirmation` until the confirmed digest matches the current
+  requirements, and `env.sh` generation/compile must not proceed on that
+  failure.
 - Do not compile until `requirements.json` validates, compatibility is `pass`,
   and `env.sh` was generated from the current checkpoint.
 - Dependency source builds require a reviewed plan and explicit permission.

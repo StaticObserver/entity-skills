@@ -1,4 +1,4 @@
-# Router v5 Runtime Reference
+# Router Runtime Reference
 
 This is an internal/debugging reference. Normal work uses `entityctl plan`,
 `apply`, and `status` as documented in `SKILL.md`.

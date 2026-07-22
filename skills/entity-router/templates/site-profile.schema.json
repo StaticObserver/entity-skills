@@ -1,0 +1,70 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Entity Router Site profile",
+  "type": "object",
+  "required": ["schema_version", "site_id", "transport", "scheduler", "roots", "policy"],
+  "additionalProperties": true,
+  "properties": {
+    "schema_version": {"const": 1},
+    "site_id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_-]+$",
+      "description": "Stable identifier; locators are (site_id, absolute path)."
+    },
+    "display_name": {"type": "string"},
+    "transport": {
+      "type": "object",
+      "required": ["kind"],
+      "properties": {
+        "kind": {"enum": ["local", "ssh"]},
+        "ssh_alias": {
+          "type": "string",
+          "description": "Required when kind=ssh; an alias from ~/.ssh/config."
+        }
+      }
+    },
+    "scheduler": {
+      "type": "object",
+      "required": ["kind"],
+      "properties": {
+        "kind": {"enum": ["none", "slurm", "pbs", "custom"]}
+      }
+    },
+    "roots": {
+      "type": "object",
+      "description": "Absolute paths on this Site; independent roots, no shared parent required.",
+      "properties": {
+        "source_root": {"type": "string", "pattern": "^/"},
+        "build_root": {"type": "string", "pattern": "^/"},
+        "run_root": {"type": "string", "pattern": "^/"},
+        "staging_root": {"type": "string", "pattern": "^/"},
+        "data_root": {"type": "string", "pattern": "^/"}
+      },
+      "additionalProperties": {"type": "string", "pattern": "^/"}
+    },
+    "policy": {
+      "type": "object",
+      "description": "Safe defaults; run `entityctl site discover <site>` to enumerate legal values before filling these.",
+      "properties": {
+        "default_partition": {"type": "string"},
+        "default_qos": {"type": "string"},
+        "default_submit_user": {"type": "string"},
+        "default_cpus_per_gpu": {"type": "integer", "minimum": 1},
+        "max_cpu_per_gpu": {"type": "integer", "minimum": 1}
+      },
+      "additionalProperties": true
+    },
+    "shared_mappings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["peer_site_id", "this_root", "peer_root"],
+        "properties": {
+          "peer_site_id": {"type": "string"},
+          "this_root": {"type": "string", "pattern": "^/"},
+          "peer_root": {"type": "string", "pattern": "^/"}
+        }
+      }
+    }
+  }
+}

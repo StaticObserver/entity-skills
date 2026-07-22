@@ -1,0 +1,50 @@
+{
+  "schema_version": 1,
+  "experiment_id": "e2e-neutral-streaming-v1",
+  "frozen_by": "gold run 2026-07-21 (job 59852966) + maintainer review",
+  "note": "Each metric has a physical definition, normalization, and formula. Values are ceilings/tolerances, not targets. Headroom over gold-run observations accounts for MPI domain-decomposition noise (2 ranks) without weakening the physics.",
+  "metrics": {
+    "particle_count_conservation": {
+      "definition": "Macro-particle count per species must not change between first and last particle snapshot.",
+      "formula": "N_sp(t_last) - N_sp(t_first) == 0 for each species",
+      "tolerance": 0,
+      "gold_observation": "exactly conserved"
+    },
+    "ux_drift_relative_change": {
+      "definition": "Weight-averaged streaming four-velocity ux per species stays at the initialized drift (0.2 c).",
+      "formula": "abs(mean_ux(t_last) - 0.2) / 0.2 <= tolerance, mean over all macro-particles of the species at the last snapshot",
+      "tolerance": 0.05,
+      "gold_observation": "0.198/0.196 at t=45.1 (~1-2%)"
+    },
+    "b1_mean_absolute_deviation": {
+      "definition": "Domain-averaged B1 keeps the imposed uniform background (normalized units, larmor0 = 1).",
+      "formula": "abs(mean(B1)(t) - 1.0) <= tolerance for every field snapshot",
+      "tolerance": 0.001,
+      "gold_observation": "1.0 within single precision"
+    },
+    "b1_squared_relative_drift": {
+      "definition": "Magnetic energy proxy <B1^2> does not drift over the run.",
+      "formula": "abs(<B1^2>(t) - <B1^2>(t0)) / <B1^2>(t0) <= tolerance for every stats row",
+      "tolerance": 0.01,
+      "gold_observation": "constant at 1.0"
+    },
+    "e_squared_noise_ceiling": {
+      "definition": "Transverse/total electric energy stays at particle-noise level: no streaming-instability growth.",
+      "formula": "max over stats rows of (<E1^2> + <E2^2> + <E3^2>) <= ceiling (code-normalized energy density)",
+      "tolerance": 0.0001,
+      "gold_observation": "<= ~1e-6 for the whole run; 100x headroom allowed for 2-rank MPI noise"
+    },
+    "energy_relative_drift": {
+      "definition": "Total energy (T00 / stats total) conserved within discretization error.",
+      "formula": "abs(E_tot(t) - E_tot(t0)) / E_tot(t0) <= tolerance for every stats row",
+      "tolerance": 0.01,
+      "gold_observation": "stable at ~1.02 normalized"
+    },
+    "stats_time_monotonic": {
+      "definition": "Stats time column strictly increases and contains no NaN/Inf (output sanity).",
+      "formula": "all(diff(time) > 0) and all(isfinite(rows))",
+      "tolerance": 0,
+      "gold_observation": "monotonic, finite"
+    }
+  }
+}

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""GoalSpec validation and deterministic v5 Operation planning."""
+"""GoalSpec validation and deterministic Operation planning."""
 
 from __future__ import print_function
 
@@ -27,6 +27,13 @@ FORBIDDEN_GOAL_KEYS = {
     "target_hash", "flow_hash", "locator", "bindings", "owner", "execution_domain",
     "lease", "revision",
 }
+GOAL_KEYS = {
+    "run": {"schema_version", "kind", "input", "site", "compute", "executable",
+            "case_id", "labels", "source_mode"},
+    "build": {"schema_version", "kind", "site", "checkpoint", "executable",
+              "case_id", "labels"},
+    "data": {"schema_version", "kind", "run", "case_id", "labels"},
+}
 
 
 class PlanError(RouterError):
@@ -51,27 +58,48 @@ def validate_goal(goal):
         )
     if goal.get("schema_version") != GOAL_SCHEMA_VERSION:
         raise PlanError("GoalSpec schema_version must be 1")
-    if goal.get("kind") != "run":
-        raise PlanError("GoalSpec kind is not yet supported: %s" % goal.get("kind"))
-    allowed = {
-        "schema_version", "kind", "input", "site", "compute", "executable",
-        "case_id", "labels", "source_mode",
-    }
-    unknown = set(goal).difference(allowed)
+    kind = goal.get("kind")
+    if kind not in GOAL_KEYS:
+        raise PlanError("GoalSpec kind is not supported: %s" % kind)
+    unknown = set(goal).difference(GOAL_KEYS[kind])
     if unknown:
         raise PlanError("GoalSpec contains unknown field: %s" % sorted(unknown)[0])
     if "case_id" in goal and (not isinstance(goal["case_id"], str) or not goal["case_id"]):
         raise PlanError("case_id must be a non-empty string")
-    if "executable" in goal and (not isinstance(goal["executable"], str)
-                                  or not goal["executable"]):
-        raise PlanError("executable must be a non-empty string")
-    if goal.get("source_mode", "snapshot") not in {"git-ref", "snapshot", "shared", "external"}:
-        raise PlanError("source_mode is invalid")
     labels = goal.get("labels", {})
     if (not isinstance(labels, dict)
             or any(not isinstance(key, str) or not isinstance(value, str)
                    for key, value in labels.items())):
         raise PlanError("labels must map strings to strings")
+    if kind == "run":
+        return _validate_run_goal(goal)
+    if kind == "build":
+        return _validate_build_goal(goal)
+    return _validate_data_goal(goal)
+
+
+def _validate_build_goal(goal):
+    decisions = []
+    for key in ["site", "checkpoint", "executable"]:
+        if not isinstance(goal.get(key), str) or not goal[key].strip():
+            decisions.append({"field": key, "question": "select the build %s" % key})
+    if decisions:
+        raise PlanError("GoalSpec needs user decisions", "needs_decision", decisions)
+    return goal
+
+
+def _validate_data_goal(goal):
+    if "run" in goal and (not isinstance(goal["run"], str) or not goal["run"]):
+        raise PlanError("run must be a non-empty run id or 'current'")
+    return goal
+
+
+def _validate_run_goal(goal):
+    if "executable" in goal and (not isinstance(goal["executable"], str)
+                                  or not goal["executable"]):
+        raise PlanError("executable must be a non-empty string")
+    if goal.get("source_mode", "snapshot") not in {"git-ref", "snapshot", "shared", "external"}:
+        raise PlanError("source_mode is invalid")
     decisions = []
     for key in ["input", "site"]:
         if not isinstance(goal.get(key), str) or not goal[key].strip():
@@ -305,14 +333,39 @@ def _source_identity(source_root, controller_artifacts=None):
     }, sorted(ignored)
 
 
-def plan_goal(store, project_root, goal, controller_artifacts=None):
-    goal = validate_goal(goal)
-    project_root = absolute(project_root)
-    if not os.path.isdir(project_root):
-        raise PlanError("project root does not exist: %s" % project_root)
+def _simulation_confirmation(input_path):
+    """Hard gate: the simulation parameter confirmation recorded by
+    pgen_preflight.py confirm must exist and match the current input bytes."""
+    path = input_path + ".decisions.json"
+    question = (
+        "show the parameter card to the user and record confirmation with "
+        "pgen_preflight.py confirm %s --by <actor>" % input_path
+    )
+    if not os.path.isfile(path):
+        raise PlanError(
+            "simulation parameters have not been confirmed",
+            "needs_decision",
+            [{"field": "input", "question": question}],
+        )
     try:
-        case = store.resolve_project(project_root)
-        create_case = False
+        with open(path, "r") as handle:
+            record = json.load(handle)
+    except (IOError, OSError, ValueError) as exc:
+        raise PlanError("cannot read simulation confirmation: %s" % exc)
+    if (not isinstance(record, dict)
+            or record.get("kind") != "entity-pgen.simulation-confirmation"
+            or record.get("input_sha256") != sha256_file(input_path)):
+        raise PlanError(
+            "simulation parameters changed since they were confirmed",
+            "needs_decision",
+            [{"field": "input", "question": question}],
+        )
+    return record
+
+
+def _resolve_case(store, project_root, goal):
+    try:
+        return store.resolve_project(project_root), False
     except StoreError:
         source_site = _source_site(store, project_root)
         case_uid = "case-" + canonical_hash({"project_root": project_root}).split(":", 1)[1][:16]
@@ -329,7 +382,19 @@ def plan_goal(store, project_root, goal, controller_artifacts=None):
                         "active_run": None, "data_id": "", "analysis_id": ""},
             "identities": {}, "legacy": {},
         }
-        create_case = True
+        return case, True
+
+
+def plan_goal(store, project_root, goal, controller_artifacts=None):
+    goal = validate_goal(goal)
+    project_root = absolute(project_root)
+    if not os.path.isdir(project_root):
+        raise PlanError("project root does not exist: %s" % project_root)
+    if goal["kind"] == "build":
+        return _plan_build(store, project_root, goal)
+    if goal["kind"] == "data":
+        return _plan_data(store, project_root, goal)
+    case, create_case = _resolve_case(store, project_root, goal)
     site_id = goal["site"]
     profile = store.get_site(site_id)
     if profile.get("scheduler", {}).get("kind") != "slurm":
@@ -339,6 +404,7 @@ def plan_goal(store, project_root, goal, controller_artifacts=None):
         if not roots.get(key):
             raise PlanError("execution Site is missing %s" % key)
     input_path = _resolve_input(project_root, goal["input"])
+    confirmation = _simulation_confirmation(input_path)
     source_authority = case["source"]["authority"]
     source_profile = store.get_site(source_authority["site_id"])
     if source_profile.get("transport", {}).get("kind") != "local":
@@ -418,7 +484,7 @@ def plan_goal(store, project_root, goal, controller_artifacts=None):
     plan_without_hash = {
         "schema_version": PLAN_SCHEMA_VERSION, "operation_id": operation_id,
         "case_uid": case["case_uid"], "project_root": project_root,
-        "create_case": create_case,
+        "create_case": create_case, "goal_kind": "run",
         "case": {"case_uid": case["case_uid"], "case_id": case["case_id"],
                  "project_root": project_root, "source": case["source"],
                  "current": case["current"]},
@@ -443,18 +509,229 @@ def plan_goal(store, project_root, goal, controller_artifacts=None):
             "project_root": project_root, "case_uid": case["case_uid"],
             "site_id": site_id, "run_id": run_id, "steps": [item["kind"] for item in steps],
             "compute": compute,
+            "simulation_confirmation": {
+                "confirmed_by": confirmation.get("confirmed_by", ""),
+                "confirmed_at": confirmation.get("confirmed_at", ""),
+                "defaults": bool(confirmation.get("defaults", False)),
+            },
         },
     }
+
+
+def require_verified_checkpoint(checkpoint):
+    """Hard gate: a build Goal only registers checkpoints that env-build has
+    verified (compatibility pass) and whose parameters were confirmed."""
+    compatibility = checkpoint.get("compatibility", {})
+    if not isinstance(compatibility, dict) or compatibility.get("status") != "pass":
+        raise PlanError(
+            "build checkpoint compatibility is not pass",
+            "needs_decision",
+            [{"field": "checkpoint",
+              "question": "run entity_compat.py and resolve the failures"}],
+        )
+    parameters = checkpoint.get("decisions", {}).get("parameters", {})
+    if not isinstance(parameters, dict) or not parameters.get("digest"):
+        raise PlanError(
+            "build parameters have not been confirmed",
+            "needs_decision",
+            [{"field": "checkpoint",
+              "question": "record build parameter confirmation with "
+                          "entity_checkpoint.py confirm"}],
+        )
+
+
+def _finish_plan(case, create_case, goal, profile, steps, kind_keys, summary):
+    plan_without_hash = dict(kind_keys)
+    plan_without_hash.update({
+        "schema_version": PLAN_SCHEMA_VERSION,
+        "case_uid": case["case_uid"], "project_root": case["project_root"],
+        "create_case": create_case, "goal_kind": goal["kind"],
+        "case": {"case_uid": case["case_uid"], "case_id": case["case_id"],
+                 "project_root": case["project_root"], "source": case["source"],
+                 "current": case["current"]},
+        "goal_hash": canonical_hash(goal),
+        "site_id": profile["site_id"],
+        "site_profile_hash": canonical_hash(profile),
+        "generated_at": now_utc(), "steps": steps,
+    })
+    plan = dict(plan_without_hash)
+    stable = dict(plan_without_hash)
+    stable.pop("generated_at", None)
+    plan["plan_hash"] = canonical_hash(stable)
+    return {
+        "schema_version": 1, "kind": "entity-router.plan", "status": "ready",
+        "state_mutated": False, "goal": goal, "plan": plan, "summary": summary,
+    }
+
+
+def _plan_build(store, project_root, goal):
+    case, create_case = _resolve_case(store, project_root, goal)
+    site_id = goal["site"]
+    profile = store.get_site(site_id)
+    roots = profile.get("roots", {})
+    for key in ["build_root", "staging_root"]:
+        if not roots.get(key):
+            raise PlanError("execution Site is missing %s" % key)
+    executable, unused = _current_build_executable(case, profile, goal["executable"])
+    checkpoint_path = absolute(goal["checkpoint"])
+    if not os.path.isfile(checkpoint_path):
+        raise PlanError("build checkpoint does not exist: %s" % checkpoint_path)
+    try:
+        with open(checkpoint_path, "r") as handle:
+            checkpoint = json.load(handle)
+    except (IOError, OSError, ValueError) as exc:
+        raise PlanError("cannot read build checkpoint: %s" % exc)
+    if not isinstance(checkpoint, dict):
+        raise PlanError("build checkpoint must contain a JSON object")
+    require_verified_checkpoint(checkpoint)
+    checkpoint_sha256 = sha256_file(checkpoint_path)
+    seed = {"case_uid": case["case_uid"], "checkpoint_sha256": checkpoint_sha256,
+            "executable": executable, "site_id": site_id}
+    digest = canonical_hash(seed).split(":", 1)[1][:16]
+    build_id = "build-" + digest
+    operation_id = "op-" + digest
+    staging_root = os.path.join(roots["staging_root"], case["case_uid"], operation_id)
+    build_identity = {
+        "id": build_id, "kind": "build", "site_id": site_id,
+        "root": {"site_id": site_id, "path": os.path.dirname(executable)},
+        "parents": {"source_id": case.get("current", {}).get("source_id", "")},
+        "checkpoint_sha256": checkpoint_sha256, "status": "planned",
+    }
+    steps = [{
+        "step_id": "register", "kind": "build.register.v1", "site_id": site_id,
+        "receipt": os.path.join(staging_root, "receipts", "build-register.json"),
+        "allowed_roots": [staging_root, roots["build_root"]],
+        "request": {"executable": executable},
+        "identity": build_identity,
+    }]
+    kind_keys = {"operation_id": operation_id, "build_id": build_id,
+                 "checkpoint": checkpoint_path,
+                 "checkpoint_sha256": checkpoint_sha256, "executable": executable}
+    summary = {
+        "project_root": project_root, "case_uid": case["case_uid"],
+        "site_id": site_id, "build_id": build_id,
+        "steps": [step["kind"] for step in steps],
+        "parameters_confirmed_by": checkpoint["decisions"]["parameters"].get(
+            "confirmed_by", ""),
+    }
+    return _finish_plan(case, create_case, goal, profile, steps, kind_keys, summary)
+
+
+def _plan_data(store, project_root, goal):
+    try:
+        case = store.resolve_project(project_root)
+        create_case = False
+    except StoreError:
+        raise PlanError(
+            "no Case covers the project; complete a run Goal first",
+            "needs_decision",
+            [{"field": "run", "question": "select a Case with a submitted run"}],
+        )
+    requested = goal.get("run", "")
+    run_id = (case.get("current", {}).get("run_id", "")
+              if requested in {"", "current"} else requested)
+    if not run_id:
+        raise PlanError(
+            "Case has no current run",
+            "needs_decision",
+            [{"field": "run", "question": "select the run to inventory"}],
+        )
+    run_identity = None
+    for item in case.get("identities", {}).get("run", {}).get("items", []):
+        if item.get("id") == run_id or item.get("identity_id") == run_id:
+            run_identity = item
+            break
+    if run_identity is None:
+        raise PlanError(
+            "unknown run identity: %s" % run_id,
+            "needs_decision",
+            [{"field": "run", "question": "select a known run id"}],
+        )
+    root = run_identity.get("root", {})
+    site_id = root.get("site_id") or run_identity.get("site_id", "")
+    run_root = root.get("path", "")
+    if not site_id or not run_root:
+        raise PlanError("run identity has no usable root locator")
+    profile = store.get_site(site_id)
+    if not profile.get("roots", {}).get("staging_root"):
+        raise PlanError("execution Site is missing staging_root")
+    digest = canonical_hash({"case_uid": case["case_uid"], "run_id": run_id})
+    digest = digest.split(":", 1)[1][:16]
+    data_id = "data-" + digest
+    operation_id = "op-" + digest
+    staging_root = os.path.join(
+        profile["roots"]["staging_root"], case["case_uid"], operation_id)
+    data_identity = {
+        "id": data_id, "kind": "data", "site_id": site_id,
+        "root": {"site_id": site_id, "path": run_root},
+        "parents": {"run_id": run_id}, "status": "planned",
+    }
+    steps = [{
+        "step_id": "inventory", "kind": "data.inventory.v1", "site_id": site_id,
+        "receipt": os.path.join(staging_root, "receipts", "data-inventory.json"),
+        "allowed_roots": [staging_root, run_root],
+        "request": {"run_root": run_root,
+                    "manifest": os.path.join(run_root, "data-inventory.json")},
+        "identity": data_identity,
+    }]
+    kind_keys = {"operation_id": operation_id, "data_id": data_id, "run_id": run_id}
+    summary = {
+        "project_root": project_root, "case_uid": case["case_uid"],
+        "site_id": site_id, "data_id": data_id, "run_id": run_id,
+        "steps": [step["kind"] for step in steps],
+    }
+    return _finish_plan(case, create_case, goal, profile, steps, kind_keys, summary)
+
+
+PLAN_BASE_KEYS = {"schema_version", "operation_id", "case_uid", "project_root",
+                  "create_case", "case", "goal_hash", "site_id",
+                  "site_profile_hash", "generated_at", "steps", "plan_hash"}
+PLAN_KIND_KEYS = {
+    "run": {"goal_kind", "source_id", "controller_artifacts",
+            "source_site_profile_hash", "source_identity", "run_id"},
+    "build": {"goal_kind", "build_id", "checkpoint", "checkpoint_sha256",
+              "executable"},
+    "data": {"goal_kind", "data_id", "run_id"},
+}
+PLAN_STEP_SCHEMAS = {
+    "run": [
+        ("preflight", "run.preflight.v1",
+         {"step_id", "kind", "site_id", "receipt", "allowed_roots", "request"},
+         {"run_spec", "job_name", "staging_root"}),
+        ("prepare", "run.prepare.v2",
+         {"step_id", "kind", "site_id", "receipt", "allowed_roots", "payloads",
+          "request", "identity"},
+         {"run_root", "manifest", "manifest_payload", "submit_script", "run_spec",
+          "staging_root", "staged_input"}),
+        ("launch", "run.launch.v2",
+         {"step_id", "kind", "site_id", "receipt", "allowed_roots", "request",
+          "identity"},
+         {"run_root", "submit_script", "job_name", "submit_user"}),
+    ],
+    "build": [
+        ("register", "build.register.v1",
+         {"step_id", "kind", "site_id", "receipt", "allowed_roots", "request",
+          "identity"},
+         {"executable"}),
+    ],
+    "data": [
+        ("inventory", "data.inventory.v1",
+         {"step_id", "kind", "site_id", "receipt", "allowed_roots", "request",
+          "identity"},
+         {"run_root", "manifest"}),
+    ],
+}
 
 
 def validate_plan(plan):
     if not isinstance(plan, dict) or plan.get("schema_version") != PLAN_SCHEMA_VERSION:
         raise PlanError("invalid Operation Plan schema")
-    required = {"schema_version", "operation_id", "case_uid", "project_root",
-                "create_case", "case", "goal_hash", "source_id",
-                "controller_artifacts", "source_site_profile_hash", "site_id",
-                "site_profile_hash", "run_id", "source_identity", "generated_at",
-                "steps", "plan_hash"}
+    kind = plan.get("goal_kind") or "run"
+    if kind not in PLAN_KIND_KEYS:
+        raise PlanError("Operation Plan has unsupported Goal kind: %s" % kind)
+    required = set(PLAN_BASE_KEYS) | set(PLAN_KIND_KEYS[kind])
+    if "goal_kind" not in plan:
+        required.discard("goal_kind")
     if set(plan) != required:
         raise PlanError("Operation Plan keys differ from schema")
     unsigned = dict(plan)
@@ -462,25 +739,15 @@ def validate_plan(plan):
     unsigned.pop("generated_at", None)
     if canonical_hash(unsigned) != expected:
         raise PlanError("Operation Plan hash is invalid")
-    if not isinstance(plan["steps"], list) or len(plan["steps"]) != 3:
-        raise PlanError("Operation Plan must have exactly three Steps")
-    step_keys = [
-        {"step_id", "kind", "site_id", "receipt", "allowed_roots", "request"},
-        {"step_id", "kind", "site_id", "receipt", "allowed_roots", "payloads",
-         "request", "identity"},
-        {"step_id", "kind", "site_id", "receipt", "allowed_roots", "request", "identity"},
-    ]
-    request_keys = [
-        {"run_spec", "job_name", "staging_root"},
-        {"run_root", "manifest", "manifest_payload", "submit_script", "run_spec",
-         "staging_root", "staged_input"},
-        {"run_root", "submit_script", "job_name", "submit_user"},
-    ]
-    for index, step in enumerate(plan["steps"]):
-        if set(step) != step_keys[index] or set(step.get("request", {})) != request_keys[index]:
+    steps = PLAN_STEP_SCHEMAS[kind]
+    if not isinstance(plan["steps"], list) or len(plan["steps"]) != len(steps):
+        raise PlanError("Operation Plan has wrong Step count for Goal kind %s" % kind)
+    for index, (step_id, step_kind, step_keys, request_keys) in enumerate(steps):
+        step = plan["steps"][index]
+        if set(step) != step_keys or set(step.get("request", {})) != request_keys:
             raise PlanError("Operation Plan Step keys differ from schema")
-        if step.get("kind") not in {"run.preflight.v1", "run.prepare.v2", "run.launch.v2"}:
+        if step.get("kind") != step_kind:
             raise PlanError("Operation Plan contains unsupported Step kind")
-        if step.get("step_id") != ["preflight", "prepare", "launch"][index]:
+        if step.get("step_id") != step_id:
             raise PlanError("Operation Plan Step order is invalid")
     return plan

@@ -95,6 +95,30 @@ and validation. The checkpoint is reusable only if embedded requirements,
 execution site, all five resolved paths, version profile, and toolchain choices
 match the current request.
 
+`decisions.parameters` records the compile-parameter confirmation hard gate,
+written by `entity_checkpoint.py confirm`:
+
+```json
+{
+  "digest": "sha256:<hex>",
+  "confirmed_by": "<actor>",
+  "confirmed_at": "<UTC ISO timestamp>",
+  "defaults": false,
+  "card": {
+    "schema_version": 1,
+    "kind": "entity-parameter-card",
+    "domain": "build",
+    "fields": {"environment.backend": {"value": "cpu", "tier": 1}},
+    "digest": "sha256:<hex>"
+  }
+}
+```
+
+`card` is the parameter card derived from the requirements at confirmation
+time (`entity_schema.py:parameter_card`); `digest` is its digest. Compatibility
+fails `parameters.confirmation` when the record is missing or the digest no
+longer matches the current requirements.
+
 Compatibility statuses:
 
 - `pass`: current request is buildable with proven dependencies;

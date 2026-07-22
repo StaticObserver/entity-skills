@@ -5,14 +5,26 @@ Read-only and truly standalone PGen work may run directly.  A write to a
 source tree registered by the Router v5 store is currently refused: managed
 writes require a v5 pgen Goal, which is not yet implemented.  No
 source/control ancestor relationship is assumed.
+
+Subcommands:
+
+- ``card <input.toml>``: extract a best-effort simulation parameter card
+  (JSON on stdout) with a stable digest over the extracted fields.
+- ``confirm <input.toml> --by <actor> [--confirm-defaults]``: write an
+  atomic confirmation record to ``<input.toml>.decisions.json`` recording
+  who confirmed which exact input file.  The Router plan gate reads this
+  record and matches ``input_sha256`` before issuing a plan.
 """
 
 from __future__ import print_function
 
 import argparse
+import datetime
+import hashlib
 import json
 import os
 import sys
+import tempfile
 
 
 ROUTER_SCRIPTS = os.path.realpath(os.path.join(
@@ -29,6 +41,316 @@ from entity_router_common import (  # noqa: E402
     router_home,
 )
 from entity_router_store import OperationStore, StoreError  # noqa: E402
+
+
+# --- Simulation parameter card / confirmation record -----------------------
+
+CARD_SCHEMA_VERSION = 1
+CARD_KIND = "entity-parameter-card"
+RECORD_KIND = "entity-pgen.simulation-confirmation"
+
+try:
+    import tomllib
+except ImportError:  # Python < 3.11
+    tomllib = None
+
+
+def _fallback_parse_value(text):
+    """Best-effort TOML scalar/array parser; only what the card needs."""
+    text = text.strip()
+    if not text:
+        return None
+    if text.startswith('"') or text.startswith("'"):
+        quote = text[0]
+        end = text.rfind(quote)
+        return text[1:end] if end > 0 else text.strip(quote)
+    if text.startswith("["):
+        inner = text.strip()[1:-1]
+        items, depth, current, quote = [], 0, "", None
+        for char in inner:
+            if quote:
+                current += char
+                if char == quote:
+                    quote = None
+            elif char in "\"'":
+                quote = char
+                current += char
+            elif char == "[":
+                depth += 1
+                current += char
+            elif char == "]":
+                depth -= 1
+                current += char
+            elif char == "," and depth == 0:
+                items.append(_fallback_parse_value(current))
+                current = ""
+            else:
+                current += char
+        if current.strip():
+            items.append(_fallback_parse_value(current))
+        return items
+    if text.startswith("{"):
+        inner = text.strip()[1:-1]
+        table = {}
+        for part in inner.split(","):
+            if "=" in part:
+                key, value = part.split("=", 1)
+                table[key.strip()] = _fallback_parse_value(value)
+        return table
+    if text in ("true", "false"):
+        return text == "true"
+    try:
+        return int(text.replace("_", ""))
+    except ValueError:
+        pass
+    try:
+        return float(text.replace("_", ""))
+    except ValueError:
+        pass
+    return text
+
+
+def fallback_parse_toml(text):
+    """Best-effort TOML parser used only when tomllib is unavailable.
+
+    Handles comments, [table] / [dotted.table] headers, [[array.of.tables]],
+    and string/number/boolean/array/inline-table values.  It is intentionally
+    small and only meant to cover the fields the parameter card extracts.
+    """
+    root = {}
+    current = root
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line.startswith("[["):
+            path = line.strip("[] ").split(".")
+            parent = root
+            for part in path[:-1]:
+                parent = parent.setdefault(part, {})
+                if isinstance(parent, list):
+                    parent = parent[-1]
+            bucket = parent.setdefault(path[-1], [])
+            if not isinstance(bucket, list):
+                bucket = parent[path[-1]] = []
+            bucket.append({})
+            current = bucket[-1]
+        elif line.startswith("["):
+            path = line.strip("[] ").split(".")
+            current = root
+            for part in path:
+                current = current.setdefault(part, {})
+        elif "=" in line:
+            key, value = line.split("=", 1)
+            value = value.split(" #", 1)[0].strip() if '"' not in value else value.strip()
+            current[key.strip()] = _fallback_parse_value(value)
+    return root
+
+
+def load_toml(raw):
+    text = raw.decode("utf-8")
+    if tomllib is not None:
+        return tomllib.loads(text)
+    return fallback_parse_toml(text)
+
+
+def _table(data, *path):
+    node = data
+    for part in path:
+        if not isinstance(node, dict):
+            return {}
+        node = node.get(part) or {}
+    return node if isinstance(node, dict) else {}
+
+
+def _species_list(particles):
+    species = particles.get("species")
+    if isinstance(species, list):
+        return [item for item in species if isinstance(item, dict)]
+    if isinstance(species, dict):
+        return [species]
+    return []
+
+
+def _add_field(fields, key, value, tier):
+    fields[key] = {"value": value, "tier": tier}
+
+
+def _flatten_tier2(fields, prefix, table):
+    for key in sorted(table):
+        value = table[key]
+        dotted = "%s.%s" % (prefix, key) if prefix else key
+        if isinstance(value, dict):
+            _flatten_tier2(fields, dotted, value)
+        elif not isinstance(value, list) or not any(isinstance(v, dict) for v in value):
+            _add_field(fields, dotted, value, 2)
+
+
+SETUP_PHYSICS_HINTS = ("density", "drift", "temp")
+
+
+def extract_fields(data):
+    """Best-effort, display-oriented extraction; missing tier-1 categories
+    are reported as warnings instead of failing."""
+    fields = {}
+    warnings = []
+
+    grid = _table(data, "grid")
+    found = False
+    for key in ("resolution", "cells", "extent", "extents"):
+        if key in grid:
+            _add_field(fields, "grid.%s" % key, grid[key], 1)
+            found = True
+    if not found:
+        warnings.append("tier-1 missing: grid extent/resolution (grid.resolution, grid.extent)")
+
+    particles = _table(data, "particles")
+    species = _species_list(particles)
+    found = False
+    if "ppc0" in particles:
+        _add_field(fields, "particles.ppc0", particles["ppc0"], 1)
+        found = True
+    for index, item in enumerate(species):
+        if "maxnpart" in item:
+            _add_field(fields, "particles.species.%d.maxnpart" % index,
+                       item["maxnpart"], 1)
+            found = True
+    if not found:
+        warnings.append("tier-1 missing: particle count (particles.ppc0, particles.species.*.maxnpart)")
+
+    found = False
+    if "nspec" in particles:
+        _add_field(fields, "particles.nspec", particles["nspec"], 1)
+        found = True
+    for index, item in enumerate(species):
+        for key in ("label", "mass", "charge", "density", "drift", "temperature"):
+            if key in item:
+                _add_field(fields, "particles.species.%d.%s" % (index, key),
+                           item[key], 1)
+                found = True
+    setup = _table(data, "setup")
+    for key in sorted(setup):
+        if any(hint in key.lower() for hint in SETUP_PHYSICS_HINTS):
+            _add_field(fields, "setup.%s" % key, setup[key], 1)
+            found = True
+    if not found:
+        warnings.append("tier-1 missing: species/injection (particles.nspec, species mass/charge, setup density/drift/temperature)")
+
+    boundaries = _table(data, "boundaries")
+    if boundaries.get("fields") is not None or boundaries.get("particles") is not None:
+        for key in ("fields", "particles"):
+            if boundaries.get(key) is not None:
+                _add_field(fields, "boundaries.%s" % key, boundaries[key], 1)
+    else:
+        warnings.append("tier-1 missing: boundary conditions (boundaries.fields, boundaries.particles)")
+
+    simulation = _table(data, "simulation")
+    timestep = _table(data, "algorithms", "timestep")
+    found = False
+    for key in ("runtime", "t_end", "steps"):
+        if key in simulation:
+            _add_field(fields, "simulation.%s" % key, simulation[key], 1)
+            found = True
+    for key in ("dt", "CFL"):
+        if key in timestep:
+            _add_field(fields, "algorithms.timestep.%s" % key, timestep[key], 1)
+            found = True
+    if not found:
+        warnings.append("tier-1 missing: timestep (simulation.runtime/steps, algorithms.timestep.dt/CFL)")
+
+    for key in ("name", "engine"):
+        if key in simulation:
+            _add_field(fields, "simulation.%s" % key, simulation[key], 2)
+    _flatten_tier2(fields, "output", _table(data, "output"))
+
+    return fields, warnings
+
+
+def build_card(path):
+    with open(path, "rb") as handle:
+        raw = handle.read()
+    input_sha256 = hashlib.sha256(raw).hexdigest()
+    fields, warnings = extract_fields(load_toml(raw))
+    canonical = json.dumps(fields, sort_keys=True, separators=(",", ":"))
+    digest = "sha256:" + hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+    return {
+        "schema_version": CARD_SCHEMA_VERSION,
+        "kind": CARD_KIND,
+        "domain": "simulation",
+        "input_sha256": input_sha256,
+        "fields": fields,
+        "digest": digest,
+        "warnings": warnings,
+    }
+
+
+def build_record(card, actor, confirm_defaults):
+    return {
+        "schema_version": CARD_SCHEMA_VERSION,
+        "kind": RECORD_KIND,
+        "input_sha256": card["input_sha256"],
+        "card": card,
+        "confirmed_by": actor,
+        "confirmed_at": datetime.datetime.now(
+            datetime.timezone.utc).isoformat(),
+        "defaults": bool(confirm_defaults),
+    }
+
+
+def atomic_write_json(path, payload):
+    handle, temp_path = tempfile.mkstemp(
+        dir=os.path.dirname(os.path.abspath(path)) or ".",
+        prefix=".decisions-", suffix=".tmp")
+    try:
+        with os.fdopen(handle, "w") as stream:
+            stream.write(json.dumps(payload, indent=2, sort_keys=True))
+            stream.write("\n")
+        os.replace(temp_path, path)
+    except BaseException:
+        try:
+            os.unlink(temp_path)
+        except OSError:
+            pass
+        raise
+
+
+def card_main(argv):
+    parser = argparse.ArgumentParser(
+        prog="pgen_preflight.py card",
+        description="Extract a simulation parameter card from an Entity TOML")
+    parser.add_argument("input", help="path to the simulation input TOML")
+    args = parser.parse_args(argv)
+    try:
+        card = build_card(args.input)
+    except (OSError, ValueError) as exc:
+        print(json.dumps({"error": str(exc)}, indent=2, sort_keys=True))
+        return 2
+    print(json.dumps(card, indent=2, sort_keys=True))
+    return 0
+
+
+def confirm_main(argv):
+    parser = argparse.ArgumentParser(
+        prog="pgen_preflight.py confirm",
+        description="Record simulation parameter confirmation for an Entity TOML")
+    parser.add_argument("input", help="path to the simulation input TOML")
+    parser.add_argument("--by", dest="actor", required=True,
+                        help="actor confirming the parameters (required)")
+    parser.add_argument("--confirm-defaults", action="store_true",
+                        help="accept defaults without item-by-item review (audit flag)")
+    args = parser.parse_args(argv)
+    record_path = args.input + ".decisions.json"
+    try:
+        card = build_card(args.input)
+        record = build_record(card, args.actor, args.confirm_defaults)
+        atomic_write_json(record_path, record)
+    except (OSError, ValueError) as exc:
+        print(json.dumps({"error": str(exc)}, indent=2, sort_keys=True))
+        return 2
+    payload = dict(record)
+    payload["record_path"] = os.path.abspath(record_path)
+    print(json.dumps(payload, indent=2, sort_keys=True))
+    return 0
 
 
 def target_locator(value, default_site, home=None):
@@ -128,6 +450,11 @@ def build_parser():
 
 
 def main(argv=None):
+    argv = list(sys.argv[1:] if argv is None else argv)
+    if argv and argv[0] == "card":
+        return card_main(argv[1:])
+    if argv and argv[0] == "confirm":
+        return confirm_main(argv[1:])
     args = build_parser().parse_args(argv)
     try:
         payload = evaluate(args)

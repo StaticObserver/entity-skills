@@ -57,6 +57,13 @@ Check:
 - execution site and all resolved schema-v2 Entity paths equal the current requirements;
 - schema-v1 `checkout_root/workdir` comparisons are legacy compatibility only.
 - requested backend, MPI, output, dependency profile, and compile options match checkpoint selections.
+- `decisions.parameters` holds a confirmation record whose digest matches the
+  parameter card of the current requirements (`parameters.confirmation`
+  check). A missing or stale record fails; re-confirm with
+  `entity_checkpoint.py confirm <requirements> --checkpoint <checkpoint>
+  --by <actor>` before generating `env.sh`. An explicit
+  `decisions.parameters_confirmation_override` downgrades this check to a
+  warning like other recorded overrides.
 
 Fail if the checkpoint was produced for a different Entity checkout, workdir, backend, MPI mode, output mode, or dependency profile.
 
@@ -87,6 +94,8 @@ Check:
 - compiler supports the required C++ standard.
 - all selected source-build or prefix dependencies record the same compiler signature, or an explicitly accepted compatible wrapper relationship.
 - `compiler.host_cxx` is recorded when `compiler.cxx` is Kokkos `nvcc_wrapper`.
+- when the selected MPI is OpenMPI, its recorded version satisfies
+  `entity_schema.py:MIN_OPENMPI_VERSION` (>= 5.0.0).
 
 Evidence should include executable paths, version output, and compiler signature strings.
 

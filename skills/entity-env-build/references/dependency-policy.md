@@ -32,7 +32,7 @@ These are always required:
 |-----------|----------|-------|
 | `environment.backend=cuda` | CUDA toolkit, `nvcc`, Kokkos `nvcc_wrapper` | Record both wrapper path and host compiler |
 | `environment.backend=hip` | HIP/ROCm toolkit, `hipcc` | Include ROCm/DTK version preference |
-| `environment.mpi=true` | `mpicxx`, `mpirun`, MPI modules | Don't enable just because mpicxx exists |
+| `environment.mpi=true` | `mpicxx`, `mpirun`, MPI modules | Don't enable just because mpicxx exists; OpenMPI must be >= 5.0.0 (see below) |
 | `environment.output=true` | ADIOS2 + HDF5 | Match serial/MPI context with MPI requirement |
 
 ## Profile Matching
@@ -45,3 +45,11 @@ Entity `1.4.0` and newer use one supported dependency profile:
 
 Entity versions before `1.4.0` are unsupported.
 Entity `1.4.0`–`1.4.2` are CPU-only; CUDA requires Entity `1.4.3` or newer.
+
+## OpenMPI Minimum Version
+
+When the selected MPI is OpenMPI, the version must satisfy
+`entity_schema.py:MIN_OPENMPI_VERSION` (>= 5.0.0). Older OpenMPI 4.x releases
+have known ORTE/PMI launch failures under `srun`. The compatibility check
+`mpi.openmpi_min_version` fails below the minimum; select a newer module or
+source-build OpenMPI 5.x instead of overriding.

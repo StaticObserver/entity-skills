@@ -23,9 +23,11 @@ from entity_state import record_step
 from entity_schema import (
     COMPILER_MIN_VERSIONS,
     MIN_CMAKE_VERSION,
+    MIN_OPENMPI_VERSION,
     COMPAT_OVERRIDE_MAP,
     entity_paths,
     override_satisfies,
+    parameter_card,
     version_satisfies,
     COMPILER_KNOWN_BAD,
 )
@@ -298,6 +300,61 @@ def has_installed_dependency(checkpoint: Dict[str, Any], dep: str) -> bool:
 
 
 # ---------------------------------------------------------------------------
+# Parameter confirmation hard gate
+# ---------------------------------------------------------------------------
+
+
+def _check_parameters_confirmation(
+    checks: List[Dict[str, Any]],
+    issues: List[str],
+    req: Dict[str, Any],
+    checkpoint: Dict[str, Any],
+) -> None:
+    """Require a recorded parameter confirmation matching the current request."""
+    decisions = checkpoint.get("decisions", {})
+    record = decisions.get("parameters") if isinstance(decisions, dict) else None
+    if not isinstance(record, dict) or not record.get("digest"):
+        add(
+            checks,
+            "parameters.confirmation",
+            "fail",
+            "Compile parameters have not been confirmed for this checkpoint",
+            {},
+            remediation="run entity_checkpoint.py confirm <requirements> "
+            "--checkpoint <checkpoint> --by <actor>",
+        )
+        issues.append("compile parameters have no confirmation record")
+        return
+
+    expected = parameter_card(req)["digest"]
+    actual = str(record.get("digest") or "")
+    if actual != expected:
+        add(
+            checks,
+            "parameters.confirmation",
+            "fail",
+            "Compile parameters changed after confirmation",
+            {"confirmed_digest": actual, "current_digest": expected},
+            remediation="run entity_checkpoint.py confirm <requirements> "
+            "--checkpoint <checkpoint> --by <actor> to re-confirm the changed parameters",
+        )
+        issues.append("compile parameters changed after confirmation")
+        return
+
+    add(
+        checks,
+        "parameters.confirmation",
+        "pass",
+        "Compile parameters confirmed for the current requirements",
+        {
+            "digest": expected,
+            "confirmed_by": str(record.get("confirmed_by") or ""),
+            "confirmed_at": str(record.get("confirmed_at") or ""),
+        },
+    )
+
+
+# ---------------------------------------------------------------------------
 # Cross-dependency toolchain consistency helpers
 # ---------------------------------------------------------------------------
 
@@ -507,6 +564,66 @@ def _cross_check_mpi_consistency(
             issues.append(f"{dep_name} MPI mismatch with selected MPI")
 
 
+def _mpi_entry_is_openmpi(name: str, entry: Dict[str, Any]) -> bool:
+    if name == "openmpi":
+        return True
+    for field in ("flavor", "implementation", "mpi_implementation", "provider", "name"):
+        value = str(entry.get(field) or "").lower().replace(" ", "")
+        if "openmpi" in value:
+            return True
+    return False
+
+
+def _check_openmpi_min_version(
+    checks: List[Dict[str, Any]],
+    issues: List[str],
+    mpi_name: str,
+    mpi_entry: Dict[str, Any],
+) -> None:
+    """Require OpenMPI >= MIN_OPENMPI_VERSION when the selected MPI is OpenMPI."""
+    if not _mpi_entry_is_openmpi(mpi_name, mpi_entry):
+        return
+    raw = str(mpi_entry.get("version") or "")
+    version = _parse_version_pair(raw)
+    if not raw or version <= (0, 0):
+        add(
+            checks,
+            "mpi.openmpi_min_version",
+            "warn",
+            "Selected MPI is OpenMPI but no version is recorded; cannot verify "
+            "the >= %d.%d minimum" % MIN_OPENMPI_VERSION,
+            {},
+            remediation="Record selected.mpi.version and re-run the compatibility check.",
+        )
+        return
+    if not version_satisfies(version, MIN_OPENMPI_VERSION):
+        msg = (
+            f"OpenMPI {version[0]}.{version[1]} is below minimum "
+            f"{MIN_OPENMPI_VERSION[0]}.{MIN_OPENMPI_VERSION[1]} — older OpenMPI "
+            "releases have known ORTE/PMI launch failures under srun"
+        )
+        add(
+            checks,
+            "mpi.openmpi_min_version",
+            "fail",
+            msg,
+            {"actual": list(version), "required": list(MIN_OPENMPI_VERSION)},
+            remediation=(
+                f"Select or build OpenMPI {MIN_OPENMPI_VERSION[0]}."
+                f"{MIN_OPENMPI_VERSION[1]}+ and update entity-deps.local.json."
+            ),
+        )
+        issues.append(msg)
+        return
+    add(
+        checks,
+        "mpi.openmpi_min_version",
+        "pass",
+        f"OpenMPI {version[0]}.{version[1]} satisfies the minimum",
+        {"actual": list(version), "required": list(MIN_OPENMPI_VERSION)},
+    )
+
+
 def run_cross_checks(
     checks: List[Dict[str, Any]],
     issues: List[str],
@@ -539,6 +656,15 @@ def run_cross_checks(
         _cross_check_mpi_consistency(
             checks, issues, mpi_entry, adios2_entry, hdf5_entry, env,
         )
+
+    if isinstance(env, dict) and env.get("mpi"):
+        for mpi_name in ("mpi", "openmpi"):
+            entry = selected.get(mpi_name, {})
+            if not isinstance(entry, dict) or not entry:
+                continue
+            if mpi_name == "openmpi" and entry is selected.get("mpi"):
+                continue
+            _check_openmpi_min_version(checks, issues, mpi_name, entry)
 
 
 # ---------------------------------------------------------------------------
@@ -921,6 +1047,8 @@ def run_checks(
             issues.append("%s differs between requirements.json and checkpoint" % field)
 
     check_source_revision(req, checks, issues)
+
+    _check_parameters_confirmation(checks, issues, req, checkpoint)
 
     # -- Section 2: Entity version profile ----------------------------------
     try:

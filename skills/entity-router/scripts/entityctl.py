@@ -12,6 +12,7 @@ import hashlib
 import json
 import os
 import shutil
+import sqlite3
 import sys
 import tempfile
 
@@ -24,11 +25,13 @@ from entity_router_common import (
     now_utc,
     require_attributed_actor,
     router_home,
+    run_on_site,
+    sha256_file,
     validate_site_profile,
 )
 from entity_router_operation import apply_plan, status_for_project
 from entity_router_planner import PlanError, load_goal, plan_goal
-from entity_router_store import OperationStore, store_path
+from entity_router_store import OperationStore, STORE_SCHEMA_VERSION, canonical_hash, store_path
 
 
 SCHEMA_VERSION = 1
@@ -60,6 +63,14 @@ def ignored_file(relative):
         or name.endswith(".pyc")
         or name in {".DS_Store"}
     )
+
+
+def bundle_version(root=SKILL_ROOT):
+    try:
+        with open(os.path.join(root, "VERSION"), "r") as handle:
+            return handle.read().strip()
+    except (IOError, OSError):
+        return ""
 
 
 def bundle_hash(root):
@@ -227,6 +238,7 @@ def install_bundle(args):
         "actor": actor,
         "source_root": source_root,
         "bundle_root": bundle_root,
+        "bundle_version": bundle_version(os.path.join(source_root, "entity-router")),
         "bundle_hash": identity["hash"],
         "bundle_files": identity["files"],
         "bundle_created": created,
@@ -249,10 +261,26 @@ def doctor(args):
         warnings.append("mutations will be unattributed unless an Agent run ID is supplied")
     database = store_path(home)
     profiles = []
+    store_schema = None
     if os.path.isfile(database):
         profiles = OperationStore(home, create=False).export()["sites"]
+        connection = sqlite3.connect(database)
+        try:
+            row = connection.execute(
+                "SELECT value FROM meta WHERE key='schema_version'"
+            ).fetchone()
+            store_schema = int(row[0]) if row else None
+        except Exception:
+            store_schema = None
+        finally:
+            connection.close()
+        if store_schema != STORE_SCHEMA_VERSION:
+            warnings.append(
+                "store schema %s differs from runtime schema %s; run "
+                "entityctl store migrate" % (store_schema, STORE_SCHEMA_VERSION)
+            )
     else:
-        warnings.append("v5 store is unavailable; register Sites with entityctl site add")
+        warnings.append("store is unavailable; register Sites with entityctl site add")
     for profile in profiles:
         policy = profile.get("policy", {})
         if (profile.get("scheduler", {}).get("kind") == "slurm"
@@ -269,6 +297,7 @@ def doctor(args):
             "provider": provider,
             "path": path,
             "exists": os.path.isdir(path),
+            "bundle_version": bundle_version(os.path.join(path, "entity-router")),
             "bundle_hash": identity["hash"],
             "files": identity["files"],
             "matches_runtime": bool(identity["hash"] and identity["hash"] == runtime_bundle["hash"]),
@@ -281,12 +310,14 @@ def doctor(args):
         "controller": {
             "router_home": home,
             "available": os.path.isdir(home),
-            "v5_store": database,
-            "v5_store_available": os.path.isfile(database),
+            "store": database,
+            "store_available": os.path.isfile(database),
+            "store_schema_version": store_schema,
         },
         "trace_home": trace_home(),
         "runtime_bundle": {
             "root": DEFAULT_BUNDLE_ROOT,
+            "version": bundle_version(),
             "bundle_hash": runtime_bundle["hash"],
             "files": runtime_bundle["files"],
         },
@@ -319,6 +350,74 @@ def site_list(args):
         "kind": "entityctl.site.list",
         "state_mutated": False,
         "sites": store.export()["sites"],
+    }
+
+
+def site_discover(args):
+    """Enumerate legal Slurm partitions/QoS on a Site so policy defaults are
+    chosen from facts, not guesses. Read-only; at most two scheduler calls."""
+    store = OperationStore(args.router_home, create=False)
+    profile = store.get_site(args.site_id)
+    if profile.get("scheduler", {}).get("kind") != "slurm":
+        raise EntityCtlError("site discovery currently supports Slurm sites only")
+    ssh = profile.get("transport", {}).get("kind") == "ssh"
+    remote_calls = 0
+    code, stdout, stderr = run_on_site(
+        profile, ["sinfo", "-h", "-o", "%P|%a|%l|%G|%D|%c"]
+    )
+    if ssh:
+        remote_calls += 1
+    if code != 0:
+        raise EntityCtlError(
+            "sinfo failed on Site %s: %s"
+            % (profile["site_id"], (stderr.strip() or stdout.strip()))
+        )
+    partitions = []
+    for line in stdout.splitlines():
+        fields = line.strip().split("|")
+        if len(fields) < 6 or not fields[0]:
+            continue
+        partitions.append({
+            "name": fields[0].rstrip("*"), "default": fields[0].endswith("*"),
+            "state": fields[1], "timelimit": fields[2], "gres": fields[3],
+            "nodes": fields[4], "cpus": fields[5],
+        })
+    warnings = []
+    qos = []
+    code, stdout, stderr = run_on_site(
+        profile, ["sacctmgr", "-n", "list", "qos", "format=Name"]
+    )
+    if ssh:
+        remote_calls += 1
+    if code != 0:
+        warnings.append(
+            "sacctmgr failed; QoS list unavailable: %s"
+            % (stderr.strip() or stdout.strip())
+        )
+    else:
+        qos = sorted({line.strip() for line in stdout.splitlines() if line.strip()})
+    suggested = {}
+    defaults = [item["name"] for item in partitions if item["default"]]
+    if defaults:
+        suggested["default_partition"] = defaults[0]
+    elif partitions:
+        suggested["default_partition"] = partitions[0]["name"]
+    if len(qos) == 1:
+        suggested["default_qos"] = qos[0]
+    elif qos:
+        suggested["default_qos"] = ""
+        warnings.append("multiple QoS available; choose one explicitly: %s" % ", ".join(qos))
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "ok": True,
+        "kind": "entityctl.site.discover",
+        "state_mutated": False,
+        "remote_calls": remote_calls,
+        "site_id": profile["site_id"],
+        "partitions": partitions,
+        "qos": qos,
+        "suggested_policy": suggested,
+        "warnings": warnings,
     }
 
 
@@ -365,6 +464,126 @@ def export_store(args):
     }
 
 
+def operation_cancel(args):
+    actor = require_attributed_actor(actor_identity(args))
+    store = OperationStore(args.router_home, create=False)
+    store.cancel_operation(args.operation_id, actor, reason=args.reason or "")
+    operation = store.get_operation(args.operation_id)
+    return {
+        "schema_version": 1, "kind": "entity-router.operation.cancel", "ok": True,
+        "state_mutated": True, "operation_id": args.operation_id,
+        "operation_status": operation["status"],
+    }
+
+
+def store_migrate(args):
+    database = store_path(router_home(args.router_home))
+    if not os.path.isfile(database):
+        raise EntityCtlError(
+            "store does not exist; nothing to migrate (register a Site with "
+            "entityctl site add)"
+        )
+    connection = sqlite3.connect(database)
+    try:
+        row = connection.execute(
+            "SELECT value FROM meta WHERE key='schema_version'"
+        ).fetchone()
+        current = int(row[0]) if row else None
+    finally:
+        connection.close()
+    if current == STORE_SCHEMA_VERSION:
+        return {
+            "schema_version": 1, "kind": "entity-router.store.migrate", "ok": True,
+            "state_mutated": False, "store_schema_version": current,
+            "message": "store is already at the current schema",
+        }
+    if current is not None and current > STORE_SCHEMA_VERSION:
+        raise EntityCtlError(
+            "store schema %s is newer than this bundle supports (%s); use a "
+            "newer bundle" % (current, STORE_SCHEMA_VERSION)
+        )
+    raise EntityCtlError(
+        "no migration path from store schema %s to %s is implemented yet"
+        % (current, STORE_SCHEMA_VERSION)
+    )
+
+
+def _submission_body(store, project_root, artifacts, note, actor):
+    status = status_for_project(store, project_root)
+    current = status.get("current", {})
+    identities = {
+        key: current.get(key, "")
+        for key in ["source_id", "build_id", "run_id", "data_id", "analysis_id"]
+    }
+    return {
+        "schema_version": 1,
+        "kind": "entity-router.submission",
+        "case_uid": status["case_uid"],
+        "project_root": absolute(project_root),
+        "identities": identities,
+        "run": status.get("run"),
+        "artifacts": artifacts,
+        "note": note,
+        "actor": actor,
+        "created_at": now_utc(),
+    }
+
+
+def submission_create(args):
+    """Create a submission whose fingerprints are always recomputed by the
+    tool from the final artifacts — never copied from older documents."""
+    actor = require_attributed_actor(actor_identity(args))
+    store = OperationStore(args.router_home, create=False)
+    artifacts = []
+    for raw in args.artifact or []:
+        path = absolute(raw)
+        if not os.path.isfile(path):
+            raise EntityCtlError("submission artifact does not exist: %s" % path)
+        artifacts.append({
+            "path": path,
+            "sha256": sha256_file(path),
+            "bytes": os.path.getsize(path),
+        })
+    artifacts.sort(key=lambda item: item["path"])
+    body = _submission_body(store, args.project_root, artifacts, args.note, actor)
+    body["fingerprint"] = canonical_hash(body)
+    atomic_write_json(args.output, body)
+    result = dict(body)
+    result["ok"] = True
+    result["state_mutated"] = False
+    result["output"] = absolute(args.output)
+    return result
+
+
+def submission_verify(args):
+    """Recompute every artifact fingerprint and the submission fingerprint;
+    any drift since creation fails verification."""
+    submission = load_json(args.submission, "submission")
+    if submission.get("kind") != "entity-router.submission":
+        raise EntityCtlError("not an entity-router.submission document")
+    stale = []
+    missing = []
+    for item in submission.get("artifacts", []):
+        path = item.get("path", "")
+        if not os.path.isfile(path):
+            missing.append(path)
+        elif sha256_file(path) != item.get("sha256"):
+            stale.append(path)
+    body = dict(submission)
+    expected = body.pop("fingerprint", "")
+    fingerprint_match = canonical_hash(body) == expected
+    ok = fingerprint_match and not stale and not missing
+    return {
+        "schema_version": 1,
+        "kind": "entity-router.submission.verify",
+        "ok": ok,
+        "state_mutated": False,
+        "fingerprint_match": fingerprint_match,
+        "stale": stale,
+        "missing": missing,
+    }
+
+
 def add_actor_arguments(parser):
     parser.add_argument("--actor-run-id")
     parser.add_argument("--actor-provider")
@@ -379,7 +598,8 @@ def build_parser():
     parser.add_argument("--router-home", default=router_home())
     add_actor_arguments(parser)
     sub = parser.add_subparsers(
-        dest="command", metavar="{doctor,plan,apply,status,site,export,install}"
+        dest="command",
+        metavar="{doctor,plan,apply,status,site,operation,store,submission,export,install}"
     )
     doctor_parser = sub.add_parser("doctor")
     doctor_parser.set_defaults(func=doctor)
@@ -406,6 +626,33 @@ def build_parser():
     site_add_parser.set_defaults(func=site_add)
     site_list_parser = site_sub.add_parser("list")
     site_list_parser.set_defaults(func=site_list)
+    site_discover_parser = site_sub.add_parser("discover")
+    site_discover_parser.add_argument("site_id")
+    site_discover_parser.set_defaults(func=site_discover)
+
+    operation = sub.add_parser("operation")
+    operation_sub = operation.add_subparsers(dest="operation_command")
+    cancel = operation_sub.add_parser("cancel")
+    cancel.add_argument("operation_id")
+    cancel.add_argument("--reason", default="")
+    cancel.set_defaults(func=operation_cancel)
+
+    store_cmd = sub.add_parser("store")
+    store_sub = store_cmd.add_subparsers(dest="store_command")
+    migrate = store_sub.add_parser("migrate")
+    migrate.set_defaults(func=store_migrate)
+
+    submission = sub.add_parser("submission")
+    submission_sub = submission.add_subparsers(dest="submission_command")
+    submission_create_parser = submission_sub.add_parser("create")
+    submission_create_parser.add_argument("--project-root", required=True)
+    submission_create_parser.add_argument("--output", required=True)
+    submission_create_parser.add_argument("--artifact", action="append", default=[])
+    submission_create_parser.add_argument("--note", default="")
+    submission_create_parser.set_defaults(func=submission_create)
+    submission_verify_parser = submission_sub.add_parser("verify")
+    submission_verify_parser.add_argument("--submission", required=True)
+    submission_verify_parser.set_defaults(func=submission_verify)
 
     export = sub.add_parser("export")
     export.add_argument("--output", required=True)

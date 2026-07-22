@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Shared primitives for the Entity Router v5 runtime.
+"""Shared primitives for the Entity Router runtime.
 
 The module is standard-library only and remains compatible with Python 3.6 so
 the same probe helpers can run on older HPC login nodes.

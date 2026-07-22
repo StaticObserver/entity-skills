@@ -4,6 +4,7 @@
 Subcommands:
   validate <requirements.json>
   create <requirements.json> [--merge <old.json>] [--from-discovery <discovery.json>]
+  confirm <requirements.json> --checkpoint <entity-deps.local.json> --by <actor> [--confirm-defaults]
   record-install --checkpoint <entity-deps.local.json> --dep <name> ...
 """
 
@@ -32,6 +33,7 @@ from entity_schema import (
     OPTIONAL_DEFAULTS,
     REQUIRED_BUILD,
     entity_paths,
+    parameter_card,
     required_entity_fields,
     requirements_schema,
 )
@@ -335,6 +337,61 @@ def cmd_create(args: argparse.Namespace) -> None:
 
 
 # ===========================================================================
+# Subcommand: confirm
+# ===========================================================================
+
+
+def cmd_confirm(args: argparse.Namespace) -> None:
+    if not args.checkpoint.exists():
+        raise SystemExit(
+            f"checkpoint does not exist: {args.checkpoint} — "
+            "run entity_checkpoint.py create first"
+        )
+    req = load_json(args.requirements_json)
+    checkpoint = load_json(args.checkpoint)
+
+    card = parameter_card(req)
+    decisions = checkpoint.setdefault("decisions", {})
+    if not isinstance(decisions, dict):
+        decisions = {}
+        checkpoint["decisions"] = decisions
+    decisions["parameters"] = {
+        "digest": card["digest"],
+        "confirmed_by": args.by,
+        "confirmed_at": datetime.now(timezone.utc).isoformat(),
+        "defaults": bool(args.confirm_defaults),
+        "card": card,
+    }
+
+    write_json_atomic(args.checkpoint, checkpoint)
+    record_step(
+        args.checkpoint.parent,
+        "checkpoint_updated",
+        "pass",
+        inputs={
+            "requirements_json": str(args.requirements_json.resolve()),
+            "checkpoint_json": str(args.checkpoint.resolve()),
+        },
+        outputs={"checkpoint_json": str(args.checkpoint.resolve())},
+        message=f"parameters confirmed by {args.by}",
+    )
+
+    if args.json:
+        protocol_ok(
+            "checkpoint.confirm",
+            checkpoint=str(args.checkpoint.resolve()),
+            digest=card["digest"],
+            confirmed_by=args.by,
+            defaults=bool(args.confirm_defaults),
+        )
+    else:
+        print(
+            f"parameters confirmed in {args.checkpoint.resolve()} "
+            f"(digest {card['digest']})"
+        )
+
+
+# ===========================================================================
 # Subcommand: record-install
 # ===========================================================================
 
@@ -466,6 +523,15 @@ def main() -> None:
                        help="Output path (default: entity.artifacts_root/entity-deps.local.json)")
     add_json_flag(p_cre)
 
+    # --- confirm ---
+    p_con = sub.add_parser("confirm", help="Record user confirmation of compile parameters in checkpoint JSON")
+    p_con.add_argument("requirements_json", type=Path, help="Path to requirements.json")
+    p_con.add_argument("--checkpoint", type=Path, required=True, help="entity-deps.local.json to update")
+    p_con.add_argument("--by", required=True, help="Actor confirming the parameters (user or agent id)")
+    p_con.add_argument("--confirm-defaults", action="store_true", dest="confirm_defaults",
+                       help="Record that defaulted (not explicitly set) parameters were also confirmed")
+    add_json_flag(p_con)
+
     # --- record-install ---
     p_rec = sub.add_parser("record-install", help="Record installed dependency evidence in checkpoint JSON")
     p_rec.add_argument("--checkpoint", type=Path, required=True, help="entity-deps.local.json to update")
@@ -491,6 +557,8 @@ def main() -> None:
         cmd_validate(args)
     elif args.subcommand == "create":
         cmd_create(args)
+    elif args.subcommand == "confirm":
+        cmd_confirm(args)
     elif args.subcommand == "record-install":
         cmd_record_install(args)
 
