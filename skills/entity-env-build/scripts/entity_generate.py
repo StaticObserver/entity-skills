@@ -10,6 +10,7 @@ Subcommands:
 import argparse
 import json
 import os
+import re
 import shlex
 import sys
 import uuid as _uuid
@@ -26,7 +27,6 @@ from _json_io import (
 )
 from entity_state import record_step
 from _version_profile import (
-    DEFAULT_VERSION_PROFILES,
     inferred_cxx_standard,
     requested_version,
     version_profile as entity_version_profile,
@@ -53,6 +53,24 @@ def q(value: Any) -> str:
     return shlex.quote(str(value))
 
 
+# Tokens interpolated into generated shell scripts or used as path
+# components must match this whitelist (blocks command substitution,
+# shell metacharacters, and ".." path traversal).
+_SAFE_TOKEN_RE = re.compile(r"[A-Za-z0-9._-]+")
+# Valid shell environment variable names.
+_ENV_NAME_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+
+
+def _safe_token(value: Any, what: str) -> str:
+    """Return *value* if it is a safe shell/path token, else exit with error."""
+    text = str(value)
+    if not _SAFE_TOKEN_RE.fullmatch(text):
+        raise SystemExit(
+            f"invalid {what}: {text!r} — only letters, digits, '.', '_', '-' are allowed"
+        )
+    return text
+
+
 def bool_on(value: Any) -> str:
     return "ON" if bool(value) else "OFF"
 
@@ -76,11 +94,6 @@ def get_deps_root(req: Dict[str, Any]) -> Path:
     if not value:
         raise SystemExit("requirements.json missing entity.deps_root")
     return Path(value)
-
-
-def get_pgen_dir(req: Dict[str, Any]) -> Path:
-    """Legacy helper: parent of the independent artifacts root."""
-    return get_build_artifacts_dir(req).parent
 
 
 def get_build_artifacts_dir(req: Dict[str, Any]) -> Path:
@@ -170,7 +183,12 @@ _KOKKOS_TO_CUDA_ARCH: Dict[str, str] = {
 def _kokkos_arch_to_cuda(arch: str) -> str:
     """Convert Kokkos architecture name to CUDA compute capability (e.g., AMPERE80→80)."""
     arch = arch.upper().replace("KOKKOS_ARCH_", "")
-    return _KOKKOS_TO_CUDA_ARCH.get(arch, "80")  # default to A100
+    if arch not in _KOKKOS_TO_CUDA_ARCH:
+        raise SystemExit(
+            f"unknown Kokkos GPU architecture: {arch!r} "
+            f"(no CUDA compute capability mapping; known: {', '.join(sorted(_KOKKOS_TO_CUDA_ARCH))})"
+        )
+    return _KOKKOS_TO_CUDA_ARCH[arch]
 
 
 # ===========================================================================
@@ -235,13 +253,15 @@ def _kokkos_script(req: Dict[str, Any], checkpoint: Dict[str, Any], deps_root: P
     env = req.get("environment", {})
     compilers = compiler_env(checkpoint)
     profile = entity_version_profile(req)
-    version = requested_version(req, "kokkos", profile)
+    version = _safe_token(requested_version(req, "kokkos", profile), "kokkos version")
     prefix = deps_root / "kokkos" / version
     artifacts_root = get_build_artifacts_dir(req)
     if not isinstance(env, dict):
         env = {}
     backend = str(env.get("backend") or "cpu").lower()
     arch = str(env.get("gpu_arch") or "")
+    if arch:
+        arch = _safe_token(arch, "environment.gpu_arch")
     opts = [
         '-DCMAKE_INSTALL_PREFIX="$PREFIX"',
         "-DCMAKE_CXX_EXTENSIONS=OFF",
@@ -286,7 +306,7 @@ cmake --install "$BUILD" 2>&1 | tee "$LOG_DIR/kokkos-install.log"
 def _hdf5_script(req: Dict[str, Any], checkpoint: Dict[str, Any], deps_root: Path, tarball_dir: str = "") -> str:
     env = req.get("environment", {})
     compilers = compiler_env(checkpoint)
-    version = requested_version(req, "hdf5", entity_version_profile(req))
+    version = _safe_token(requested_version(req, "hdf5", entity_version_profile(req)), "hdf5 version")
     prefix = deps_root / "hdf5" / version
     artifacts_root = get_build_artifacts_dir(req)
     mpi_on = bool(env.get("mpi")) if isinstance(env, dict) else False
@@ -314,9 +334,9 @@ def _adios2_script(req: Dict[str, Any], checkpoint: Dict[str, Any], deps_root: P
     env = req.get("environment", {})
     compilers = compiler_env(checkpoint)
     profile = entity_version_profile(req)
-    version = requested_version(req, "adios2", profile)
-    hdf5_version = requested_version(req, "hdf5", profile)
-    kokkos_version = requested_version(req, "kokkos", profile)
+    version = _safe_token(requested_version(req, "adios2", profile), "adios2 version")
+    hdf5_version = _safe_token(requested_version(req, "hdf5", profile), "hdf5 version")
+    kokkos_version = _safe_token(requested_version(req, "kokkos", profile), "kokkos version")
     prefix = deps_root / "adios2" / version
     artifacts_root = get_build_artifacts_dir(req)
     if not isinstance(env, dict):
@@ -343,15 +363,16 @@ def _adios2_script(req: Dict[str, Any], checkpoint: Dict[str, Any], deps_root: P
             arch_num = _kokkos_arch_to_cuda(cuda_arch)
             stubs_path = f"{cuda_prefix}/targets/x86_64-linux/lib/stubs"
             cuda_lib_path = f"{cuda_prefix}/targets/x86_64-linux/lib"
+            link_flags = q(f"-L{stubs_path} -L{cuda_lib_path}")
             cuda_extra = f"""
 # CUDA + Kokkos: set CUDA compiler and architecture for enable_language(CUDA)
 export CMAKE_CUDA_COMPILER={q(cuda_prefix + '/bin/nvcc')}
 export CMAKE_CUDA_ARCHITECTURES={q(arch_num)}
 # Both stubs (login nodes) and real libs (GPU nodes) — order: stubs first
 # so the linker prefers stubs for symbols that don't need real GPU
-export LDFLAGS="-L{stubs_path} -L{cuda_lib_path} ${{LDFLAGS:-}}"
-export CMAKE_EXE_LINKER_FLAGS="-L{stubs_path} -L{cuda_lib_path} ${{CMAKE_EXE_LINKER_FLAGS:-}}"
-export CMAKE_SHARED_LINKER_FLAGS="-L{stubs_path} -L{cuda_lib_path} ${{CMAKE_SHARED_LINKER_FLAGS:-}}"
+export LDFLAGS={link_flags}"${{LDFLAGS:+ $LDFLAGS}}"
+export CMAKE_EXE_LINKER_FLAGS={link_flags}"${{CMAKE_EXE_LINKER_FLAGS:+ $CMAKE_EXE_LINKER_FLAGS}}"
+export CMAKE_SHARED_LINKER_FLAGS={link_flags}"${{CMAKE_SHARED_LINKER_FLAGS:+ $CMAKE_SHARED_LINKER_FLAGS}}"
 """
     opts = [
         '-DCMAKE_INSTALL_PREFIX="$PREFIX"',
@@ -395,7 +416,7 @@ cmake --install "$BUILD" 2>&1 | tee "$LOG_DIR/adios2-install.log"
 def _mpi_script(req: Dict[str, Any], checkpoint: Dict[str, Any], deps_root: Path, tarball_dir: str = "") -> str:
     compilers = compiler_env(checkpoint)
     profile = entity_version_profile(req)
-    version = requested_version(req, "openmpi", profile)
+    version = _safe_token(requested_version(req, "openmpi", profile), "openmpi version")
     prefix = deps_root / "openmpi" / version
     artifacts_root = get_build_artifacts_dir(req)
     return (
@@ -566,8 +587,22 @@ def generate_env(data: Dict[str, Any], json_path: Path) -> str:
 
     prefixes = dep_prefixes(selected)
     # ENTITY_DEPS_ROOT is the independent dependency root for this execution site.
-    if prefixes:
-        deps_root = str(Path(os.path.commonpath(prefixes)).parent) if len(prefixes) > 1 else str(Path(prefixes[0]).parent)
+    # Install layout is <deps_root>/<dep>/<version>, so:
+    #   - multiple deps: commonpath(prefixes) already is deps_root
+    #   - single dep:    strip the <dep>/<version> components (parent.parent)
+    entity_section = data.get("entity", {})
+    recorded_deps_root = (
+        str(entity_section.get("deps_root") or "")
+        if isinstance(entity_section, dict)
+        else ""
+    )
+    if recorded_deps_root:
+        deps_root = recorded_deps_root
+    elif prefixes:
+        if len(prefixes) > 1:
+            deps_root = str(Path(os.path.commonpath(prefixes)))
+        else:
+            deps_root = str(Path(prefixes[0]).parent.parent)
     elif paths.get("ENTITY_DEPS_ROOT"):
         deps_root = str(paths["ENTITY_DEPS_ROOT"])
     else:
@@ -628,6 +663,13 @@ def generate_env(data: Dict[str, Any], json_path: Path) -> str:
     extra_env = paths.get("extra_env", {}) if isinstance(paths, dict) else {}
     if isinstance(extra_env, dict) and extra_env:
         deduped = {k: v for k, v in extra_env.items() if k not in _already_exported and v}
+        invalid_names = [str(k) for k in deduped if not _ENV_NAME_RE.fullmatch(str(k))]
+        if invalid_names:
+            raise SystemExit(
+                "invalid extra_env variable name(s): "
+                + ", ".join(repr(name) for name in invalid_names)
+                + " — must match [A-Za-z_][A-Za-z0-9_]*"
+            )
         if deduped:
             lines.append("")
             lines.append("# Site-specific environment overrides from entity-deps.local.json")
@@ -731,10 +773,11 @@ def cmake_options(req: Dict[str, Any]) -> Tuple[List[str], List[str]]:
         flag = f"-D{gpu_arch}=ON" if gpu_arch.startswith("Kokkos_ARCH_") else f"-DKokkos_ARCH_{gpu_arch}=ON"
         opts.append(flag)
 
-    # CXX flags
+    # CXX flags (shell_command() applies shlex.quote to each opt exactly once;
+    # do not pre-quote here or cmake receives literal quote characters)
     cmake_cxx_flags = compile_cfg.get("cmake_cxx_flags", "")
     if cmake_cxx_flags:
-        opts.append(f'-DCMAKE_CXX_FLAGS={shlex.quote(str(cmake_cxx_flags))}')
+        opts.append(f'-DCMAKE_CXX_FLAGS={str(cmake_cxx_flags)}')
 
     # Install
     install_prefix = compile_cfg.get("install_prefix")

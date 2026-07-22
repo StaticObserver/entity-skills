@@ -172,9 +172,28 @@ def validate_router_action(
             verification = result.get("verification")
             acceptance = request.get("acceptance_checks")
             valid_counts = isinstance(verification, list) and isinstance(acceptance, list)
-            _check(checks, "result.acceptance-evidence",
-                   valid_counts and len(verification) >= len(acceptance),
-                   "completed result has at least one verification per acceptance check")
+
+            def _entry_key(item: Any) -> Optional[str]:
+                if isinstance(item, dict):
+                    for field in ("id", "name"):
+                        value = item.get(field)
+                        if isinstance(value, str) and value:
+                            return value
+                return None
+
+            if valid_counts and acceptance and all(_entry_key(item) for item in acceptance):
+                covered = {_entry_key(item) for item in verification}
+                acceptance_ok = all(_entry_key(item) in covered for item in acceptance)
+                acceptance_detail = (
+                    "every acceptance check has a verification entry with a matching id/name"
+                )
+            else:
+                acceptance_ok = valid_counts and len(verification) >= len(acceptance)
+                acceptance_detail = (
+                    "completed result has at least one verification per acceptance check "
+                    "(count-only comparison: entries carry no id/name identifiers)"
+                )
+            _check(checks, "result.acceptance-evidence", acceptance_ok, acceptance_detail)
             outputs = result.get("outputs")
             output_shape = isinstance(outputs, list) and all(
                 isinstance(item, dict) and isinstance(item.get("locator"), dict)
@@ -312,6 +331,8 @@ def validate_router_operation(
            "one owner-site receipt is supplied for every planned Step")
     launch_receipt: Mapping[str, Any] = {}
     for index, step in enumerate(steps):
+        if not isinstance(step, dict):
+            step = {}
         path, receipt = supplied_receipts.get(index, (Path("."), {}))
         matches = (
             receipt.get("schema_version") == 1
@@ -328,6 +349,7 @@ def validate_router_operation(
                "receipt reached independently verifiable output state")
         if index < len(operation_steps):
             stored = operation_steps[index]
+            stored = stored if isinstance(stored, dict) else {}
             _check(checks, "receipt.%d.effect" % index,
                    stored.get("effect") == receipt.get("effect_identity", {}),
                    "controller committed the receipt effect")
@@ -374,7 +396,7 @@ def validate_router_operation(
         _check(checks, "scheduler.single-effect", len(jobs) == 1,
                "exactly one scheduler job matches the launch identity")
         if len(jobs) == 1:
-            job = jobs[0]
+            job = jobs[0] if isinstance(jobs[0], dict) else {}
             _check(checks, "scheduler.matches-receipt",
                    all(job.get(key) == effect.get(key)
                        for key in ("job_id", "job_name", "submit_user", "run_root", "comment")),
@@ -401,15 +423,19 @@ def validate_router_operation(
                and current.get("source_id") == plan.get("source_id")
                and current.get("run_id") == run_id,
                "status preserves the planned Case/source/run identity")
+        status_scheduler = run_identity.get("scheduler") \
+            if isinstance(run_identity.get("scheduler"), dict) else {}
         _check(checks, "status.scheduler",
                run_identity.get("id") == run_id
-               and run_identity.get("scheduler", {}).get("job_id") == effect.get("job_id"),
+               and status_scheduler.get("job_id") == effect.get("job_id"),
                "status run identity carries the verified scheduler effect")
     else:
         _check(checks, "status.snapshot", False,
                "completed Operation requires a controller-local status snapshot")
 
-    run_identity = steps[1].get("identity", {}) if len(steps) > 1 else {}
+    prepare_step = steps[1] if len(steps) > 1 and isinstance(steps[1], dict) else {}
+    run_identity = prepare_step.get("identity") \
+        if isinstance(prepare_step.get("identity"), dict) else {}
     parents = run_identity.get("parents") if isinstance(run_identity.get("parents"), dict) else {}
     _check(checks, "identity.source-run",
            run_identity.get("id") == run_id

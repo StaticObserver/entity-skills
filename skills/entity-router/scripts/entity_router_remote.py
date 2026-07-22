@@ -39,6 +39,8 @@ def git_revision(source):
     if code != 0:
         return {}
     values = [line.strip() for line in stdout.splitlines() if line.strip()]
+    if len(values) < 2:
+        return {}
     code, dirty, unused = command(["git", "-C", source, "status", "--porcelain"])
     return {"kind": "git", "commit": values[0], "tree": values[1],
             "dirty": code != 0 or bool(dirty.strip())}

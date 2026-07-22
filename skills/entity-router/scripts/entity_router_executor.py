@@ -9,6 +9,7 @@ never writes controller state.
 from __future__ import print_function
 
 import argparse
+import calendar
 import datetime
 import hashlib
 import json
@@ -19,6 +20,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 
 
 SCHEMA_VERSION = 1
@@ -342,11 +344,17 @@ def _slurm_matches(request, receipt, comment):
     intent = _parse_time(receipt.get("intent_written_at"))
     if intent is None:
         raise ExecutorError("launch receipt has invalid intent time")
+    # The receipt records UTC while squeue %V reports site-local time; compare
+    # both as epoch seconds so non-UTC sites still match their own intent.
+    intent_epoch = calendar.timegm(intent.timetuple())
     matches = []
     for line in stdout.splitlines():
         fields = line.strip().split("|", 6)
         submitted = _parse_time(fields[3]) if len(fields) == 7 else None
-        in_window = submitted is not None and abs((submitted - intent).total_seconds()) <= 600
+        submitted_epoch = (time.mktime(submitted.timetuple())
+                           if submitted is not None else None)
+        in_window = (submitted_epoch is not None
+                     and abs(submitted_epoch - intent_epoch) <= 600)
         if (len(fields) == 7 and fields[1] == request["job_name"]
                 and fields[2] == request["submit_user"] and in_window
                 and os.path.realpath(fields[5]) == os.path.realpath(request["run_root"])
@@ -355,6 +363,33 @@ def _slurm_matches(request, receipt, comment):
                             "job_name": fields[1], "submit_user": fields[2],
                             "submitted_at": fields[3], "state": fields[4].upper(),
                             "run_root": fields[5], "comment": fields[6]})
+    return matches, stdout, stderr
+
+
+def _slurm_history_matches(request, comment):
+    """Fallback for jobs that already left squeue (completed/failed) before
+    recovery ran: match accounting records by job name, user, working
+    directory, and the launch comment.  An unavailable sacct yields no
+    matches so the caller falls back to a fresh submit, as before."""
+    code, stdout, stderr = command([
+        "sacct", "--noheader", "--parsable2", "--user", request["submit_user"],
+        "--format", "JobID,JobName,User,WorkDir,Comment,State",
+    ])
+    if code != 0:
+        return [], stdout, stderr
+    matches = []
+    for line in stdout.splitlines():
+        fields = [item.strip() for item in line.split("|")]
+        if len(fields) < 6 or not fields[0] or "." in fields[0]:
+            continue
+        if (fields[1] == request["job_name"]
+                and fields[2] == request["submit_user"]
+                and os.path.realpath(fields[3]) == os.path.realpath(request["run_root"])
+                and fields[4] == comment):
+            matches.append({"scheduler": "slurm", "job_id": fields[0],
+                            "job_name": fields[1], "submit_user": fields[2],
+                            "state": fields[5].split()[0].upper() if fields[5] else "",
+                            "run_root": fields[3], "comment": fields[4]})
     return matches, stdout, stderr
 
 
@@ -380,6 +415,10 @@ def _launch(envelope):
         matches, stdout, stderr = _slurm_matches(request, previous, comment)
         if len(matches) > 1:
             raise ExecutorError("multiple scheduler jobs match launch intent")
+        if not matches:
+            matches, stdout, stderr = _slurm_history_matches(request, comment)
+            if len(matches) > 1:
+                raise ExecutorError("multiple scheduler jobs match launch intent")
         if len(matches) == 1:
             return receipt_base(envelope, "outputs_verified", matches[0], [],
                                 stdout, stderr, previous)

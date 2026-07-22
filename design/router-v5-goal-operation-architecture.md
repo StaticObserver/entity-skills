@@ -64,8 +64,10 @@ raw data 和 analysis artifact 保持在 owner site。
 `~/.entity-router/router.db` 是 v5 controller 的唯一结构化状态。SQLite 事务同时提交 Operation
 step、identity/current pointer、event 和最终结果，替代跨多个 JSON 文件的自制事务。
 
-旧 `registry.json`、`project-bindings.json`、site JSON 和 Case v3 通过一次性迁移导入。
-迁移保留原文件为只读证据，不在两套状态之间双写。
+旧 `registry.json`、`project-bindings.json`、site JSON 和 Case v3 的一次性迁移导入
+尚未实现：store schema 目前只有 v1，`entityctl migrate` 在非当前 schema 上直接报错
+（"no migration path ... implemented yet"）。迁移实现后保留原文件为只读证据，不在
+两套状态之间双写。
 
 数据库只保存小型 JSON payload 和 evidence reference，不保存 raw data 或完整日志。提供 JSON
 导出用于审计和调试。
@@ -141,8 +143,8 @@ probe changed/output Locator 并提交 evidence。
 - controller 在每个 Step 边界崩溃后都能通过 Apply 恢复；
 - local 与 SSH 使用同一 StepSpec；
 - 用户只在科学、资源承诺、删除或真正歧义时被询问；
-- `status` 默认只读 controller，`--live` 最多一次远端调用；
-- v3 Case 可一次性导入，导入后不双写；
+- `status` 默认只读 controller，`--live` 最多三次有界 scheduler 查询；
+- v3 Case 一次性导入尚未实现（迁移路线见上文），实现后导入不双写；
 - Router 全量测试、Python 3.6 grammar、真实 SSH canary 和 `git diff --check` 通过。
 
 实现与验收结果见

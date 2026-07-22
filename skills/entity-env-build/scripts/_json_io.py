@@ -41,8 +41,7 @@ want to reset the harness's machine-level knowledge.
   fails, check this file first.
 - `site-notes/` is read at the start of every Phase 2 environment probe.
   It helps the agent avoid repeating known mistakes.
-- Compatibility results are recorded in `entity-deps.local.json.compatibility`
-  and saved to `compat/<run_id>.json` by the agent workflow.
+- Compatibility results are recorded in `entity-deps.local.json.compatibility`.
 """
 
 
@@ -185,16 +184,6 @@ def log_event(
     log_path = _HARNESS_HOME / "run.log"
     with log_path.open("a", encoding="utf-8") as f:
         f.write(json.dumps(entry, sort_keys=True) + "\n")
-
-
-def save_compat_report(run_id: str, report: Dict[str, Any]) -> Path:
-    """Save compat check report to ~/.entity-env-build/compat/<run_id>.json."""
-    ensure_harness_home()
-    compat_dir = _HARNESS_HOME / "compat"
-    compat_dir.mkdir(parents=True, exist_ok=True)
-    path = compat_dir / f"{run_id}.json"
-    write_json_atomic(path, report)
-    return path
 
 
 # ---------------------------------------------------------------------------

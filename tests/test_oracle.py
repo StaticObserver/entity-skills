@@ -7,7 +7,13 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "evals" / "e2e-neutral-streaming"))
 
-from oracle import gate_a_safety, gate_b_pgen_build, gate_c_job_data, gate_d_physics  # noqa: E402
+from oracle import (  # noqa: E402
+    gate_a_safety,
+    gate_b_pgen_build,
+    gate_c_job_data,
+    gate_d_physics,
+    gate_e_analysis,
+)
 
 THRESHOLDS = json.loads(
     (ROOT / "evals" / "e2e-neutral-streaming" / "oracle" / "thresholds.json").read_text()
@@ -157,9 +163,6 @@ class GateATest(unittest.TestCase):
 class GateETest(unittest.TestCase):
     def test_missing_report_fails(self):
         with tempfile.TemporaryDirectory() as tmp:
-            result = gate_a_safety  # keep import used
-            del result
-            from oracle import gate_e_analysis
             outcome = gate_e_analysis.run(Path(tmp), {"analysis": {"report": "analysis/analysis-report.md"}})
             statuses = {c["name"]: c["status"] for c in outcome["checks"]}
             self.assertEqual(statuses["analysis_report_exists"], "fail")

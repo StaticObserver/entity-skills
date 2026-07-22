@@ -4,13 +4,15 @@
   "title": "Entity Router GoalSpec v1",
   "type": "object",
   "additionalProperties": false,
-  "required": ["schema_version", "kind", "input", "site", "compute"],
+  "required": ["schema_version", "kind"],
   "properties": {
     "schema_version": {"const": 1},
-    "kind": {"const": "run"},
+    "kind": {"enum": ["run", "build", "data"]},
     "input": {"type": "string", "minLength": 1},
     "site": {"type": "string", "minLength": 1},
     "executable": {"type": "string", "minLength": 1},
+    "checkpoint": {"type": "string", "minLength": 1},
+    "run": {"type": "string", "minLength": 1},
     "case_id": {"type": "string", "minLength": 1},
     "source_mode": {"enum": ["git-ref", "snapshot", "shared", "external"]},
     "labels": {"type": "object", "additionalProperties": {"type": "string"}},
@@ -30,5 +32,15 @@
         "precision": {"enum": ["single", "double"]}
       }
     }
-  }
+  },
+  "allOf": [
+    {
+      "if": {"properties": {"kind": {"const": "run"}}, "required": ["kind"]},
+      "then": {"required": ["input", "site", "compute"]}
+    },
+    {
+      "if": {"properties": {"kind": {"const": "build"}}, "required": ["kind"]},
+      "then": {"required": ["site", "checkpoint", "executable"]}
+    }
+  ]
 }

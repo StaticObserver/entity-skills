@@ -5,8 +5,6 @@ Read-only commands return controller-local summaries. The SQLite router.db in
 the Router home is the sole structured controller authority.
 """
 
-from __future__ import print_function
-
 import argparse
 import hashlib
 import json
@@ -252,12 +250,12 @@ def install_bundle(args):
 def doctor(args):
     home = router_home(args.router_home)
     runtime_bundle = bundle_hash(DEFAULT_BUNDLE_ROOT)
-    expected_bundle = actor_identity(args).get("bundle_hash", "")
+    actor = actor_identity(args)
+    expected_bundle = actor.get("bundle_hash", "")
     warnings = []
     failures = []
     if expected_bundle and expected_bundle != runtime_bundle["hash"]:
         warnings.append("ENTITY_SKILLS_BUNDLE_HASH differs from the loaded runtime bundle")
-    actor = actor_identity(args)
     if actor["run_id"] == "unattributed":
         warnings.append("mutations will be unattributed unless an Agent run ID is supplied")
     database = store_path(home)
@@ -724,7 +722,8 @@ def main(argv=None):
         emit({"ok": False, "status": exc.status, "error": str(exc),
               "decisions": exc.decisions, "state_mutated": False})
         return 2
-    except (IOError, OSError, ValueError, KeyError, RouterError) as exc:
+    except (IOError, OSError, ValueError, KeyError, RouterError,
+            sqlite3.Error) as exc:
         emit({"ok": False, "status": "anomaly", "error": str(exc),
               "state_mutated": False})
         return 2

@@ -23,6 +23,7 @@ import datetime
 import hashlib
 import json
 import os
+import sqlite3
 import sys
 import tempfile
 
@@ -116,6 +117,12 @@ def fallback_parse_toml(text):
     Handles comments, [table] / [dotted.table] headers, [[array.of.tables]],
     and string/number/boolean/array/inline-table values.  It is intentionally
     small and only meant to cover the fields the parameter card extracts.
+
+    Known limitations (accepted, since tomllib covers Python >= 3.11):
+    inline comment stripping is skipped for any value containing a double
+    quote (so ``#`` inside single-quoted strings still truncates), and
+    inline tables are split on bare commas without tracking nested
+    tables/arrays or quoted commas.
     """
     root = {}
     current = root
@@ -305,6 +312,8 @@ def atomic_write_json(path, payload):
         with os.fdopen(handle, "w") as stream:
             stream.write(json.dumps(payload, indent=2, sort_keys=True))
             stream.write("\n")
+            stream.flush()
+            os.fsync(stream.fileno())
         os.replace(temp_path, path)
     except BaseException:
         try:
@@ -373,7 +382,8 @@ def canonical_locator(home, locator):
     return item
 
 
-def result(allowed, mode, target, case=None, reason="", action_id=""):
+def result(allowed, mode, target, case=None, reason="", action_id="",
+           store_present=None):
     return {
         "allowed": allowed,
         "mode": mode,
@@ -382,15 +392,22 @@ def result(allowed, mode, target, case=None, reason="", action_id=""):
         "control_root": case.get("control_root", "") if case else "",
         "action_id": action_id,
         "reason": reason,
+        # True: registry queried and the outcome is authoritative.
+        # False: store missing/unreadable, "standalone" means "unqueried".
+        # None: evaluation failed before the store was queried.
+        "store_present": store_present,
     }
 
 
 def registered_cases(home):
+    """Return (cases, store_present); store_present is False when the
+    registry could not be opened, so callers can tell "confirmed
+    unregistered" apart from "could not query"."""
     try:
         store = OperationStore(home, create=False)
     except StoreError:
-        return []
-    return store.export()["cases"]
+        return [], False
+    return store.export()["cases"], True
 
 
 def case_roots(home, case):
@@ -413,28 +430,36 @@ def case_covers_target(home, case, target):
 
 
 def find_cases(home, target):
-    return [case for case in registered_cases(home)
-            if case_covers_target(home, case, target)]
+    cases, store_present = registered_cases(home)
+    matches = [case for case in cases if case_covers_target(home, case, target)]
+    return matches, store_present
 
 
 def evaluate(args):
     home = router_home(args.router_home)
     target = target_locator(args.target, args.site_id, home)
-    matches = find_cases(home, target)
+    matches, store_present = find_cases(home, target)
     if len(matches) > 1:
-        return result(False, "ambiguous", target, reason=(
+        return result(False, "ambiguous", target, store_present=store_present,
+                      reason=(
             "locator is registered by multiple Cases; use distinct source authority roots"
         ))
     case = matches[0] if matches else None
 
     if args.operation == "read":
         return result(True, "managed-readonly" if case else "standalone-readonly",
-                      target, case, "read-only operation")
+                      target, case, "read-only operation",
+                      store_present=store_present)
     if not case:
+        reason = "locator is not registered by Router"
+        if not store_present:
+            reason = ("Router store is missing or unreadable; registration "
+                      "could not be checked, treating target as standalone")
         return result(True, "standalone-write", target,
-                      reason="locator is not registered by Router")
+                      reason=reason, store_present=store_present)
     return result(False, "router-required", target, case,
-                  "managed source writes require a v5 pgen Goal, which is not yet implemented")
+                  "managed source writes require a v5 pgen Goal, which is not yet implemented",
+                  store_present=store_present)
 
 
 def build_parser():
@@ -449,6 +474,18 @@ def build_parser():
     return parser
 
 
+def _safe_target(args):
+    """Best-effort target locator for error payloads; never raises.
+
+    Falls back to a placeholder when ``--target`` itself is the cause of
+    the failure (for example ``site:relative/path``).
+    """
+    try:
+        return target_locator(args.target, args.site_id)
+    except Exception:
+        return {"site_id": args.site_id or "unknown", "path": "/invalid-target"}
+
+
 def main(argv=None):
     argv = list(sys.argv[1:] if argv is None else argv)
     if argv and argv[0] == "card":
@@ -458,9 +495,15 @@ def main(argv=None):
     args = build_parser().parse_args(argv)
     try:
         payload = evaluate(args)
-    except (RouterError, OSError, ValueError, KeyError) as exc:
-        payload = result(False, "router-required",
-                         target_locator(args.target, args.site_id), reason=str(exc))
+    except (RouterError, OSError, ValueError, KeyError,
+            sqlite3.DatabaseError) as exc:
+        payload = result(False, "router-required", _safe_target(args),
+                         reason="%s [target: %s]" % (exc, args.target))
+    except Exception as exc:
+        # Fail-closed contract: every failure still prints JSON, exit 2.
+        payload = result(False, "router-required", _safe_target(args),
+                         reason="unexpected %s: %s [target: %s]" % (
+                             type(exc).__name__, exc, args.target))
     print(json.dumps(payload, indent=2, sort_keys=True))
     return 0 if payload["allowed"] else 2
 

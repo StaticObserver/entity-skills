@@ -96,7 +96,7 @@ count_path=os.environ['FAKE_SUBMIT_COUNT']
 count=int(open(count_path).read()) if os.path.isfile(count_path) else 0
 open(count_path,'w').write(str(count+1))
 record={'job_id':'42','job_name':value('--job-name'),'user':'tester',
-        'submitted_at':datetime.datetime.utcnow().replace(microsecond=0).isoformat(),
+        'submitted_at':datetime.datetime.now().replace(microsecond=0).isoformat(),
         'state':'RUNNING','run_root':value('--chdir'),'comment':value('--comment')}
 json.dump(record,open(os.environ['FAKE_SLURM_RECORD'],'w'))
 print('42')
@@ -342,13 +342,13 @@ else:
                        plan_path=self.plan_file)
 
     def test_apply_rejects_rehashed_plan_with_widened_write_root(self):
+        from entity_router_planner import _stable_plan
         envelope = self.make_plan()
         plan = envelope["plan"]
         plan["steps"][1]["allowed_roots"].append(self.temp)
         unsigned = dict(plan)
         unsigned.pop("plan_hash")
-        unsigned.pop("generated_at")
-        plan["plan_hash"] = canonical_hash(unsigned)
+        plan["plan_hash"] = canonical_hash(_stable_plan(unsigned))
         with self.assertRaises(OperationError):
             apply_plan(self.store, envelope["goal"], plan, {"run_id": "tamper"},
                        plan_path=self.plan_file)
@@ -510,7 +510,9 @@ else:
         with mock.patch.dict(os.environ, {"HOME": fake_home}):
             code, payload = self.cli("doctor")
         self.assertEqual(code, 0, payload)
-        self.assertEqual(payload["runtime_bundle"]["version"], "0.5.0")
+        version_file = os.path.join(ROOT, "skills", "entity-router", "VERSION")
+        with open(version_file, "r") as handle:
+            self.assertEqual(payload["runtime_bundle"]["version"], handle.read().strip())
         self.assertEqual(payload["controller"]["store_schema_version"], 1)
         self.assertEqual(payload["failures"], [])
 
@@ -810,6 +812,186 @@ else:
                        {"run_id": "refresh-test"}, plan_path=self.plan_file,
                        refresh=True)
         self.assertIn("data Goal", str(caught.exception))
+
+    def test_replan_after_successful_apply_is_idempotent(self):
+        envelope = self.make_plan()
+        actor = {"run_id": "replan-test", "provider": "unittest"}
+        applied = apply_plan(self.store, envelope["goal"], envelope["plan"], actor,
+                             plan_path=self.plan_file)
+        self.assertEqual(applied["status"], "completed")
+        # a successful run mutates case.current; re-planning the same Goal must
+        # still reproduce the same Plan identity and apply idempotently
+        replanned = self.make_plan()
+        self.assertEqual(replanned["plan"]["plan_hash"], envelope["plan"]["plan_hash"])
+        self.assertEqual(replanned["plan"]["operation_id"],
+                         envelope["plan"]["operation_id"])
+        reapplied = apply_plan(self.store, replanned["goal"], replanned["plan"], actor,
+                               plan_path=self.plan_file)
+        self.assertEqual(reapplied["status"], "completed")
+        self.assertEqual(self.submit_count(), 1)
+
+    def _launch_intent(self, comment_hash="0" * 16):
+        """Fabricate a launch intent receipt as if the controller crashed
+        after sbatch accepted the job but before the effect receipt landed."""
+        import entity_router_executor
+        run_root = os.path.join(self.run_root, "case-x", "run-x")
+        os.makedirs(run_root)
+        submit = os.path.join(run_root, "run.sbatch")
+        with open(submit, "w") as handle:
+            handle.write("#!/bin/bash\n")
+        receipt = os.path.join(self.staging_root, "case-x", "op-tz", "receipts",
+                               "run-launch.json")
+        envelope = {
+            "schema_version": 1,
+            "operation_id": "op-tz",
+            "plan_hash": "sha256:" + comment_hash,
+            "step_index": 2,
+            "step_id": "launch",
+            "kind": "run.launch.v2",
+            "site_id": "local-slurm",
+            "receipt": receipt,
+            "allowed_roots": [os.path.join(self.staging_root, "case-x", "op-tz"),
+                              run_root],
+            "request": {"run_root": run_root, "submit_script": submit,
+                        "job_name": "entity-op-tz", "submit_user": "tester"},
+        }
+        entity_router_executor.receipt_base(envelope, "intent_written")
+        comment = "entity-router:op-tz:%s" % comment_hash
+        return entity_router_executor, envelope, run_root, comment
+
+    def _write_slurm_record(self, run_root, comment, submitted_at):
+        record = {"job_id": "42", "job_name": "entity-op-tz", "user": "tester",
+                  "submitted_at": submitted_at, "state": "RUNNING",
+                  "run_root": run_root, "comment": comment}
+        with open(self.record, "w") as handle:
+            json.dump(record, handle)
+        return record
+
+    def test_launch_recovery_matches_non_utc_squeue_time(self):
+        import time
+        executor, envelope, run_root, comment = self._launch_intent()
+        with mock.patch.dict(os.environ, {"TZ": "Pacific/Kiritimati"}):
+            time.tzset()
+            try:
+                # squeue %V reports site-local time; UTC+14 makes a naive
+                # comparison with the UTC intent time miss the window
+                import datetime
+                self._write_slurm_record(
+                    run_root, comment,
+                    datetime.datetime.now().replace(microsecond=0).isoformat())
+                result = executor.execute(envelope)
+            finally:
+                time.tzset()
+        self.assertEqual(result["status"], "completed", result)
+        self.assertEqual(result["effect"]["job_id"], "42")
+        self.assertEqual(self.submit_count(), 0)
+
+    def test_launch_recovery_finds_dequeued_job_via_sacct(self):
+        executor, envelope, run_root, comment = self._launch_intent()
+        # the job drained out of squeue before recovery, but sacct still
+        # knows it by job name and comment
+        sacct_record = os.path.join(self.temp, "sacct-record.json")
+        record = self._write_slurm_record(
+            run_root, comment, "2026-07-22T10:00:00")
+        os.unlink(self.record)
+        with open(sacct_record, "w") as handle:
+            json.dump(record, handle)
+        self._write_executable("sacct", """import json,os,sys
+path=os.environ.get('FAKE_SACCT_RECORD','')
+if not path or not os.path.isfile(path):
+    raise SystemExit(0)
+r=json.load(open(path))
+print('|'.join([r['job_id'], r['job_name'], r['user'], r['run_root'],
+                r['comment'], 'COMPLETED']))
+""")
+        with mock.patch.dict(os.environ, {"FAKE_SACCT_RECORD": sacct_record}):
+            result = executor.execute(envelope)
+        self.assertEqual(result["status"], "completed", result)
+        self.assertEqual(result["effect"]["job_id"], "42")
+        self.assertEqual(result["effect"]["state"], "COMPLETED")
+        self.assertEqual(self.submit_count(), 0)
+
+    def test_cli_sqlite_error_returns_json_envelope(self):
+        import subprocess
+        with open(self.store.path, "wb") as handle:
+            handle.write(b"definitely not a sqlite database")
+        process = subprocess.Popen(
+            [sys.executable, ENTITYCTL, "--router-home", self.home, "site", "list"],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True,
+        )
+        stdout, stderr = process.communicate()
+        self.assertEqual(process.returncode, 2, stderr)
+        payload = json.loads(stdout)
+        self.assertFalse(payload["ok"])
+        self.assertIn("error", payload)
+        self.assertNotIn("Traceback", stdout)
+
+    def test_site_add_rejects_ssh_alias_option_injection(self):
+        profile = dict(self.profile, site_id="evil-ssh")
+        profile["transport"] = {"kind": "ssh", "ssh_alias": "-oProxyCommand=/bin/evil"}
+        profile_path = os.path.join(self.temp, "evil-site.json")
+        atomic_write_json(profile_path, profile)
+        code, payload = self.cli("site", "add", "--profile", profile_path)
+        self.assertEqual(code, 2)
+        self.assertFalse(payload["ok"])
+        self.assertFalse(payload["state_mutated"])
+        # a conventional user@host alias stays valid
+        from entity_router_common import validate_site_profile
+        valid = dict(self.profile, site_id="ok-ssh")
+        valid["transport"] = {"kind": "ssh", "ssh_alias": "deploy@login-1.example"}
+        self.assertEqual(validate_site_profile(valid)["site_id"], "ok-ssh")
+
+    def test_build_identity_is_content_addressed(self):
+        checkpoint = self._write_checkpoint()
+        goal = {"schema_version": 1, "kind": "build", "site": "local-slurm",
+                "checkpoint": checkpoint, "executable": self.executable}
+        first = plan_goal(self.store, self.project, goal)
+        with open(self.executable, "a") as handle:
+            handle.write("rebuilt with different content\n")
+        second = plan_goal(self.store, self.project, goal)
+        self.assertNotEqual(first["plan"]["build_id"], second["plan"]["build_id"])
+        # and the rebuilt binary still applies cleanly under its new identity
+        with open(self.plan_file, "w") as handle:
+            json.dump(second, handle)
+        applied = apply_plan(self.store, second["goal"], second["plan"],
+                             {"run_id": "build-content"}, plan_path=self.plan_file)
+        self.assertEqual(applied["status"], "completed")
+        self.assertEqual(applied["result"]["build_id"], second["plan"]["build_id"])
+
+    def test_cancel_completed_operation_fails_without_changing_state(self):
+        from entity_router_store import StoreError
+        envelope = self.make_plan()
+        actor = {"run_id": "cancel-completed", "provider": "unittest"}
+        applied = apply_plan(self.store, envelope["goal"], envelope["plan"], actor,
+                             plan_path=self.plan_file)
+        self.assertEqual(applied["status"], "completed")
+        with self.assertRaises(StoreError):
+            self.store.cancel_operation(envelope["plan"]["operation_id"], actor)
+        operation = self.store.get_operation(envelope["plan"]["operation_id"])
+        self.assertEqual(operation["status"], "completed")
+
+    def test_write_paths_require_the_held_claim(self):
+        from entity_router_store import StoreError
+        envelope = self.make_plan()
+        actor = {"run_id": "claim-test"}
+        from entity_router_operation import _ensure_case
+        _ensure_case(self.store, envelope["plan"], actor)
+        operation = self.store.create_operation(
+            envelope["plan"]["case_uid"], envelope["goal"], envelope["plan"], actor)
+        token = self.store.claim_operation(operation["operation_id"], actor)
+        self.assertTrue(token)
+        with self.assertRaises(StoreError):
+            self.store.commit_step(operation["operation_id"], 0, {}, [], [], {},
+                                   actor, claim_token="stolen-token")
+        with self.assertRaises(StoreError):
+            self.store.finish_operation(operation["operation_id"], "completed", {},
+                                        actor, claim_token="stolen-token")
+        self.store.commit_step(operation["operation_id"], 0, {}, [], [], {},
+                               actor, claim_token=token)
+        self.store.finish_operation(operation["operation_id"], "completed", {},
+                                    actor, claim_token=token)
+        self.assertEqual(
+            self.store.get_operation(operation["operation_id"])["status"], "completed")
 
 
 if __name__ == "__main__":

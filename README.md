@@ -68,7 +68,8 @@ python3 skills/entity-router/scripts/entityctl.py status \
 
 `plan` 只写指定的 Plan artifact，不推进 controller 状态；同一 Plan 重复 `apply`
 会根据 Step receipt 恢复，不重复 `sbatch`。`status` 默认只读本地 controller；
-`--live` 最多执行一次远端调用。
+`--live` 最多执行三次有界 scheduler 查询：job 状态、job 离开队列后的 `sacct`
+确认，以及 Case run root 的 untracked-job 扫描。
 
 `entityctl install` 将一个经过 hash 验证的运行版本发布到
 `~/.entity-skills/bundles/`；Codex、Claude Code 和 Kimi Code 的 discovery 目录只保留
@@ -147,8 +148,9 @@ receipts、controller status 和独立 scheduler snapshot。
 
 `evals/e2e-neutral-streaming/` 是轻量 A/B 对照：skill/no-skill 两组跑同一个
 模拟任务，对照 trace、token 消耗和完成时间。任务文本、物理参数和启动方式见
-`evals/e2e-neutral-streaming/RUNBOOK.md`。正式对照脚手架（oracle、schema、
-fake Slurm）已于 2026-07-21 移除，历史版本见 git 记录。
+`evals/e2e-neutral-streaming/RUNBOOK.md`。对照 oracle（`oracle/` 下 5 个 gate 与
+`thresholds.json`，由 `tests/test_oracle.py` 覆盖）仍然保留；schema 与 fake Slurm
+脚手架已于 2026-07-21 移除，历史版本见 git 记录。
 
 已有 Codex、Claude Code 和 Kimi Code 记录均可增量导入。adapter 只保留 tool
 call/output 的 hash、大小、顺序、原生 session/agent ID 和平台原始 usage，显式忽略

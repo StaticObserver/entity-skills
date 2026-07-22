@@ -65,6 +65,28 @@ class RouterPurgeTest(unittest.TestCase):
         self.assertEqual("completed", receipt["status"])
         self.assertFalse(receipt["recovered_after_executor_failure"])
 
+    def test_single_directory_purge_writes_receipt(self):
+        target_dir = os.path.join(self.temp, "run-dir")
+        os.makedirs(target_dir)
+        with open(os.path.join(target_dir, "out.dat"), "w") as handle:
+            handle.write("payload\n")
+        request_path = self.request()
+        with open(request_path, "r") as handle:
+            payload = json.load(handle)
+        payload["write_roots"][0]["path"] = target_dir
+        payload["inputs"][0]["locator"]["path"] = target_dir
+        payload["inputs"][0]["fingerprint"] = {}
+        with open(request_path, "w") as handle:
+            json.dump(payload, handle)
+        subprocess.check_call([sys.executable, PURGE, "--request", request_path, "--receipt", self.receipt])
+        self.assertFalse(os.path.exists(target_dir))
+        with open(self.receipt, "r") as handle:
+            receipt = json.load(handle)
+        self.assertEqual("completed", receipt["status"])
+        # the deletion removed the original probe directory itself; the
+        # receipt must fall back to the nearest surviving parent
+        self.assertTrue(os.path.isdir(receipt["filesystem"]["probe_path"]))
+
     def test_recover_after_file_was_deleted(self):
         request = self.request()
         os.unlink(self.target)

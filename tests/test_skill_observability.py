@@ -7,16 +7,20 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 
 ROOT = Path(__file__).resolve().parents[1]
 CLI = ROOT / "tools" / "skill_observability" / "skill_observer.py"
 
+from tools.skill_observability import core  # noqa: E402
 from tools.skill_observability.core import (  # noqa: E402
     TraceError,
+    _path_within,
     append_event,
     finish_run,
     read_jsonl,
+    redact_value,
     register_artifact,
     run_paths,
     run_tool,
@@ -29,6 +33,7 @@ from tools.skill_observability.evidence import (  # noqa: E402
     validate_nt2py_inventory,
     validate_pgen_preflight,
     validate_router_action,
+    validate_router_operation,
 )
 from tools.skill_observability.adapters.codex_rollout import import_codex_rollout  # noqa: E402
 from tools.skill_observability.adapters.claude_transcript import import_claude_transcript  # noqa: E402
@@ -784,6 +789,231 @@ class SkillObservabilityTest(unittest.TestCase):
         for secret in ("kimi-private", "kimi-main-secret", "kimi-main-output",
                        "kimi-child-secret", "kimi-child-output"):
             self.assertNotIn(secret, trace)
+
+    def test_path_within_matches_case_insensitive_aliases(self):
+        # Case-insensitive filesystems (default macOS APFS) resolve paths that
+        # differ only in case to the same file; the protected-root check must
+        # treat them as inside, independent of the host filesystem.
+        self.assertTrue(_path_within(Path("/Users/Example/File"), Path("/users/example")))
+        self.assertTrue(_path_within(Path("/users/example"), Path("/USERS/EXAMPLE")))
+        self.assertFalse(_path_within(Path("/users/example2"), Path("/users/example")))
+        self.assertFalse(_path_within(Path("/elsewhere/file"), Path("/users/example")))
+
+    def test_plural_secret_keys_and_list_values_are_redacted(self):
+        self.assertEqual(redact_value({"tokens": ["a", "b"]}), {"tokens": "[REDACTED]"})
+        self.assertEqual(redact_value({"secrets": "x"}), {"secrets": "[REDACTED]"})
+        self.assertEqual(redact_value({"api_credentials": {"user": "u"}}),
+                         {"api_credentials": "[REDACTED]"})
+        self.assertEqual(redact_value({"note": "plain"}), {"note": "plain"})
+        self.assertEqual(redact_value({"items": [{"token": "x"}]}),
+                         {"items": [{"token": "[REDACTED]"}]})
+
+    def test_json_out_uses_current_stdout(self):
+        from tools.skill_observability import cli
+        buffer = io.StringIO()
+        with contextlib.redirect_stdout(buffer):
+            cli._json_out({"ok": True})
+        self.assertEqual(json.loads(buffer.getvalue()), {"ok": True})
+
+    def test_append_event_rejects_span_id_reuse(self):
+        run_dir, _ = self.start()
+        append_event(
+            run_dir,
+            event_type="decision.recorded",
+            source_kind="agent",
+            source_id="test-agent",
+            evidence_level="declared",
+            phase="decide",
+            span_id="dup-span",
+            payload={"choice": "a"},
+        )
+        with self.assertRaisesRegex(TraceError, "span_id"):
+            append_event(
+                run_dir,
+                event_type="error.observed",
+                source_kind="collector",
+                source_id="test",
+                evidence_level="observed",
+                phase="execute",
+                span_id="dup-span",
+                payload={},
+            )
+        started = append_event(
+            run_dir,
+            event_type="tool.started",
+            source_kind="tool",
+            source_id="fixture-tool",
+            evidence_level="observed",
+            phase="execute",
+            span_id="tool-span",
+            payload={"name": "fixture-tool"},
+        )
+        finished = append_event(
+            run_dir,
+            event_type="tool.finished",
+            source_kind="tool",
+            source_id="fixture-tool",
+            evidence_level="observed",
+            phase="execute",
+            span_id=started["span_id"],
+            payload={"name": "fixture-tool", "status": "ok", "exit_code": 0},
+        )
+        self.assertEqual(finished["span_id"], "tool-span")
+        with self.assertRaisesRegex(TraceError, "span_id"):
+            append_event(
+                run_dir,
+                event_type="tool.finished",
+                source_kind="tool",
+                source_id="fixture-tool",
+                evidence_level="observed",
+                phase="execute",
+                span_id="tool-span",
+                payload={"name": "fixture-tool", "status": "ok", "exit_code": 0},
+            )
+
+    def test_run_tool_kills_child_that_ignores_terminate(self):
+        run_dir, _ = self.start()
+        fake = mock.MagicMock()
+        fake.stdout = io.BytesIO(b"")
+        fake.stderr = io.BytesIO(b"")
+        fake.wait.side_effect = [
+            KeyboardInterrupt,
+            subprocess.TimeoutExpired(cmd="fake-cmd", timeout=5),
+            -15,
+        ]
+        with mock.patch.object(core.subprocess, "Popen", return_value=fake):
+            with contextlib.redirect_stdout(io.StringIO()), \
+                    contextlib.redirect_stderr(io.StringIO()):
+                exit_code = run_tool(run_dir, name="stubborn", command=["fake-cmd"])
+        self.assertEqual(exit_code, -15)
+        fake.terminate.assert_called_once()
+        fake.kill.assert_called_once()
+
+    def test_append_event_works_when_fcntl_is_unavailable(self):
+        run_dir, _ = self.start()
+        with mock.patch.object(core, "fcntl", None):
+            append_event(
+                run_dir,
+                event_type="error.observed",
+                source_kind="collector",
+                source_id="test",
+                evidence_level="observed",
+                phase="execute",
+                payload={},
+            )
+        events = read_jsonl(run_paths(run_dir)["events"], "events")
+        self.assertEqual(events[-1]["type"], "error.observed")
+
+    def test_kimi_adapter_imports_real_error_flags(self):
+        run_dir, _ = self.start(name="kimi-errors")
+        session = self.root / "session-kimi-errors"
+        wire = session / "agents" / "main" / "wire.jsonl"
+        wire.parent.mkdir(parents=True)
+        records = [
+            {"type": "context.append_loop_event", "event": {
+                "type": "tool.call", "toolCallId": "call-1", "name": "Shell",
+                "args": {"command": "false"}}},
+            {"type": "context.append_loop_event", "event": {
+                "type": "tool.result", "toolCallId": "call-1",
+                "result": {"output": "Command failed with exit code: 1.", "isError": True}}},
+            {"type": "context.append_loop_event", "event": {
+                "type": "tool.call", "toolCallId": "call-2", "name": "Shell",
+                "args": {"command": "true"}}},
+            {"type": "context.append_loop_event", "event": {
+                "type": "tool.result", "toolCallId": "call-2",
+                "result": {"output": "ok"}}},
+        ]
+        wire.write_text("".join(json.dumps(item) + "\n" for item in records), encoding="utf-8")
+        outcome = import_kimi_session(run_dir, session_path=session)
+        self.assertEqual(outcome["finished_imported"], 2)
+        result = finish_run(run_dir, status="completed")
+        self.assertEqual(result["tool_calls"], {"total": 2, "failed": 1})
+
+    def test_router_action_acceptance_evidence_matches_entry_identity(self):
+        run_dir, _ = self.start()
+        _, _, request_path, result_path = self._router_fixtures()
+        request = json.loads(request_path.read_text(encoding="utf-8"))
+        result = json.loads(result_path.read_text(encoding="utf-8"))
+        request["acceptance_checks"] = [{"id": "check-a"}, {"id": "check-b"}]
+        result["verification"] = [{"id": "check-a"}, {"id": "check-a"}]
+        self.write_json(request_path, request)
+        self.write_json(result_path, result)
+        outcome = validate_router_action(
+            run_dir, request_path=request_path, result_path=result_path
+        )
+        check = next(c for c in outcome["checks"] if c["name"] == "result.acceptance-evidence")
+        self.assertFalse(check["passed"], outcome)
+
+        run_dir2, _ = self.start(name="run-acceptance-2")
+        result["verification"] = [{"id": "check-a"}, {"id": "check-b"}, {"id": "extra"}]
+        self.write_json(result_path, result)
+        outcome = validate_router_action(
+            run_dir2, request_path=request_path, result_path=result_path
+        )
+        check = next(c for c in outcome["checks"] if c["name"] == "result.acceptance-evidence")
+        self.assertTrue(check["passed"], outcome)
+
+        run_dir3, _ = self.start(name="run-acceptance-3")
+        request["acceptance_checks"] = ["file exists"]
+        result["verification"] = ["unrelated string"]
+        self.write_json(request_path, request)
+        self.write_json(result_path, result)
+        outcome = validate_router_action(
+            run_dir3, request_path=request_path, result_path=result_path
+        )
+        check = next(c for c in outcome["checks"] if c["name"] == "result.acceptance-evidence")
+        self.assertTrue(check["passed"], outcome)
+        self.assertIn("count-only", check["detail"])
+
+    def test_router_operation_malformed_documents_fail_without_traceback(self):
+        run_dir, _ = self.start()
+        plan_path = self.root / "plan.json"
+        self.write_json(plan_path, {
+            "schema_version": 1,
+            "kind": "entity-router.plan",
+            "status": "ready",
+            "state_mutated": False,
+            "goal": {"schema_version": 1, "kind": "run"},
+            "plan": {
+                "operation_id": "op-1",
+                "case_uid": "case-1",
+                "run_id": "run-1",
+                "plan_hash": "sha256:notreal",
+                "steps": [
+                    {"kind": "run.preflight.v1", "step_id": "s0"},
+                    {"kind": "run.prepare.v2", "step_id": "s1", "identity": "not-a-dict"},
+                    {"kind": "run.launch.v2", "step_id": "s2"},
+                ],
+            },
+        })
+        operation_path = self.root / "operation.json"
+        self.write_json(operation_path, {"operation_id": "op-1", "steps": ["not-a-dict"]})
+        scheduler_path = self.root / "scheduler.json"
+        self.write_json(scheduler_path, {
+            "schema_version": 1, "scheduler": "slurm", "jobs": ["not-a-dict"], "query": {},
+        })
+        status_path = self.root / "status.json"
+        self.write_json(status_path, {
+            "schema_version": 1,
+            "kind": "entity-router.status",
+            "state_mutated": False,
+            "run": {"scheduler": None},
+        })
+        outcome = validate_router_operation(
+            run_dir,
+            plan_path=plan_path,
+            operation_path=operation_path,
+            receipt_paths=[],
+            status_path=status_path,
+            scheduler_path=scheduler_path,
+        )
+        self.assertEqual(outcome["status"], "fail")
+        failed = {c["name"] for c in outcome["checks"] if not c["passed"]}
+        self.assertIn("status.scheduler", failed)
+
+    def test_codex_adapter_reuses_shared_tool_trace_helpers(self):
+        from tools.skill_observability.adapters import codex_rollout, tool_trace
+        self.assertIs(codex_rollout._serialized, tool_trace.serialized)
 
     def test_runtime_skills_have_no_observability_dependency(self):
         for path in (ROOT / "skills").glob("*/scripts/*.py"):

@@ -42,6 +42,13 @@ ancestor directories. If it reports `router-required`, do not write; return
 the target, detected Case, requested change, and reason to `entity-router`.
 Never modify Router control state.
 
+The JSON always prints, even on failure (exit code 2). Its `store_present`
+field says whether the registry was actually queried: `true` means a
+`standalone-write` is confirmed unregistered; `false` means the Router store
+was missing or unreadable, so standalone only means "could not check" — treat
+that as a warning, not as confirmation; `null` means evaluation failed before
+querying (for example an invalid `--target`).
+
 For a target not registered by Router, treat it as standalone only
 when the user selected an exact location and requested PGen-domain deliverables
 only. Route ambiguous workspace creation, persistent simulation work, or any

@@ -152,6 +152,8 @@ def import_tool_trace(
                 resource_count += 1
         if call.get("has_output") and call_id not in existing_finishes:
             output_bytes = serialized(call.get("output"))
+            is_error = call.get("is_error")
+            status = "failed" if is_error else ("unknown" if is_error is None else "completed")
             append_event(
                 run_dir,
                 event_type="tool.finished",
@@ -164,7 +166,7 @@ def import_tool_trace(
                 payload={
                     **common,
                     "name": str(call.get("name") or "unknown-tool"),
-                    "status": "failed" if call.get("is_error") else "completed",
+                    "status": status,
                     "exit_code": None,
                     "output": {
                         "sha256": sha256_bytes(output_bytes),

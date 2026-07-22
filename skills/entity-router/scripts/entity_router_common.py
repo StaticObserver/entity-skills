@@ -11,6 +11,7 @@ import datetime
 import hashlib
 import json
 import os
+import re
 import shlex
 import stat
 import subprocess
@@ -153,8 +154,13 @@ def validate_site_profile(profile):
     kind = transport.get("kind")
     if kind not in {"local", "ssh"}:
         raise RouterError("site transport.kind must be local or ssh")
-    if kind == "ssh" and not transport.get("ssh_alias"):
-        raise RouterError("ssh site requires transport.ssh_alias")
+    if kind == "ssh":
+        alias = str(transport.get("ssh_alias", ""))
+        # The alias is passed as an ssh/scp argv element; forbid leading dashes
+        # and option syntax so it can never smuggle ssh options like
+        # -oProxyCommand=... into the command line.
+        if not alias or not re.match(r"^[A-Za-z0-9_.@][A-Za-z0-9_.@-]*$", alias):
+            raise RouterError("invalid transport.ssh_alias: %s" % alias)
     scheduler = profile.get("scheduler", {})
     if scheduler.get("kind", "none") not in {"none", "slurm", "pbs", "custom"}:
         raise RouterError("unsupported scheduler kind")
@@ -189,7 +195,7 @@ def run_on_site(profile, argv):
     alias = profile["transport"]["ssh_alias"]
     remote = " ".join(shlex.quote(str(item)) for item in argv)
     return run_command([
-        "ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", alias, remote
+        "ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", "--", alias, remote
     ])
 
 

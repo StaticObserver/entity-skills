@@ -32,8 +32,11 @@ from .adapters.claude_phases import write_phases_report
 from .adapters.kimi_wire import import_kimi_session
 
 
-def _json_out(value: Any, stream: Any = sys.stdout) -> None:
-    print(json.dumps(value, indent=2, sort_keys=True, ensure_ascii=False), file=stream)
+def _json_out(value: Any, stream: Any = None) -> None:
+    # Resolve stdout at call time so redirected sys.stdout (tests, embedding)
+    # is honored; a default of sys.stdout would bind at import time.
+    print(json.dumps(value, indent=2, sort_keys=True, ensure_ascii=False),
+          file=stream if stream is not None else sys.stdout)
 
 
 def _payload(args: argparse.Namespace) -> Dict[str, Any]:

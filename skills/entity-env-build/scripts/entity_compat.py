@@ -37,6 +37,35 @@ SUPPORTED_SCHEMA_VERSIONS = {1, 2}
 CHECKER_VERSION = 1
 
 
+class IssueList(List[str]):
+    """Issue strings that remember which check produced each one.
+
+    Plain append() records an empty check id; append_for() records the
+    owning check so _apply_overrides can remove exactly the overridden
+    check's issues instead of substring-matching issue text.
+    """
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.check_ids: List[str] = []
+
+    def append(self, text: str) -> None:
+        self.check_ids.append("")
+        super().append(text)
+
+    def append_for(self, check_id: str, text: str) -> None:
+        self.check_ids.append(check_id)
+        super().append(text)
+
+
+def _append_issue(issues: List[str], check_id: str, text: str) -> None:
+    """Append *text* tagged with its owning *check_id* when supported."""
+    if isinstance(issues, IssueList):
+        issues.append_for(check_id, text)
+    else:
+        issues.append(text)
+
+
 def compatibility_coverage() -> Dict[str, str]:
     """Return the implemented coverage map for the compatibility contract."""
     return {
@@ -323,7 +352,8 @@ def _check_parameters_confirmation(
             remediation="run entity_checkpoint.py confirm <requirements> "
             "--checkpoint <checkpoint> --by <actor>",
         )
-        issues.append("compile parameters have no confirmation record")
+        _append_issue(issues, "parameters.confirmation",
+                      "compile parameters have no confirmation record")
         return
 
     expected = parameter_card(req)["digest"]
@@ -338,7 +368,8 @@ def _check_parameters_confirmation(
             remediation="run entity_checkpoint.py confirm <requirements> "
             "--checkpoint <checkpoint> --by <actor> to re-confirm the changed parameters",
         )
-        issues.append("compile parameters changed after confirmation")
+        _append_issue(issues, "parameters.confirmation",
+                      "compile parameters changed after confirmation")
         return
 
     add(
@@ -744,7 +775,7 @@ def _check_compiler_min_versions(
                 add(checks, "compiler.version.nvcc", "fail", msg,
                     {"actual": list(nvcc_version), "required": list(min_nvcc)},
                     remediation=f"Upgrade CUDA toolkit to {min_nvcc[0]}.{min_nvcc[1]}+")
-                issues.append(msg)
+                _append_issue(issues, "compiler.version.nvcc", msg)
             else:
                 add(checks, "compiler.version.nvcc", "pass",
                     f"NVCC {nvcc_version[0]}.{nvcc_version[1]} satisfies minimum",
@@ -798,23 +829,22 @@ def _apply_overrides(
         checks[i]["summary"] = check["summary"] + " (overridden by decisions." + override_key + ")"
         overridden_ids.add(check_id)
 
-    # Remove any issue that belongs to an overridden check
+    # Remove only the issues that belong to an overridden check (tracked via
+    # IssueList check-id tags); never substring-match unrelated issue text.
     if overridden_ids:
-        # Match issues to check IDs by substring: the issue text starts with the check topic
-        # e.g. "NVCC 12.0 is below minimum..." matches check "compiler.version.nvcc"
-        remaining = []
-        for issue in issues:
-            issue_lower = issue.lower()
-            kept = True
-            for override_id in overridden_ids:
-                override_topic = override_id.rsplit(".", 1)[-1]
-                if override_topic in issue_lower:
-                    kept = False
-                    break
-            if kept:
-                remaining.append(issue)
-        issues.clear()
-        issues.extend(remaining)
+        check_ids = (
+            issues.check_ids
+            if isinstance(issues, IssueList)
+            else [""] * len(issues)
+        )
+        kept = [
+            (text, cid)
+            for text, cid in zip(issues, check_ids)
+            if cid not in overridden_ids
+        ]
+        issues[:] = [text for text, _ in kept]
+        if isinstance(issues, IssueList):
+            issues.check_ids[:] = [cid for _, cid in kept]
 
 
 # ---------------------------------------------------------------------------
@@ -854,6 +884,17 @@ def validate_adios2_install_integrity(
         "ADIOS2 cmake install is complete (all targets files present)",
         {"config_dir": str(config_dir)})
     return True
+
+
+def version_matches_family(version: str, family_prefix: str) -> bool:
+    """Match a selected version against a profile family prefix by '.' segments.
+
+    Family prefixes may carry a trailing dot ("5.", "2.11."); compare segment
+    by segment so "5" matches the 5.x family but "55.0.0" does not.
+    """
+    wanted = [seg for seg in str(family_prefix).removeprefix("v").split(".") if seg]
+    actual = [seg for seg in str(version).removeprefix("v").split(".") if seg]
+    return bool(wanted) and actual[: len(wanted)] == wanted
 
 
 # ---------------------------------------------------------------------------
@@ -898,21 +939,27 @@ def check_source_revision(req: Dict[str, Any], checks: List[Dict[str, Any]],
         actual = {"snapshot_id": "", "verified_files": 0}
         passed = manifest_path.is_file()
         if passed:
-            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-            actual["snapshot_id"] = str(manifest.get("snapshot_id") or "")
-            passed = actual["snapshot_id"] == str(revision.get("snapshot_id") or "")
-            for entry in manifest.get("files", []):
-                relative = str(entry.get("path") or "")
-                if (not relative or os.path.isabs(relative)
-                        or ".." in Path(relative).parts):
-                    passed = False
-                    break
-                path = checkout / relative
-                digest = hashlib.sha256(path.read_bytes()).hexdigest() if path.is_file() else ""
-                if digest != entry.get("sha256"):
-                    passed = False
-                    break
-                actual["verified_files"] += 1
+            try:
+                manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+                if not isinstance(manifest, dict):
+                    raise ValueError("snapshot manifest is not a JSON object")
+                actual["snapshot_id"] = str(manifest.get("snapshot_id") or "")
+                passed = actual["snapshot_id"] == str(revision.get("snapshot_id") or "")
+                for entry in manifest.get("files", []):
+                    relative = str(entry.get("path") or "")
+                    if (not relative or os.path.isabs(relative)
+                            or ".." in Path(relative).parts):
+                        passed = False
+                        break
+                    path = checkout / relative
+                    digest = hashlib.sha256(path.read_bytes()).hexdigest() if path.is_file() else ""
+                    if digest != entry.get("sha256"):
+                        passed = False
+                        break
+                    actual["verified_files"] += 1
+            except (OSError, ValueError) as exc:
+                actual["error"] = f"{type(exc).__name__}: {exc}"
+                passed = False
         expected = {"snapshot_id": str(revision.get("snapshot_id") or "")}
     else:
         actual = {"kind": kind}
@@ -931,7 +978,7 @@ def run_checks(
     req: Dict[str, Any], checkpoint: Dict[str, Any]
 ) -> Tuple[str, List[Dict[str, Any]], List[str]]:
     checks: List[Dict[str, Any]] = []
-    issues: List[str] = []
+    issues: List[str] = IssueList()
 
     # -- Section 1: Request / checkpoint consistency ------------------------
     req_schema = req.get("schema_version")
@@ -1093,7 +1140,7 @@ def run_checks(
 
     for dep, prefix in (("kokkos", profile["kokkos"]), ("adios2", profile["adios2"])):
         version = selected_version(checkpoint, dep)
-        if version and version.startswith(prefix):
+        if version and version_matches_family(version, prefix):
             add(
                 checks,
                 f"profile.{dep}_version",

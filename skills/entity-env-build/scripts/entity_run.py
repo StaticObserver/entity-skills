@@ -6,6 +6,7 @@ Subcommands:
 """
 
 import argparse
+import re
 import subprocess
 import sys
 import uuid
@@ -21,6 +22,18 @@ from entity_schema import entity_paths
 
 def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+# run_id is used as a log-file path component; whitelist it.
+_RUN_ID_RE = re.compile(r"[A-Za-z0-9._-]+")
+
+
+def _validate_run_id(run_id: str) -> str:
+    if not _RUN_ID_RE.fullmatch(run_id):
+        raise SystemExit(
+            f"invalid --run-id: {run_id!r} — only letters, digits, '.', '_', '-' are allowed"
+        )
+    return run_id
 
 
 def _build_artifacts_dir(req: Dict[str, Any]) -> Path:
@@ -50,7 +63,7 @@ def cmd_build(args: argparse.Namespace) -> None:
         raise SystemExit(f"entity-build.sh not found: {script}")
 
     ensure_harness_home()
-    run_id = args.run_id or uuid.uuid4().hex[:8]
+    run_id = _validate_run_id(args.run_id or uuid.uuid4().hex[:8])
     log_dir = _build_artifacts_dir(req)
     log_dir.mkdir(parents=True, exist_ok=True)
     run_log = log_dir / f"entity-run-{run_id}.log"
@@ -152,7 +165,9 @@ def cmd_build(args: argparse.Namespace) -> None:
             log=str(run_log.resolve()),
         )
     if exit_code != 0:
-        raise SystemExit(exit_code)
+        # Negative exit_code means the runner itself crashed; map it to a
+        # fixed code — SystemExit(-1) would surface as 255.
+        raise SystemExit(exit_code if exit_code > 0 else 2)
 
 
 def main() -> None:

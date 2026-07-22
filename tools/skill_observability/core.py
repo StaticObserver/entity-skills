@@ -1,8 +1,17 @@
-"""Collector, redaction, hashing, command tracing, and run validation."""
+"""Collector, redaction, hashing, command tracing, and run validation.
+
+Appends are serialized with an advisory ``flock`` on POSIX platforms. On
+platforms without ``fcntl`` (e.g. Windows) the module still imports and
+works, but appends degrade to lock-free writes and concurrent writers to
+the same run directory are no longer serialized.
+"""
 
 from __future__ import annotations
 
-import fcntl
+try:
+    import fcntl
+except ImportError:  # non-POSIX platforms have no flock; degrade to lock-free
+    fcntl = None
 import hashlib
 import json
 import mimetypes
@@ -30,7 +39,7 @@ from .contracts import (
 
 TERMINAL_EVENTS = {"run.finished", "run.failed"}
 SECRET_KEY_RE = re.compile(
-    r"(?:^|[_-])(?:token|password|passwd|secret|credential|private[_-]?key|cookie|authorization)(?:$|[_-])",
+    r"(?:^|[_-])(?:tokens?|passwords?|passwds?|secrets?|credentials?|private[_-]?keys?|cookies?|authorizations?)(?:$|[_-])",
     re.IGNORECASE,
 )
 BEARER_RE = re.compile(r"(?i)\bBearer\s+[A-Za-z0-9._~+/=-]+")
@@ -93,8 +102,14 @@ def sha256_file(path: Path) -> Tuple[str, int]:
 
 
 def _path_within(path: Path, root: Path) -> bool:
+    # Case-insensitive filesystems (default macOS APFS, Windows) resolve
+    # paths that differ only in case to the same file. Compare case-folded
+    # so such aliases cannot slip past the protected-root check; this is
+    # deliberately fail-closed on case-sensitive filesystems too.
     try:
-        path.relative_to(root)
+        Path(os.path.normcase(str(path)).casefold()).relative_to(
+            Path(os.path.normcase(str(root)).casefold())
+        )
         return True
     except ValueError:
         return False
@@ -177,18 +192,21 @@ def redact_string(value: str) -> str:
 
 
 def redact_value(value: Any, key_hint: str = "") -> Any:
+    if value is None or isinstance(value, (bool, int, float)):
+        # Scalars cannot carry secret text; keeping them intact also lets
+        # plural key names (e.g. "tokens") match without destroying numeric
+        # telemetry such as input_tokens/output_tokens.
+        return value
     if key_hint and SECRET_KEY_RE.search(key_hint):
         return "[REDACTED]"
     if isinstance(value, Mapping):
         return {str(key): redact_value(item, str(key)) for key, item in value.items()}
     if isinstance(value, list):
-        return [redact_value(item) for item in value]
+        return [redact_value(item, key_hint) for item in value]
     if isinstance(value, tuple):
-        return [redact_value(item) for item in value]
+        return [redact_value(item, key_hint) for item in value]
     if isinstance(value, str):
         return redact_string(value)
-    if value is None or isinstance(value, (bool, int, float)):
-        return value
     return redact_string(str(value))
 
 
@@ -433,8 +451,14 @@ def start_run(
 
 def _locked_jsonl(path: Path):
     handle = path.open("a+", encoding="utf-8")
-    fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+    if fcntl is not None:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
     return handle
+
+
+def _unlock_jsonl(handle: Any) -> None:
+    if fcntl is not None:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
 
 
 def _read_locked_jsonl(handle: Any, label: str) -> List[Dict[str, Any]]:
@@ -451,6 +475,83 @@ def _read_locked_jsonl(handle: Any, label: str) -> List[Dict[str, Any]]:
             raise TraceError(f"{label} line {number} must be an object")
         values.append(value)
     return values
+
+
+def _read_validated_events(handle: Any) -> List[Dict[str, Any]]:
+    events = _read_locked_jsonl(handle, "events.jsonl")
+    for index, existing in enumerate(events, 1):
+        try:
+            validate_event(existing)
+        except ContractError as exc:
+            raise TraceError(f"existing event {index} is invalid: {exc}") from exc
+        if existing["seq"] != index:
+            raise TraceError(f"existing event sequence is not contiguous at {index}")
+    return events
+
+
+def _append_event_locked(
+    handle: Any,
+    events: List[Dict[str, Any]],
+    manifest: Mapping[str, Any],
+    *,
+    event_type: str,
+    source_kind: str,
+    source_id: str,
+    evidence_level: str,
+    phase: str,
+    payload: Mapping[str, Any],
+    span_id: Optional[str] = None,
+    parent_span_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Append one event under an already-held events.jsonl lock.
+
+    ``events`` is the validated in-memory copy of the file; the new event is
+    appended to it so callers can chain further appends under the same lock.
+    """
+    if events and events[-1]["type"] in TERMINAL_EVENTS:
+        raise TraceError("cannot append an event after the terminal event")
+    if event_type == "run.started" and events:
+        raise TraceError("run.started must be the first and only initial event")
+    if event_type != "run.started" and not events:
+        raise TraceError("the first event must be run.started")
+    known_spans = {item["span_id"] for item in events}
+    if parent_span_id is not None and parent_span_id not in known_spans:
+        raise TraceError(f"parent span is not present in this run: {parent_span_id}")
+    if span_id is not None and span_id in known_spans:
+        # A span may be referenced exactly twice: once by its tool.started and
+        # once by the matching tool.finished. Any other reuse creates an
+        # ambiguous one-to-many parent for downstream consumers.
+        prior_types = [item["type"] for item in events if item["span_id"] == span_id]
+        if (
+            event_type != "tool.finished"
+            or "tool.started" not in prior_types
+            or "tool.finished" in prior_types
+        ):
+            raise TraceError(f"span_id is already in use in this run: {span_id}")
+    event = {
+        "schema_version": SCHEMA_VERSION,
+        "event_id": str(uuid.uuid4()),
+        "run_id": manifest["run_id"],
+        "seq": len(events) + 1,
+        "time": now_utc(),
+        "type": event_type,
+        "source": {"kind": source_kind, "id": source_id},
+        "evidence_level": evidence_level,
+        "phase": phase,
+        "span_id": span_id or str(uuid.uuid4()),
+        "parent_span_id": parent_span_id,
+        "payload": redact_value(dict(payload)),
+    }
+    try:
+        validate_event(event)
+    except ContractError as exc:
+        raise TraceError(str(exc)) from exc
+    handle.seek(0, os.SEEK_END)
+    handle.write(json.dumps(event, sort_keys=True, ensure_ascii=False) + "\n")
+    handle.flush()
+    os.fsync(handle.fileno())
+    events.append(event)
+    return event
 
 
 def append_event(
@@ -474,48 +575,22 @@ def append_event(
     paths = run_paths(run_dir)
     handle = _locked_jsonl(paths["events"])
     try:
-        events = _read_locked_jsonl(handle, "events.jsonl")
-        for index, existing in enumerate(events, 1):
-            try:
-                validate_event(existing)
-            except ContractError as exc:
-                raise TraceError(f"existing event {index} is invalid: {exc}") from exc
-            if existing["seq"] != index:
-                raise TraceError(f"existing event sequence is not contiguous at {index}")
-        if events and events[-1]["type"] in TERMINAL_EVENTS:
-            raise TraceError("cannot append an event after the terminal event")
-        if event_type == "run.started" and events:
-            raise TraceError("run.started must be the first and only initial event")
-        if event_type != "run.started" and not events:
-            raise TraceError("the first event must be run.started")
-        known_spans = {item["span_id"] for item in events}
-        if parent_span_id is not None and parent_span_id not in known_spans:
-            raise TraceError(f"parent span is not present in this run: {parent_span_id}")
-        event = {
-            "schema_version": SCHEMA_VERSION,
-            "event_id": str(uuid.uuid4()),
-            "run_id": manifest["run_id"],
-            "seq": len(events) + 1,
-            "time": now_utc(),
-            "type": event_type,
-            "source": {"kind": source_kind, "id": source_id},
-            "evidence_level": evidence_level,
-            "phase": phase,
-            "span_id": span_id or str(uuid.uuid4()),
-            "parent_span_id": parent_span_id,
-            "payload": redact_value(dict(payload)),
-        }
-        try:
-            validate_event(event)
-        except ContractError as exc:
-            raise TraceError(str(exc)) from exc
-        handle.seek(0, os.SEEK_END)
-        handle.write(json.dumps(event, sort_keys=True, ensure_ascii=False) + "\n")
-        handle.flush()
-        os.fsync(handle.fileno())
-        return event
+        events = _read_validated_events(handle)
+        return _append_event_locked(
+            handle,
+            events,
+            manifest,
+            event_type=event_type,
+            source_kind=source_kind,
+            source_id=source_id,
+            evidence_level=evidence_level,
+            phase=phase,
+            payload=payload,
+            span_id=span_id,
+            parent_span_id=parent_span_id,
+        )
     finally:
-        fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+        _unlock_jsonl(handle)
         handle.close()
 
 
@@ -539,64 +614,75 @@ def register_artifact(
 ) -> Dict[str, Any]:
     manifest = load_manifest(run_dir)
     paths = run_paths(run_dir)
-    events = read_jsonl(paths["events"], "events.jsonl")
-    if events and events[-1].get("type") in TERMINAL_EVENTS:
-        raise TraceError("cannot register an artifact after the terminal event")
-    producing_event = _event_by_id(events, produced_by)
     resolved = path.expanduser().resolve()
     if not resolved.is_file():
         raise TraceError(f"artifact is not a regular file: {resolved}")
     digest, size = sha256_file(resolved)
-    artifact = {
-        "schema_version": SCHEMA_VERSION,
-        "artifact_id": str(uuid.uuid4()),
-        "run_id": manifest["run_id"],
-        "role": role,
-        "locator": {"site_id": site_id, "path": str(resolved)},
-        "media_type": media_type or mimetypes.guess_type(str(resolved))[0] or "application/octet-stream",
-        "sha256": digest,
-        "size_bytes": size,
-        "produced_by": produced_by,
-        "authority": authority,
-    }
-    try:
-        validate_artifact(artifact)
-    except ContractError as exc:
-        raise TraceError(str(exc)) from exc
 
-    handle = _locked_jsonl(paths["artifacts"])
+    # Hold the events lock across the terminal check, the artifact append,
+    # and the artifact.observed event so a concurrent finish cannot leave an
+    # artifact without its producing event (which validate_run would reject).
+    events_handle = _locked_jsonl(paths["events"])
     try:
-        artifacts = _read_locked_jsonl(handle, "artifacts.jsonl")
-        for index, existing in enumerate(artifacts, 1):
-            try:
-                validate_artifact(existing)
-            except ContractError as exc:
-                raise TraceError(f"existing artifact {index} is invalid: {exc}") from exc
-        handle.seek(0, os.SEEK_END)
-        handle.write(json.dumps(artifact, sort_keys=True, ensure_ascii=False) + "\n")
-        handle.flush()
-        os.fsync(handle.fileno())
-    finally:
-        fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
-        handle.close()
-
-    append_event(
-        run_dir,
-        event_type="artifact.observed",
-        source_kind="collector",
-        source_id="skill-observer",
-        evidence_level="observed",
-        phase=phase,
-        parent_span_id=producing_event["span_id"],
-        payload={
-            "artifact_id": artifact["artifact_id"],
+        events = _read_validated_events(events_handle)
+        if events and events[-1].get("type") in TERMINAL_EVENTS:
+            raise TraceError("cannot register an artifact after the terminal event")
+        producing_event = _event_by_id(events, produced_by)
+        artifact = {
+            "schema_version": SCHEMA_VERSION,
+            "artifact_id": str(uuid.uuid4()),
+            "run_id": manifest["run_id"],
             "role": role,
-            "authority": authority,
-            "locator": artifact["locator"],
+            "locator": {"site_id": site_id, "path": str(resolved)},
+            "media_type": media_type or mimetypes.guess_type(str(resolved))[0] or "application/octet-stream",
             "sha256": digest,
-        },
-    )
-    return artifact
+            "size_bytes": size,
+            "produced_by": produced_by,
+            "authority": authority,
+        }
+        try:
+            validate_artifact(artifact)
+        except ContractError as exc:
+            raise TraceError(str(exc)) from exc
+
+        artifacts_handle = _locked_jsonl(paths["artifacts"])
+        try:
+            artifacts = _read_locked_jsonl(artifacts_handle, "artifacts.jsonl")
+            for index, existing in enumerate(artifacts, 1):
+                try:
+                    validate_artifact(existing)
+                except ContractError as exc:
+                    raise TraceError(f"existing artifact {index} is invalid: {exc}") from exc
+            artifacts_handle.seek(0, os.SEEK_END)
+            artifacts_handle.write(json.dumps(artifact, sort_keys=True, ensure_ascii=False) + "\n")
+            artifacts_handle.flush()
+            os.fsync(artifacts_handle.fileno())
+        finally:
+            _unlock_jsonl(artifacts_handle)
+            artifacts_handle.close()
+
+        _append_event_locked(
+            events_handle,
+            events,
+            manifest,
+            event_type="artifact.observed",
+            source_kind="collector",
+            source_id="skill-observer",
+            evidence_level="observed",
+            phase=phase,
+            parent_span_id=producing_event["span_id"],
+            payload={
+                "artifact_id": artifact["artifact_id"],
+                "role": role,
+                "authority": authority,
+                "locator": artifact["locator"],
+                "sha256": digest,
+            },
+        )
+        return artifact
+    finally:
+        _unlock_jsonl(events_handle)
+        events_handle.close()
 
 
 def _parse_time(value: str) -> datetime:
@@ -672,45 +758,51 @@ def finish_run(
         raise TraceError("finish status must be completed or failed")
     paths = run_paths(run_dir)
     manifest = load_manifest(run_dir)
-    existing_events = read_jsonl(paths["events"], "events.jsonl")
-    if existing_events and existing_events[-1].get("type") in TERMINAL_EVENTS:
-        expected_type = "run.finished" if status == "completed" else "run.failed"
-        if existing_events[-1]["type"] != expected_type:
-            raise TraceError("existing terminal event does not match requested finish status")
+    # Hold the events lock across the terminal check and the terminal append
+    # so a concurrent emit cannot interleave an event with run finalization.
+    handle = _locked_jsonl(paths["events"])
+    try:
+        events = _read_validated_events(handle)
+        if events and events[-1].get("type") in TERMINAL_EVENTS:
+            expected_type = "run.finished" if status == "completed" else "run.failed"
+            if events[-1]["type"] != expected_type:
+                raise TraceError("existing terminal event does not match requested finish status")
+            artifacts = read_jsonl(paths["artifacts"], "artifacts.jsonl")
+            result = derive_result(manifest, events, artifacts)
+            if paths["result"].exists():
+                stored = load_json(paths["result"], "result.json")
+                try:
+                    validate_result(stored)
+                except ContractError as exc:
+                    raise TraceError(str(exc)) from exc
+                if stored != result:
+                    raise TraceError("existing result.json does not match the terminal trace")
+                return stored
+            atomic_write_json(paths["result"], result)
+            return result
+        _append_event_locked(
+            handle,
+            events,
+            manifest,
+            event_type="run.finished" if status == "completed" else "run.failed",
+            source_kind="collector",
+            source_id="skill-observer",
+            evidence_level="observed",
+            phase="finish",
+            payload={
+                "status": status,
+                "input_tokens": input_tokens,
+                "output_tokens": output_tokens,
+                "wall_time_ms": wall_time_ms,
+            },
+        )
         artifacts = read_jsonl(paths["artifacts"], "artifacts.jsonl")
-        result = derive_result(manifest, existing_events, artifacts)
-        if paths["result"].exists():
-            stored = load_json(paths["result"], "result.json")
-            try:
-                validate_result(stored)
-            except ContractError as exc:
-                raise TraceError(str(exc)) from exc
-            if stored != result:
-                raise TraceError("existing result.json does not match the terminal trace")
-            return stored
+        result = derive_result(manifest, events, artifacts)
         atomic_write_json(paths["result"], result)
         return result
-    event = append_event(
-        run_dir,
-        event_type="run.finished" if status == "completed" else "run.failed",
-        source_kind="collector",
-        source_id="skill-observer",
-        evidence_level="observed",
-        phase="finish",
-        payload={
-            "status": status,
-            "input_tokens": input_tokens,
-            "output_tokens": output_tokens,
-            "wall_time_ms": wall_time_ms,
-        },
-    )
-    events = read_jsonl(paths["events"], "events.jsonl")
-    artifacts = read_jsonl(paths["artifacts"], "artifacts.jsonl")
-    result = derive_result(manifest, events, artifacts)
-    result["terminal_event_id"] = event["event_id"]
-    validate_result(result)
-    atomic_write_json(paths["result"], result)
-    return result
+    finally:
+        _unlock_jsonl(handle)
+        handle.close()
 
 
 def _validate_schema_documents() -> List[str]:
@@ -1007,7 +1099,12 @@ def run_tool(
         exit_code = process.wait()
     except KeyboardInterrupt:
         process.terminate()
-        exit_code = process.wait()
+        try:
+            exit_code = process.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            # The child ignored SIGTERM; do not block forever on wait().
+            process.kill()
+            exit_code = process.wait()
     for thread in threads:
         thread.join()
     elapsed_ms = int((time.monotonic() - started_at) * 1000)

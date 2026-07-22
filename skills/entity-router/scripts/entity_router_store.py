@@ -516,14 +516,21 @@ class OperationStore(object):
                         {"step_index": step_index, "step_id": row["step_id"]}, actor or {})
 
     def commit_step(self, operation_id, step_index, effect, evidence, identities,
-                    current, actor):
-        """Atomically commit one verified Step and all controller projections."""
+                    current, actor, claim_token=None):
+        """Atomically commit one verified Step and all controller projections.
+
+        When ``claim_token`` is given the write only lands while the caller
+        still holds the Operation claim, so a stale applier cannot commit
+        after losing its lease."""
         with self.transaction() as connection:
             operation = connection.execute(
-                "SELECT case_uid FROM operations WHERE operation_id=?", (operation_id,)
+                "SELECT case_uid,claim_token FROM operations WHERE operation_id=?",
+                (operation_id,)
             ).fetchone()
             if operation is None:
                 raise StoreError("unknown Operation: %s" % operation_id)
+            if claim_token is not None and operation["claim_token"] != claim_token:
+                raise StoreError("Operation claim is no longer held")
             case_uid = operation["case_uid"]
             step = connection.execute(
                 "SELECT step_id FROM steps WHERE operation_id=? AND step_index=?",
@@ -552,15 +559,18 @@ class OperationStore(object):
             self._event(connection, case_uid, operation_id, "step.committed",
                         {"step_index": step_index, "step_id": step["step_id"]}, actor)
 
-    def finish_operation(self, operation_id, status, result, actor):
+    def finish_operation(self, operation_id, status, result, actor, claim_token=None):
         if status not in {"completed", "needs_decision", "blocked", "anomaly", "cancelled"}:
             raise StoreError("invalid Operation terminal status: %s" % status)
         with self.transaction() as connection:
             row = connection.execute(
-                "SELECT case_uid FROM operations WHERE operation_id=?", (operation_id,)
+                "SELECT case_uid,claim_token FROM operations WHERE operation_id=?",
+                (operation_id,)
             ).fetchone()
             if row is None:
                 raise StoreError("unknown Operation: %s" % operation_id)
+            if claim_token is not None and row["claim_token"] != claim_token:
+                raise StoreError("Operation claim is no longer held")
             connection.execute(
                 """UPDATE operations SET status=?,result_json=?,claim_token=NULL,
                        claim_expires_at=NULL,updated_at=? WHERE operation_id=?""",
@@ -641,10 +651,12 @@ class OperationStore(object):
 
     def cancel_operation(self, operation_id, actor, reason=""):
         """Terminal escape hatch: cancel a pending/running Operation and release
-        the Case so a different Plan can proceed."""
+        the Case so a different Plan can proceed.  The status check and the
+        terminal update happen in one transaction so a concurrent finish
+        cannot be clobbered between two transactions."""
         with self.transaction() as connection:
             row = connection.execute(
-                "SELECT status FROM operations WHERE operation_id=?", (operation_id,)
+                "SELECT case_uid,status FROM operations WHERE operation_id=?", (operation_id,)
             ).fetchone()
             if row is None:
                 raise StoreError("unknown Operation: %s" % operation_id)
@@ -654,10 +666,22 @@ class OperationStore(object):
                 raise StoreError(
                     "Operation is already %s and cannot be cancelled" % row["status"]
                 )
-        self.finish_operation(
-            operation_id, "cancelled",
-            {"reason": reason or "cancelled via entityctl"}, actor,
-        )
+            result = {"reason": reason or "cancelled via entityctl"}
+            changed = connection.execute(
+                """UPDATE operations SET status='cancelled',result_json=?,
+                       claim_token=NULL,claim_expires_at=NULL,updated_at=?
+                   WHERE operation_id=? AND status IN ('pending','running')""",
+                (_json(result), now_utc(), operation_id),
+            ).rowcount
+            if changed != 1:
+                raise StoreError(
+                    "Operation changed state while being cancelled; retry")
+            connection.execute(
+                "UPDATE cases SET active_operation_id=NULL,updated_at=? WHERE case_uid=?",
+                (now_utc(), row["case_uid"]),
+            )
+            self._event(connection, row["case_uid"], operation_id,
+                        "operation.cancelled", result, actor)
 
     def _event(self, connection, case_uid, operation_id, event_type, payload, actor):
         connection.execute(

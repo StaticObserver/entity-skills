@@ -90,10 +90,20 @@ def import_kimi_session(
             elif event_type == "tool.result":
                 native_id = str(event.get("toolCallId") or "")
                 if native_id in by_id:
+                    result = event.get("result")
+                    if isinstance(result, dict):
+                        # Kimi wire marks failures with result.isError: the key
+                        # is present (true) on failures and absent on success.
+                        is_error: Optional[bool] = bool(result.get("isError"))
+                    else:
+                        # Unstructured result payload carries no error signal;
+                        # stay conservative and report the outcome as unknown
+                        # instead of claiming completion.
+                        is_error = None
                     by_id[native_id].update({
                         "has_output": True,
-                        "output": event.get("result"),
-                        "is_error": False,
+                        "output": result,
+                        "is_error": is_error,
                     })
         selected_usage = wire_usage["turn"] if wire_usage["turn"]["records"] else wire_usage["session"]
         for key in usage:

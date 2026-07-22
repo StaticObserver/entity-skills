@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""Inspect nt2py metadata without loading field or particle data arrays."""
+"""Inspect nt2py metadata.
+
+Field and particle data arrays are never loaded, and Dask-backed arrays
+are only counted.  Small index arrays (coordinates, particle steps/times)
+are read into memory so they can be summarized."""
 
 import argparse
 import json
@@ -12,6 +16,10 @@ from typing import Any, Dict, List, Optional
 
 
 SCHEMA_VERSION = 1
+# Baseline nt2py version the bundled references were written against (see
+# "The bundled references target nt2py vX.Y.Z" in ../SKILL.md).  Bump this
+# by hand, together with the SKILL.md statement and the references, whenever
+# the references are revalidated against a newer nt2py release.
 REFERENCE_VERSION = "1.5.3"
 
 
@@ -199,7 +207,11 @@ def _write_json(result: Dict[str, Any], output: Optional[Path]) -> None:
 
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Inspect nt2py metadata without loading field or particle arrays."
+        description=(
+            "Inspect nt2py metadata. Loads small index arrays (coordinates, "
+            "particle steps/times) for summarizing; never loads field or "
+            "particle data arrays."
+        )
     )
     parser.add_argument("data_root", type=Path, help="Directory containing fields/particles/spectra")
     parser.add_argument(

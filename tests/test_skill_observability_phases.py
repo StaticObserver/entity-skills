@@ -417,6 +417,39 @@ class PhasesCommandTest(unittest.TestCase):
         ]
         self.assertEqual(len(artifacts), 1)
         self.assertEqual(artifacts[0]["role"], "phases-report")
+    def test_phases_output_inside_protected_root_is_rejected(self):
+        protected = self.root / "protected"
+        protected.mkdir()
+        run_dir, _ = start_run(
+            task_id="case-001",
+            input_ref="fixture://case-001",
+            input_sha256=sha256_text("test task"),
+            variant="full",
+            agent_provider="test-provider",
+            agent_model="test-model",
+            agent_configuration=sha256_text("agent-config"),
+            tool_profile="test-tools",
+            tool_configuration=sha256_text("tool-config"),
+            skill_paths=[],
+            trace_home=self.root / "traces-protected",
+            run_id="phases-protected",
+            protected_roots=[protected],
+        )
+        transcript = self.root / "session.jsonl"
+        write_transcript(transcript, [
+            assistant("2026-07-21T08:00:00Z",
+                      [("t1", "Bash", {"command": "ssh siyuan ls"})],
+                      {"input_tokens": 10, "output_tokens": 5}),
+        ])
+        target = protected / "evil.json"
+        proc = self.run_cli(
+            "phases", "--run-dir", str(run_dir),
+            "--transcript", str(transcript),
+            "--output", str(target),
+        )
+        self.assertEqual(proc.returncode, 2, proc.stdout + proc.stderr)
+        self.assertIn("protected root", proc.stderr)
+        self.assertFalse(target.exists())
 
 
 if __name__ == "__main__":

@@ -90,6 +90,17 @@ def remove_path(path):
         shutil.rmtree(path)
 
 
+def existing_directory(path):
+    """Nearest existing directory at or above path; deletion targets may
+    remove the probe directory itself, so re-resolve before measuring."""
+    while not os.path.isdir(path):
+        parent = os.path.dirname(path)
+        if parent == path:
+            break
+        path = parent
+    return path
+
+
 def validate_request(request, receipt):
     if request.get("action_type") != "data.purge":
         raise ValueError("request is not data.purge")
@@ -177,11 +188,7 @@ def main():
     if missing_protected:
         raise RuntimeError("protected paths missing before purge: %s" % missing_protected)
 
-    usage_path = os.path.commonpath(targets)
-    if not os.path.isdir(usage_path):
-        usage_path = os.path.dirname(usage_path)
-    while not os.path.isdir(usage_path):
-        usage_path = os.path.dirname(usage_path)
+    usage_path = existing_directory(os.path.commonpath(targets))
     before_usage = shutil.disk_usage(usage_path)
     request_sha256 = hashlib.sha256(Path(request_path).read_bytes()).hexdigest()
 
@@ -191,7 +198,8 @@ def main():
     if hasattr(os, "sync"):
         os.sync()
 
-    after_usage = shutil.disk_usage(usage_path)
+    probe_path = existing_directory(usage_path)
+    after_usage = shutil.disk_usage(probe_path)
     remaining = [target for target in targets if os.path.lexists(target)]
     protected_after = {path: os.path.lexists(path) for path in protected}
     running_after = entity_processes()
@@ -211,7 +219,7 @@ def main():
         "manifest": manifest,
         "manifest_bytes": sum(item["bytes"] for item in manifest),
         "filesystem": {
-            "probe_path": usage_path,
+            "probe_path": probe_path,
             "free_bytes_before": before_usage.free,
             "free_bytes_after": after_usage.free,
             "free_bytes_delta": after_usage.free - before_usage.free,

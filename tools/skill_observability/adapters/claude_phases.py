@@ -31,7 +31,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
-from ..core import TraceError, sha256_bytes
+from ..core import TraceError, _assert_write_root_safe, load_manifest, run_paths, sha256_bytes
 
 # Lifecycle order. Index in this list is the phase priority: a rule match may
 # only advance the current phase, never regress it.
@@ -340,8 +340,10 @@ def write_phases_report(
     output_path: Optional[Path] = None,
 ) -> Dict[str, Any]:
     """Build the phases report and write it into the run directory."""
+    manifest = load_manifest(run_dir)
     report = segment_transcript(transcript_path, rules=rules)
-    target = output_path or (Path(run_dir) / "phases.json")
+    target = (output_path or run_paths(run_dir)["root"] / "phases.json").expanduser().resolve()
+    _assert_write_root_safe(target, manifest["capture"]["protected_roots"])
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(
         json.dumps(report, indent=2, sort_keys=True, ensure_ascii=False) + "\n",

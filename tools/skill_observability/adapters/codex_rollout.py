@@ -15,19 +15,14 @@ from typing import Any, Dict, List, Mapping, Optional, Sequence
 from ..core import (
     TraceError,
     append_event,
-    canonical_json_bytes,
     load_manifest,
     read_jsonl,
     run_paths,
     sha256_bytes,
     sha256_text,
 )
-
-
-def _serialized(value: Any) -> bytes:
-    if isinstance(value, str):
-        return value.encode("utf-8", errors="replace")
-    return canonical_json_bytes(value)
+from .tool_trace import resource_matches as _shared_resource_matches
+from .tool_trace import serialized as _serialized
 
 
 def _is_observer_call(call_input: Any) -> bool:
@@ -40,29 +35,11 @@ def _is_observer_call(call_input: Any) -> bool:
 def _resource_matches(
     manifest: Mapping[str, Any], call_input: Any, session_cwd: Optional[str]
 ) -> List[Dict[str, str]]:
+    # Codex custom tool call input is a raw command string; non-string inputs
+    # are skipped here instead of being canonicalized like in the shared path.
     if not isinstance(call_input, str):
         return []
-    matches = []
-    seen = set()
-    for skill in manifest.get("skills", []):
-        source = Path(str(skill.get("source") or "")).resolve()
-        candidates = [str(source)]
-        for base in [Path(session_cwd).resolve() if session_cwd else None, Path.cwd().resolve()]:
-            if base is None:
-                continue
-            try:
-                candidates.append(str(source.relative_to(base)))
-            except ValueError:
-                pass
-        matched = next((candidate for candidate in candidates if candidate and candidate in call_input), None)
-        if matched and skill.get("name") not in seen:
-            matches.append({
-                "name": str(skill.get("name") or ""),
-                "resource_ref": matched,
-                "content_sha256": str(skill.get("content_sha256") or ""),
-            })
-            seen.add(skill.get("name"))
-    return matches
+    return _shared_resource_matches(manifest, call_input, session_cwd)
 
 
 def _load_rollout(path: Path) -> Dict[str, Any]:

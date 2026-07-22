@@ -20,6 +20,7 @@ from entity_router_common import (
     sha256_file,
 )
 from entity_router_planner import (
+    _content_sha256,
     _source_identity,
     require_verified_checkpoint,
     validate_goal,
@@ -93,7 +94,7 @@ class ExecutorClient(object):
 
     def _scp(self, source, target):
         code, unused, stderr = run_command([
-            "scp", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10",
+            "scp", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", "--",
             source, "%s:%s" % (self.alias, shlex.quote(target)),
         ])
         if code != 0:
@@ -366,9 +367,14 @@ def _validate_asset_derivations(goal, plan, profile):
     step = plan["steps"][0]
     kind = plan["goal_kind"]
     if kind == "build":
+        if _content_sha256(profile, plan["executable"]) != plan.get("executable_sha256"):
+            raise OperationError(
+                "build executable changed after planning; create a new plan")
         seed = {"case_uid": plan["case_uid"],
                 "checkpoint_sha256": plan["checkpoint_sha256"],
-                "executable": plan["executable"], "site_id": plan["site_id"]}
+                "executable": plan["executable"],
+                "executable_sha256": plan["executable_sha256"],
+                "site_id": plan["site_id"]}
         digest = canonical_hash(seed).split(":", 1)[1][:16]
         if (plan["build_id"] != "build-" + digest
                 or plan["operation_id"] != "op-" + digest):
@@ -560,6 +566,7 @@ def apply_plan(store, goal, plan, actor, claim_ttl=90, plan_path=None, refresh=F
             store.commit_step(
                 operation["operation_id"], index, verified.get("effect", {}),
                 verified.get("outputs", []), identities, current, actor,
+                claim_token=token,
             )
         result = {
             "site_id": plan["site_id"],
@@ -568,7 +575,8 @@ def apply_plan(store, goal, plan, actor, claim_ttl=90, plan_path=None, refresh=F
         for key in ["run_id", "build_id", "data_id"]:
             if plan.get(key):
                 result[key] = plan[key]
-        store.finish_operation(operation["operation_id"], "completed", result, actor)
+        store.finish_operation(operation["operation_id"], "completed", result, actor,
+                               claim_token=token)
         return store.get_operation(operation["operation_id"])
     except Exception as exc:
         error = {"message": str(exc), "observed_at": now_utc()}
@@ -581,9 +589,13 @@ def apply_plan(store, goal, plan, actor, claim_ttl=90, plan_path=None, refresh=F
             except Exception:
                 pass
         # Never leak an active Operation: finish it so the Case is released
-        # and a new Plan can proceed; re-applying this Plan resumes it.
+        # and a new Plan can proceed; re-applying this Plan resumes it.  If
+        # the failure was the claim itself being lost, the finish correctly
+        # refuses to write and the Operation stays recoverable via lease
+        # expiry.
         try:
-            store.finish_operation(operation["operation_id"], "anomaly", error, actor)
+            store.finish_operation(operation["operation_id"], "anomaly", error, actor,
+                                   claim_token=token)
         except Exception:
             pass
         raise

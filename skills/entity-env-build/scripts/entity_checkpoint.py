@@ -117,7 +117,7 @@ def check_consistency(req: Dict[str, Any]) -> List[Dict[str, str]]:
         val_a = get_dotted(req, field_a)
         if field_b:
             val_b = get_dotted(req, field_b)
-            if rule_id == "pgen.mutex" and val_a is not None and val_b is not None:
+            if rule_id == "pgen.mutex" and _has(req, field_a) and _has(req, field_b):
                 issues.append({"rule": rule_id, "message": msg, "fields": [field_a, field_b]})
         else:
             if val_a is None or (isinstance(val_a, str) and val_a == ""):

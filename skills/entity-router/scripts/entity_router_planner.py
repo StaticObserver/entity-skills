@@ -309,6 +309,24 @@ def _site_policy(profile, compute):
     return normalized
 
 
+def _content_sha256(profile, path):
+    """Fingerprint an executable on its execution Site, locally or over SSH."""
+    if profile.get("transport", {}).get("kind") == "local":
+        return sha256_file(path)
+    script = (
+        "import hashlib,os,sys; p=sys.argv[1]; "
+        "print(hashlib.sha256(open(p,'rb').read()).hexdigest() if os.path.isfile(p) else '')"
+    )
+    code, stdout, stderr = run_on_site(profile, ["python3", "-c", script, path])
+    digest = stdout.strip()
+    if code != 0 or not digest:
+        raise PlanError(
+            "cannot fingerprint executable on execution Site: %s"
+            % (stderr.strip() or stdout.strip() or path)
+        )
+    return digest
+
+
 def _operation_id(seed):
     return "op-" + canonical_hash(seed).split(":", 1)[1][:16]
 
@@ -383,6 +401,22 @@ def _resolve_case(store, project_root, goal):
             "identities": {}, "legacy": {},
         }
         return case, True
+
+
+def _stable_plan(plan_without_hash):
+    """Hash input for plan_hash: drops the volatile generated_at timestamp,
+    the store-derived create_case flag, and the mutable Case current
+    projection.  ``create_case`` flips once the Case exists and ``current``
+    changes on every successful Step commit, so including them would give the
+    same Goal a new plan_hash after each apply and break (case_uid, plan_hash)
+    dedup."""
+    stable = dict(plan_without_hash)
+    stable.pop("generated_at", None)
+    stable.pop("create_case", None)
+    case = dict(stable.get("case") or {})
+    case.pop("current", None)
+    stable["case"] = case
+    return stable
 
 
 def plan_goal(store, project_root, goal, controller_artifacts=None):
@@ -499,9 +533,7 @@ def plan_goal(store, project_root, goal, controller_artifacts=None):
         "run_id": run_id, "generated_at": now_utc(), "steps": steps,
     }
     plan = dict(plan_without_hash)
-    stable = dict(plan_without_hash)
-    stable.pop("generated_at", None)
-    plan["plan_hash"] = canonical_hash(stable)
+    plan["plan_hash"] = canonical_hash(_stable_plan(plan_without_hash))
     return {
         "schema_version": 1, "kind": "entity-router.plan", "status": "ready",
         "state_mutated": False, "goal": goal, "plan": plan,
@@ -555,9 +587,7 @@ def _finish_plan(case, create_case, goal, profile, steps, kind_keys, summary):
         "generated_at": now_utc(), "steps": steps,
     })
     plan = dict(plan_without_hash)
-    stable = dict(plan_without_hash)
-    stable.pop("generated_at", None)
-    plan["plan_hash"] = canonical_hash(stable)
+    plan["plan_hash"] = canonical_hash(_stable_plan(plan_without_hash))
     return {
         "schema_version": 1, "kind": "entity-router.plan", "status": "ready",
         "state_mutated": False, "goal": goal, "plan": plan, "summary": summary,
@@ -585,8 +615,10 @@ def _plan_build(store, project_root, goal):
         raise PlanError("build checkpoint must contain a JSON object")
     require_verified_checkpoint(checkpoint)
     checkpoint_sha256 = sha256_file(checkpoint_path)
+    executable_sha256 = _content_sha256(profile, executable)
     seed = {"case_uid": case["case_uid"], "checkpoint_sha256": checkpoint_sha256,
-            "executable": executable, "site_id": site_id}
+            "executable": executable, "executable_sha256": executable_sha256,
+            "site_id": site_id}
     digest = canonical_hash(seed).split(":", 1)[1][:16]
     build_id = "build-" + digest
     operation_id = "op-" + digest
@@ -606,7 +638,8 @@ def _plan_build(store, project_root, goal):
     }]
     kind_keys = {"operation_id": operation_id, "build_id": build_id,
                  "checkpoint": checkpoint_path,
-                 "checkpoint_sha256": checkpoint_sha256, "executable": executable}
+                 "checkpoint_sha256": checkpoint_sha256, "executable": executable,
+                 "executable_sha256": executable_sha256}
     summary = {
         "project_root": project_root, "case_uid": case["case_uid"],
         "site_id": site_id, "build_id": build_id,
@@ -690,7 +723,7 @@ PLAN_KIND_KEYS = {
     "run": {"goal_kind", "source_id", "controller_artifacts",
             "source_site_profile_hash", "source_identity", "run_id"},
     "build": {"goal_kind", "build_id", "checkpoint", "checkpoint_sha256",
-              "executable"},
+              "executable", "executable_sha256"},
     "data": {"goal_kind", "data_id", "run_id"},
 }
 PLAN_STEP_SCHEMAS = {
@@ -736,8 +769,7 @@ def validate_plan(plan):
         raise PlanError("Operation Plan keys differ from schema")
     unsigned = dict(plan)
     expected = unsigned.pop("plan_hash")
-    unsigned.pop("generated_at", None)
-    if canonical_hash(unsigned) != expected:
+    if canonical_hash(_stable_plan(unsigned)) != expected:
         raise PlanError("Operation Plan hash is invalid")
     steps = PLAN_STEP_SCHEMAS[kind]
     if not isinstance(plan["steps"], list) or len(plan["steps"]) != len(steps):

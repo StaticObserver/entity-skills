@@ -29,6 +29,7 @@ refactor(nt2py): simplify data inventory
 
 ```bash
 python3 -m unittest discover -s tests -v
+python3 -m unittest discover -s skills/entity-pgen/tests -v
 python3 -m unittest discover -s skills/entity-env-build/tests -v
 python3 -m py_compile \
   tools/skill_observability/*.py \
