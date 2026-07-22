@@ -608,6 +608,37 @@ class OperationStore(object):
             self._event(connection, row["case_uid"], operation_id,
                         "operation.reopened", {"previous_status": row["status"]}, actor)
 
+    def refresh_operation(self, operation_id, actor):
+        """Re-activate a completed Operation so every Step re-executes on the
+        next apply. Used to refresh derived artifacts (data inventory) after
+        the underlying run products changed without a Plan change."""
+        with self.transaction() as connection:
+            row = connection.execute(
+                "SELECT case_uid,status FROM operations WHERE operation_id=?",
+                (operation_id,),
+            ).fetchone()
+            if row is None:
+                raise StoreError("unknown Operation: %s" % operation_id)
+            if row["status"] != "completed":
+                raise StoreError("only a completed Operation can be refreshed")
+            timestamp = now_utc()
+            connection.execute(
+                "UPDATE operations SET status='pending',result_json='{}',"
+                "claim_token=NULL,claim_expires_at=NULL,updated_at=? "
+                "WHERE operation_id=?",
+                (timestamp, operation_id),
+            )
+            connection.execute(
+                "UPDATE steps SET status='pending',updated_at=? WHERE operation_id=?",
+                (timestamp, operation_id),
+            )
+            connection.execute(
+                "UPDATE cases SET active_operation_id=?,updated_at=? WHERE case_uid=?",
+                (operation_id, timestamp, row["case_uid"]),
+            )
+            self._event(connection, row["case_uid"], operation_id,
+                        "operation.refreshed", {}, actor)
+
     def cancel_operation(self, operation_id, actor, reason=""):
         """Terminal escape hatch: cancel a pending/running Operation and release
         the Case so a different Plan can proceed."""

@@ -373,7 +373,7 @@ else:
         self.assertEqual(self.store.get_operation(operation["operation_id"])["steps"][0]["status"],
                          "pending")
 
-    def test_ssh_uses_the_same_steps_and_live_status_has_one_remote_call(self):
+    def test_ssh_uses_the_same_steps_and_live_status_reconciles_remotely(self):
         local_plan = self.make_plan()["plan"]
         remote_profile = dict(self.profile)
         remote_profile["site_id"] = "fake-ssh"
@@ -416,8 +416,11 @@ else:
                 calls_before_status = remote_calls.call_count
                 status = status_for_project(self.store, self.project, live=True)
         self.assertEqual(applied["status"], "completed")
-        self.assertEqual(status["remote_calls"], 1)
-        self.assertEqual(remote_calls.call_count - calls_before_status, 1)
+        # live status = squeue job query + untracked-job scan (job is active,
+        # so no sacct fallback); reconciliation stays read-only and bounded
+        self.assertEqual(status["remote_calls"], 2)
+        self.assertEqual(remote_calls.call_count - calls_before_status, 2)
+        self.assertEqual(status["divergences"], [])
 
     def test_sbatch_invokes_entity_with_dash_input(self):
         from entity_router_executor import render_sbatch
@@ -502,10 +505,43 @@ else:
         self.assertNotIn("migrate", str(caught.exception))
 
     def test_doctor_reports_bundle_version_and_store_schema(self):
-        code, payload = self.cli("doctor")
+        fake_home = os.path.join(self.temp, "no-clients")
+        os.makedirs(fake_home)
+        with mock.patch.dict(os.environ, {"HOME": fake_home}):
+            code, payload = self.cli("doctor")
         self.assertEqual(code, 0, payload)
-        self.assertEqual(payload["runtime_bundle"]["version"], "0.4.0")
+        self.assertEqual(payload["runtime_bundle"]["version"], "0.5.0")
         self.assertEqual(payload["controller"]["store_schema_version"], 1)
+        self.assertEqual(payload["failures"], [])
+
+    def test_doctor_fails_on_client_bundle_drift(self):
+        fake_home = os.path.join(self.temp, "drifted-clients")
+        drifted = os.path.join(fake_home, ".claude", "skills", "entity-router")
+        os.makedirs(drifted)
+        with open(os.path.join(drifted, "VERSION"), "w") as handle:
+            handle.write("0.0.0-drifted\n")
+        with mock.patch.dict(os.environ, {"HOME": fake_home}):
+            code, payload = self.cli("doctor")
+        self.assertEqual(code, 2, payload)
+        self.assertFalse(payload["ok"])
+        self.assertTrue(any("drifted" in failure for failure in payload["failures"]))
+
+    def test_doctor_warns_on_leaked_active_operation(self):
+        envelope = self.make_plan()
+        actor = {"run_id": "leak-test", "provider": "unittest"}
+        from entity_router_operation import _ensure_case
+        _ensure_case(self.store, envelope["plan"], actor)
+        operation = self.store.create_operation(
+            envelope["plan"]["case_uid"], envelope["goal"], envelope["plan"], actor)
+        fake_home = os.path.join(self.temp, "leak-clients")
+        os.makedirs(fake_home)
+        with mock.patch.dict(os.environ, {"HOME": fake_home}):
+            code, payload = self.cli("doctor")
+        self.assertEqual(code, 0, payload)
+        self.assertEqual(payload["failures"], [])
+        hint = "operation cancel %s" % operation["operation_id"]
+        self.assertTrue(any(hint in warning for warning in payload["warnings"]),
+                        payload["warnings"])
 
     def test_store_migrate_shell_reports_current_schema(self):
         code, payload = self.cli("store", "migrate")
@@ -680,6 +716,100 @@ print('42')
         with self.assertRaises(PlanError) as caught:
             plan_goal(self.store, self.project, data_goal)
         self.assertEqual(caught.exception.status, "needs_decision")
+
+    def _applied_run(self, run_id="divergence-test"):
+        envelope = self.make_plan()
+        applied = apply_plan(self.store, envelope["goal"], envelope["plan"],
+                             {"run_id": run_id}, plan_path=self.plan_file)
+        self.assertEqual(applied["status"], "completed")
+        return envelope
+
+    def test_live_status_flags_job_gone(self):
+        self._applied_run()
+        os.unlink(self.record)  # job vanished from the scheduler out-of-band
+        status = status_for_project(self.store, self.project, live=True)
+        self.assertEqual(status["live"]["state"], "NOT_FOUND")
+        self.assertEqual(len(status["divergences"]), 1)
+        divergence = status["divergences"][0]
+        self.assertEqual(divergence["kind"], "job_gone")
+        self.assertEqual(divergence["job_id"], "42")
+        self.assertFalse(divergence["confirmed"])  # sacct unavailable locally
+
+    def test_live_status_flags_terminal_state_mismatch(self):
+        self._applied_run()
+        os.unlink(self.record)
+        self._write_executable("sacct", """import sys
+print('FAILED')
+""")
+        status = status_for_project(self.store, self.project, live=True)
+        self.assertEqual(status["live"]["state"], "NOT_FOUND")
+        kinds = [item["kind"] for item in status["divergences"]]
+        self.assertEqual(kinds, ["state_mismatch"])
+        self.assertEqual(status["divergences"][0]["observed"], "FAILED")
+        self.assertEqual(status["divergences"][0]["recorded"], "submitted")
+
+    def test_live_status_flags_untracked_job_in_run_root(self):
+        envelope = self._applied_run()
+        run_root = envelope["plan"]["steps"][1]["request"]["run_root"]
+        self._write_executable("squeue", """import json,os,sys
+r=json.load(open(os.environ['FAKE_SLURM_RECORD']))
+if '-j' in sys.argv:
+    print(r['state'])
+else:
+    print('%s|%s' % (r['job_id'], r['run_root']))
+    print('99|%s' % r['run_root'])
+""")
+        status = status_for_project(self.store, self.project, live=True)
+        self.assertEqual(status["live"]["state"], "RUNNING")
+        kinds = [item["kind"] for item in status["divergences"]]
+        self.assertEqual(kinds, ["untracked_job"])
+        divergence = status["divergences"][0]
+        self.assertEqual(divergence["job_id"], "99")
+        self.assertEqual(os.path.realpath(divergence["run_root"]),
+                         os.path.realpath(run_root))
+
+    def _applied_data_goal(self):
+        envelope = self.make_plan()
+        apply_plan(self.store, envelope["goal"], envelope["plan"],
+                   {"run_id": "refresh-test"}, plan_path=self.plan_file)
+        data_goal = {"schema_version": 1, "kind": "data", "run": "current"}
+        data_envelope = plan_goal(self.store, self.project, data_goal)
+        with open(self.plan_file, "w") as handle:
+            json.dump(data_envelope, handle)
+        inventoried = apply_plan(self.store, data_envelope["goal"],
+                                 data_envelope["plan"], {"run_id": "refresh-test"},
+                                 plan_path=self.plan_file)
+        self.assertEqual(inventoried["status"], "completed")
+        run_root = envelope["plan"]["steps"][1]["request"]["run_root"]
+        return data_envelope, os.path.join(run_root, "data-inventory.json"), run_root
+
+    def test_data_inventory_refresh_replaces_stale_manifest(self):
+        data_envelope, manifest, run_root = self._applied_data_goal()
+        with open(os.path.join(run_root, "extra.out"), "w") as handle:
+            handle.write("late artifact\n")
+        # without --refresh the completed operation is returned untouched
+        skipped = apply_plan(self.store, data_envelope["goal"],
+                             data_envelope["plan"], {"run_id": "refresh-test"},
+                             plan_path=self.plan_file)
+        self.assertEqual(skipped["status"], "completed")
+        with open(manifest, "r") as handle:
+            self.assertNotIn("extra.out",
+                             [item["path"] for item in json.load(handle)["files"]])
+        refreshed = apply_plan(self.store, data_envelope["goal"],
+                               data_envelope["plan"], {"run_id": "refresh-test"},
+                               plan_path=self.plan_file, refresh=True)
+        self.assertEqual(refreshed["status"], "completed")
+        with open(manifest, "r") as handle:
+            self.assertIn("extra.out",
+                          [item["path"] for item in json.load(handle)["files"]])
+
+    def test_refresh_rejects_non_data_goals(self):
+        envelope = self._applied_run()
+        with self.assertRaises(OperationError) as caught:
+            apply_plan(self.store, envelope["goal"], envelope["plan"],
+                       {"run_id": "refresh-test"}, plan_path=self.plan_file,
+                       refresh=True)
+        self.assertIn("data Goal", str(caught.exception))
 
 
 if __name__ == "__main__":

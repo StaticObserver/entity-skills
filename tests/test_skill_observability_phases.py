@@ -261,6 +261,100 @@ class PhaseSegmentationTest(unittest.TestCase):
             )
 
 
+class SkillAdoptionTest(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.root = Path(self.temp.name)
+        self.transcript = self.root / "session.jsonl"
+
+    def tearDown(self):
+        self.temp.cleanup()
+
+    def adoption(self, report):
+        return report["skill_adoption"]
+
+    def test_skill_and_raw_calls_counted(self):
+        records = [
+            assistant("2026-07-21T08:00:00Z",
+                      [("t1", "Bash", {"command": "python3 scripts/entityctl.py apply --plan plan.json"})]),
+            assistant("2026-07-21T08:01:00Z",
+                      [("t2", "Bash", {"command": "bash entity-build.sh --deps"})]),
+            assistant("2026-07-21T08:02:00Z",
+                      [("t3", "Bash", {"command": "python3 scripts/pgen_preflight.py pgens/x"})]),
+            assistant("2026-07-21T08:03:00Z",
+                      [("t4", "Bash", {"command": "python3 -c 'import nt2; print(nt2.Data)'"})]),
+            assistant("2026-07-21T08:04:00Z",
+                      [("t5", "Bash", {"command": "ssh siyuan 'sbatch run.sbatch'"})]),
+            assistant("2026-07-21T08:05:00Z",
+                      [("t6", "Bash", {"command": "ssh siyuan 'squeue -u $USER'"})]),
+            assistant("2026-07-21T08:06:00Z",
+                      [("t7", "Bash", {"command": "sqlite3 control.db 'select 1'"})]),
+        ]
+        write_transcript(self.transcript, records)
+        adoption = self.adoption(segment_transcript(self.transcript))
+
+        skill = adoption["skill_calls"]
+        self.assertEqual(skill["router"], 1)
+        self.assertEqual(skill["env_build"], 1)
+        self.assertEqual(skill["pgen"], 1)
+        self.assertEqual(skill["nt2py"], 1)
+        self.assertEqual(skill["total"], 4)
+
+        raw = adoption["raw_calls"]
+        self.assertEqual(raw["sbatch"], 1)
+        self.assertEqual(raw["scheduler_poll"], 1)
+        self.assertEqual(raw["srun"], 0)
+        self.assertEqual(raw["scancel"], 0)
+        self.assertEqual(raw["build"], 0)
+        self.assertEqual(raw["total"], 2)
+
+        self.assertEqual(adoption["control_plane_surgery_calls"], 1)
+        self.assertEqual(adoption["skill_call_share"], round(4 / 6, 6))
+
+    def test_first_match_wins_entity_build_not_raw_build(self):
+        # entity-build.sh matches skill.env_build before raw.build could see
+        # any of its tokens; a plain make still lands in raw.build.
+        records = [
+            assistant("2026-07-21T08:00:00Z",
+                      [("t1", "Bash", {"command": "./entity-build.sh"})]),
+            assistant("2026-07-21T08:01:00Z",
+                      [("t2", "Bash", {"command": "cmake --build build -j"})]),
+        ]
+        write_transcript(self.transcript, records)
+        adoption = self.adoption(segment_transcript(self.transcript))
+        self.assertEqual(adoption["skill_calls"]["env_build"], 1)
+        self.assertEqual(adoption["raw_calls"]["build"], 1)
+        self.assertEqual(adoption["skill_call_share"], 0.5)
+
+    def test_skill_doc_reads_are_not_counted(self):
+        # Reading an installed skill doc is orientation: the SKILL_DOC_RE
+        # skip applies to adoption matching too, even when the path contains
+        # a rule token such as inspect_nt2_data.
+        records = [
+            assistant("2026-07-21T08:00:00Z",
+                      [("t1", "Read", {
+                          "file_path": "/home/x/.claude/skills/entity-nt2py/scripts/inspect_nt2_data.py",
+                      })]),
+        ]
+        write_transcript(self.transcript, records)
+        adoption = self.adoption(segment_transcript(self.transcript))
+        self.assertEqual(adoption["skill_calls"]["nt2py"], 0)
+        self.assertEqual(adoption["skill_calls"]["total"], 0)
+        self.assertIsNone(adoption["skill_call_share"])
+
+    def test_no_matches_share_is_none(self):
+        records = [
+            assistant("2026-07-21T08:00:00Z",
+                      [("t1", "Bash", {"command": "ssh siyuan ls ~"})]),
+        ]
+        write_transcript(self.transcript, records)
+        adoption = self.adoption(segment_transcript(self.transcript))
+        self.assertEqual(adoption["skill_calls"]["total"], 0)
+        self.assertEqual(adoption["raw_calls"]["total"], 0)
+        self.assertEqual(adoption["control_plane_surgery_calls"], 0)
+        self.assertIsNone(adoption["skill_call_share"])
+
+
 class PhasesCommandTest(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()

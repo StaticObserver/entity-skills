@@ -254,6 +254,7 @@ def doctor(args):
     runtime_bundle = bundle_hash(DEFAULT_BUNDLE_ROOT)
     expected_bundle = actor_identity(args).get("bundle_hash", "")
     warnings = []
+    failures = []
     if expected_bundle and expected_bundle != runtime_bundle["hash"]:
         warnings.append("ENTITY_SKILLS_BUNDLE_HASH differs from the loaded runtime bundle")
     actor = actor_identity(args)
@@ -261,9 +262,14 @@ def doctor(args):
         warnings.append("mutations will be unattributed unless an Agent run ID is supplied")
     database = store_path(home)
     profiles = []
+    cases = []
+    operations = {}
     store_schema = None
     if os.path.isfile(database):
-        profiles = OperationStore(home, create=False).export()["sites"]
+        exported = OperationStore(home, create=False).export()
+        profiles = exported["sites"]
+        cases = exported["cases"]
+        operations = {op["operation_id"]: op for op in exported["operations"]}
         connection = sqlite3.connect(database)
         try:
             row = connection.execute(
@@ -282,6 +288,13 @@ def doctor(args):
     else:
         warnings.append("store is unavailable; register Sites with entityctl site add")
     for profile in profiles:
+        try:
+            validate_site_profile(profile)
+        except Exception as exc:
+            failures.append(
+                "Site %s profile fails validation: %s"
+                % (profile.get("site_id", "?"), exc)
+            )
         policy = profile.get("policy", {})
         if (profile.get("scheduler", {}).get("kind") == "slurm"
                 and not policy.get("default_partition")):
@@ -290,10 +303,25 @@ def doctor(args):
                 and profile.get("scheduler", {}).get("kind") == "slurm"
                 and not policy.get("default_submit_user")):
             warnings.append("Site %s has no policy.default_submit_user" % profile["site_id"])
+    for case in cases:
+        active = case.get("active_operation")
+        if not active:
+            continue
+        active_id = active.get("operation_id") if isinstance(active, dict) else active
+        operation = operations.get(active_id) or (
+            active if isinstance(active, dict) else {})
+        warnings.append(
+            "Case %s has an active Operation %s (status %s, updated %s); if no "
+            "apply is currently running this is a leaked Operation — clear it "
+            "with entityctl operation cancel %s"
+            % (case.get("case_uid", "?"), active_id,
+               operation.get("status", "unknown"),
+               operation.get("updated_at", "unknown"), active_id)
+        )
     installs = []
     for provider, path in installed_bundle_roots():
         identity = bundle_hash(path) if os.path.isdir(path) else {"hash": "", "files": 0}
-        installs.append({
+        entry = {
             "provider": provider,
             "path": path,
             "exists": os.path.isdir(path),
@@ -301,10 +329,16 @@ def doctor(args):
             "bundle_hash": identity["hash"],
             "files": identity["files"],
             "matches_runtime": bool(identity["hash"] and identity["hash"] == runtime_bundle["hash"]),
-        })
+        }
+        installs.append(entry)
+        if entry["exists"] and entry["bundle_hash"] and not entry["matches_runtime"]:
+            failures.append(
+                "client install %s (%s) has drifted from the runtime bundle; "
+                "reinstall with entityctl bundle install" % (provider, path)
+            )
     return {
         "schema_version": SCHEMA_VERSION,
-        "ok": True,
+        "ok": not failures,
         "kind": "entityctl.doctor",
         "state_mutated": False,
         "controller": {
@@ -323,6 +357,7 @@ def doctor(args):
         },
         "actor": actor,
         "client_installs": installs,
+        "failures": failures,
         "warnings": warnings,
     }
 
@@ -440,7 +475,8 @@ def apply_operation(args):
     actor = require_attributed_actor(actor_identity(args))
     store = OperationStore(args.router_home, create=False)
     operation = apply_plan(
-        store, envelope["goal"], envelope["plan"], actor, plan_path=args.plan
+        store, envelope["goal"], envelope["plan"], actor, plan_path=args.plan,
+        refresh=args.refresh,
     )
     return {
         "schema_version": 1, "kind": "entity-router.apply", "ok": True,
@@ -612,6 +648,8 @@ def build_parser():
 
     apply = sub.add_parser("apply")
     apply.add_argument("--plan", required=True)
+    apply.add_argument("--refresh", action="store_true",
+                       help="re-execute a completed data Goal plan (inventory refresh)")
     apply.set_defaults(func=apply_operation)
 
     current_status = sub.add_parser("status")

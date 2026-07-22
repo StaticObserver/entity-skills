@@ -16,6 +16,9 @@ Attribution model (deterministic):
   pgen phase begins, and as part of whatever phase is active afterwards.
 - Each record's token usage and tool calls are attributed to the phase
   active for that record.
+- Independently of phase attribution, tool calls are counted against the
+  ADOPTION_RULES table (skill scripts vs raw equivalents) into the
+  ``skill_adoption`` report section.
 
 Stdlib only, consistent with the rest of this package.
 """
@@ -48,8 +51,30 @@ DEFAULT_RULES: Sequence[Tuple[str, str]] = (
     ("discover", r"\bssh\b|\bsinfo\b|\bsqueue\b|\bscontrol\b|\bls\b|\bfind\b|module (list|avail|load)|\bwhich\b|\benv\b"),
 )
 
+# Skill adoption rule table. Ordered (category, regex) pairs matched against
+# the same "<tool name> <tool targets>" text as the phase rules, subject to
+# the same SKILL_DOC_RE skip. Each tool_use item counts in at most ONE
+# category: the first rule that matches wins, so `entityctl apply` is
+# skill.router only and `entity-build.sh` is skill.env_build only.
+ADOPTION_RULES: Sequence[Tuple[str, str]] = (
+    ("control_plane_surgery", r"\bsqlite3?\b"),
+    ("skill.router", r"\bentityctl\b"),
+    ("skill.env_build", r"entity[-_]checkpoint|entity[-_]compat|entity-build\.sh"),
+    ("skill.pgen", r"pgen_preflight"),
+    ("skill.nt2py", r"\bnt2\b|nt2\.Data|inspect_nt2_data"),
+    ("raw.sbatch", r"\bsbatch\b"),
+    ("raw.srun", r"\bsrun\b"),
+    ("raw.scancel", r"\bscancel\b"),
+    ("raw.scheduler_poll", r"\b(squeue|sacct|scontrol)\b"),
+    ("raw.build", r"\b(cmake|make|nvcc|spack)\b"),
+)
+
+COMPILED_ADOPTION_RULES: List[Tuple[str, "re.Pattern[str]"]] = [
+    (category, re.compile(pattern)) for category, pattern in ADOPTION_RULES
+]
+
 # Tool targets under an installed skill directory are orientation (reading
-# SKILL.md/references), never phase work.
+# SKILL.md/references), never phase work or skill adoption.
 SKILL_DOC_RE = re.compile(r"/\.claude/skills/")
 
 SSH_RE = re.compile(r"\bssh\b|\bscp\b|\brsync\b")
@@ -177,6 +202,7 @@ def segment_transcript(
     buckets[_UNCLASSIFIED] = _empty_bucket()
     current = -1  # index into PHASE_ORDER; -1 = unclassified
     session_id = ""
+    adoption_counts: Dict[str, int] = {category: 0 for category, _ in COMPILED_ADOPTION_RULES}
 
     for number, line in enumerate(raw.decode("utf-8").splitlines(), 1):
         if not line.strip():
@@ -212,6 +238,10 @@ def segment_transcript(
                         ssh += 1
                     if SKILL_DOC_RE.search(text):
                         continue  # reading installed skill docs is orientation
+                    for category, pattern in COMPILED_ADOPTION_RULES:
+                        if pattern.search(text):
+                            adoption_counts[category] += 1
+                            break
                     for phase_index, pattern in compiled:
                         if phase_index > best and pattern.search(text):
                             best = phase_index
@@ -234,6 +264,29 @@ def segment_transcript(
 
     phases = [_finalize_bucket(name, buckets[name]) for name in PHASE_ORDER]
     unclassified = _finalize_bucket(_UNCLASSIFIED, buckets[_UNCLASSIFIED])
+
+    skill_calls = {
+        name: adoption_counts["skill." + name]
+        for name in ("router", "env_build", "pgen", "nt2py")
+    }
+    skill_calls["total"] = sum(skill_calls.values())
+    raw_calls = {
+        name: adoption_counts["raw." + name]
+        for name in ("sbatch", "srun", "scancel", "scheduler_poll", "build")
+    }
+    raw_calls["total"] = sum(raw_calls.values())
+    skill_total = skill_calls["total"]
+    raw_total = raw_calls["total"]
+    skill_adoption = {
+        "skill_calls": skill_calls,
+        "raw_calls": raw_calls,
+        "control_plane_surgery_calls": adoption_counts["control_plane_surgery"],
+        "skill_call_share": (
+            round(skill_total / (skill_total + raw_total), 6)
+            if skill_total + raw_total > 0
+            else None
+        ),
+    }
 
     totals = _empty_bucket()
     for bucket in [*phases, unclassified]:
@@ -274,6 +327,7 @@ def segment_transcript(
         "totals": totals,
         "unclassified_token_share": round(unclassified_share, 6),
         "comparable": comparable,
+        "skill_adoption": skill_adoption,
         "notes": notes,
     }
 

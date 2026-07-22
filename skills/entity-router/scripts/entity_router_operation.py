@@ -467,7 +467,7 @@ def _identity_projection(step, effect):
              "payload": identity, "current": True}]
 
 
-def apply_plan(store, goal, plan, actor, claim_ttl=90, plan_path=None):
+def apply_plan(store, goal, plan, actor, claim_ttl=90, plan_path=None, refresh=False):
     goal = validate_goal(goal)
     plan = validate_plan(plan)
     if canonical_hash(goal) != plan["goal_hash"]:
@@ -492,7 +492,15 @@ def apply_plan(store, goal, plan, actor, claim_ttl=90, plan_path=None):
         )
     operation = store.create_operation(plan["case_uid"], goal, plan, actor)
     if operation["status"] == "completed":
-        return operation
+        if not refresh:
+            return operation
+        if kind != "data":
+            raise OperationError(
+                "--refresh only re-executes data Goal plans (inventory refresh "
+                "after run artifacts changed); create a new plan for other Goals"
+            )
+        store.refresh_operation(operation["operation_id"], actor)
+        operation = store.get_operation(operation["operation_id"])
     if operation["status"] not in {"pending", "running"}:
         store.reopen_operation(operation["operation_id"], actor)
     token = store.claim_operation(operation["operation_id"], actor, claim_ttl)
@@ -584,6 +592,82 @@ def apply_plan(store, goal, plan, actor, claim_ttl=90, plan_path=None):
         store.release_claim(operation["operation_id"], token, actor)
 
 
+def _same_path(left, right):
+    """Path comparison that also works for remote paths on ssh Sites."""
+    try:
+        return os.path.realpath(left) == os.path.realpath(right)
+    except OSError:
+        return left == right
+
+
+def _reconcile_job(profile, scheduler, job_id, live_state, observed_at):
+    """Classify divergence between the recorded job and scheduler reality.
+
+    Returns (divergences, extra_remote_calls). Only Slurm facts are used;
+    every classification is reproducible from the same scheduler answers.
+    """
+    divergences = []
+    remote_calls = 0
+    ssh = profile.get("transport", {}).get("kind") == "ssh"
+    if live_state == "NOT_FOUND":
+        try:
+            code, stdout, stderr = run_on_site(
+                profile, ["sacct", "-n", "-X", "-j", job_id, "--format=State"]
+            )
+        except OSError as exc:
+            code, stdout, stderr = 127, "", str(exc)
+        if ssh:
+            remote_calls += 1
+        terminal = ""
+        if code == 0 and stdout.strip():
+            terminal = stdout.strip().splitlines()[0].split()[0].upper()
+        if terminal:
+            divergences.append({
+                "kind": "state_mismatch", "job_id": job_id,
+                "recorded": "submitted", "observed": terminal,
+                "detail": "recorded job reached terminal scheduler state %s "
+                          "without the router observing it" % terminal,
+                "observed_at": observed_at,
+            })
+        else:
+            detail = "recorded job is absent from squeue"
+            if code == 0:
+                detail += " and sacct has no record of it"
+            else:
+                detail += "; sacct unavailable (%s)" % (
+                    stderr.strip() or stdout.strip() or "exit %d" % code)
+            divergences.append({
+                "kind": "job_gone", "job_id": job_id, "confirmed": code == 0,
+                "detail": detail, "observed_at": observed_at,
+            })
+    run_root = scheduler.get("run_root", "")
+    submit_user = scheduler.get("submit_user", "")
+    if run_root and submit_user:
+        try:
+            code, stdout, stderr = run_on_site(
+                profile, ["squeue", "-h", "--user", submit_user, "--format", "%i|%Z"]
+            )
+        except OSError:
+            code, stdout = 127, ""
+        if ssh:
+            remote_calls += 1
+        if code == 0:
+            for line in stdout.splitlines():
+                fields = line.strip().split("|", 1)
+                if len(fields) != 2 or not fields[0] or fields[0] == job_id:
+                    continue
+                if _same_path(fields[1], run_root):
+                    divergences.append({
+                        "kind": "untracked_job", "job_id": fields[0],
+                        "run_root": fields[1],
+                        "detail": "scheduler job %s runs in the Case run root "
+                                  "but is not the recorded job %s"
+                                  % (fields[0], job_id),
+                        "observed_at": observed_at,
+                    })
+    return divergences, remote_calls
+
+
 def status_for_project(store, project_root, live=False):
     case = store.resolve_project(project_root)
     current = case["current"]
@@ -598,7 +682,7 @@ def status_for_project(store, project_root, live=False):
         "state_mutated": False, "remote_calls": 0,
         "project_root": case.get("project_root"), "case_uid": case["case_uid"],
         "active_operation": case.get("active_operation"), "current": current,
-        "run": run_identity, "live": None,
+        "run": run_identity, "live": None, "divergences": [],
     }
     if not live or not run_identity:
         return result
@@ -609,10 +693,11 @@ def status_for_project(store, project_root, live=False):
     profile = store.get_site(run_identity["site_id"])
     if profile.get("scheduler", {}).get("kind") != "slurm":
         raise OperationError("live status currently supports Slurm only")
+    ssh = profile.get("transport", {}).get("kind") == "ssh"
     code, stdout, stderr = run_on_site(
         profile, ["squeue", "-h", "-j", job_id, "-o", "%T"]
     )
-    if profile.get("transport", {}).get("kind") == "ssh":
+    if ssh:
         result["remote_calls"] = 1
     if code != 0:
         detail = (stderr.strip() or stdout.strip() or "exit %d" % code)
@@ -623,7 +708,13 @@ def status_for_project(store, project_root, live=False):
             "observed_at": now_utc(),
         }
         return result
+    state = stdout.strip().splitlines()[0] if stdout.strip() else "NOT_FOUND"
+    observed_at = now_utc()
     result["live"] = {"scheduler": "slurm", "job_id": job_id,
-                      "state": stdout.strip().splitlines()[0] if stdout.strip() else "NOT_FOUND",
-                      "observed_at": now_utc()}
+                      "state": state, "observed_at": observed_at}
+    divergences, extra_calls = _reconcile_job(
+        profile, scheduler, job_id, state, observed_at
+    )
+    result["divergences"] = divergences
+    result["remote_calls"] += extra_calls
     return result

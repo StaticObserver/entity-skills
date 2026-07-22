@@ -50,10 +50,12 @@ R1–R4 修复过程、以及三处生产反馈(确认缺失、版本命名)。�
 
 ## Release 路线
 
-> 进度(2026-07-22):0.1.0–0.4.0 已交付(121 项测试全绿)。与本文的偏差:
-> `analysis` Goal 暂缓(留在 entity-nt2py,router 只记录),data inventory 的
-> 刷新路径(运行产物变化后重新清点)依赖 0.5.0 的对账工作,已记入 CHANGELOG
-> Known limitations。
+> 进度(2026-07-22):0.1.0–0.5.0 已交付(132 项测试全绿)。0.5.0 落地了
+> status --live divergence 分类(job_gone/state_mismatch/untracked_job)、
+> doctor 硬失败(bundle 漂移、Site profile 失效)+ 泄漏 Operation 警告、
+> `apply --refresh` data inventory 刷新、以及 phases 报告的 skill_adoption
+> 采用率指标。与本文的偏差:`analysis` Goal 暂缓(留在 entity-nt2py,
+> router 只记录),已记入 CHANGELOG Known limitations。
 
 ### 0.1.0(基线 + Phase 0,版本基础设施)
 

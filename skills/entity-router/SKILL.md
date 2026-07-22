@@ -48,7 +48,10 @@ writing site policy. Use `operation cancel` only to abandon an active
 Operation and release the Case; a failed Apply already releases the Case, and
 re-applying the same Plan resumes it. `submission create` recomputes all
 fingerprints from the final artifacts; `submission verify` fails on any later
-drift.
+drift. `doctor` fails (exit 2) when a client install has drifted from the
+runtime bundle or a stored Site profile fails validation, and warns about
+leaked active Operations with the exact `operation cancel` remedy — run it
+after crashes and before trusting a workstation.
 
 ## GoalSpec
 
@@ -110,7 +113,17 @@ owner/domain, lease, shell, command, or generated script fields in GoalSpec.
 5. If Apply is interrupted or reports a retryable anomaly, run `apply` again on
    the same Plan. There is no separate recover command.
 6. Use `status` for cached controller facts. Add `--live` only when a current
-   scheduler observation is needed; it makes at most one remote call.
+   scheduler observation is needed.
+   Live status makes at most three bounded scheduler queries: job state, a
+   `sacct` fallback when the job left the queue, and an untracked-job scan of
+   the Case run root. `--live` also reports `divergences` classifying
+   out-of-band changes: `job_gone` (scheduler has no record of the recorded
+   job), `state_mismatch` (the job reached a terminal state the router never
+   observed), and `untracked_job` (a foreign scheduler job is running in the
+   Case run root — evidence of control-plane bypass).
+7. When a run's outputs changed after inventory, re-run `apply --refresh` on
+   the same `data` Goal plan; it re-executes the inventory and rewrites the
+   manifest. `--refresh` is rejected for other Goal kinds.
 
 Do not create a second Plan merely because Apply was interrupted. Create a new
 Plan only when the Goal, source content, Site profile, input, executable, or

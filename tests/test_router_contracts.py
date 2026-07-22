@@ -79,7 +79,7 @@ class RouterContractTest(unittest.TestCase):
             skill = handle.read()
         self.assertIn("status", skill)
         self.assertIn("controller-local", skill)
-        self.assertIn("at most one remote call", skill)
+        self.assertIn("at most three bounded scheduler queries", skill)
 
 
 if __name__ == "__main__":

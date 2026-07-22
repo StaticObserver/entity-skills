@@ -436,9 +436,10 @@ def _data_inventory(envelope):
     manifest = require_path(request["manifest"], envelope["allowed_roots"], "manifest")
     if not os.path.isdir(run_root):
         raise ExecutorError("run root is missing")
+    # Inventory is a pure function of the current run root, so it always
+    # re-walks: this is what makes `apply --refresh` able to pick up
+    # artifacts that appeared after the first inventory.
     previous = matching_receipt(envelope)
-    if previous and previous.get("state") == "outputs_verified":
-        return previous
     intent = receipt_base(envelope, "intent_written", previous=previous)
     entries = []
     for current, directories, names in os.walk(run_root):

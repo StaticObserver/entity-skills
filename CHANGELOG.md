@@ -8,6 +8,44 @@ version considered production-satisfactory will be released as 1.0.0. Schema
 versions (store, plan, GoalSpec, checkpoint, compat checker) are independent
 integer compatibility contracts and are not the product version.
 
+## [0.5.0] - 2026-07-22
+
+Observability and reconciliation (Phase 3): out-of-band changes now surface,
+drift fails, and skill adoption is measurable.
+
+### Added
+
+- `status --live` reconciliation: the report always carries a `divergences`
+  list classifying out-of-band changes between the store and the scheduler:
+  - `job_gone`: the recorded job is absent from `squeue`; `confirmed` is true
+    when `sacct` also has no record, false when `sacct` is unavailable.
+  - `state_mismatch`: the job reached a terminal scheduler state
+    (`recorded: submitted`, `observed: <STATE>`) the router never saw.
+  - `untracked_job`: a foreign scheduler job runs in the Case run root —
+    evidence of control-plane bypass.
+  Live status makes at most three bounded scheduler queries.
+- `entityctl apply --refresh`: re-executes a completed `data` Goal plan so a
+  stale `data-inventory.json` is rebuilt after run artifacts changed.
+  Rejected for other Goal kinds. This closes the 0.4.0 known limitation.
+- `doctor` hard failures (exit 2, `ok: false`, new `failures` list): client
+  bundle installs that drifted from the runtime bundle, and stored Site
+  profiles that fail validation.
+- `doctor` warnings for leaked active Operations (crash leftovers holding a
+  Case), each with the exact `entityctl operation cancel <id>` remedy.
+- Skill adoption metrics: the phase-segmentation report
+  (`tools/skill_observability/adapters/claude_phases.py`) now carries a
+  `skill_adoption` section counting skill-script invocations
+  (router/env_build/pgen/nt2py) versus raw equivalents (sbatch/srun/scancel/
+  scheduler polls/build tools), direct `sqlite` control-plane surgery, and a
+  `skill_call_share` ratio — the clean-comparison metric required by the
+  1.0.0 candidate criteria.
+
+### Changed
+
+- The `data.inventory.v1` executor Step always re-walks the run root instead
+  of short-circuiting on a previous verified receipt; inventory is a pure
+  function of the current run root, which is what makes `--refresh` work.
+
 ## [0.4.0] - 2026-07-22
 
 ### Added
