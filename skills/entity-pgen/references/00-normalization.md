@@ -1,20 +1,20 @@
-# 00 — Normalization Conventions (Fiducial Units)
+# 00 — 归一化约定（基准单位）
 
-> Based on Entity v1.4.4
+> 基于 Entity v1.4.4
 
-## When to Use
+## 何时使用
 
-**Required reading**. Entity uses a fiducial unit system, and all physical quantities are expressed in normalized form in the code. Not mastering the normalization conventions will lead to numerical order-of-magnitude errors in InitFields (field initialization) and ext_current (external current) -- the most common and most subtle bugs in PGen development.
+**必读内容**。Entity 使用一套基准单位制，代码中所有物理量都以归一化形式表示。不掌握归一化约定会在 InitFields（场初始化）和 ext_current（外部电流）中导致数值量级错误——这是 PGen 开发中最常见也最隐蔽的 bug。
 
-Trigger scenarios: any time you need to write InitFields, ext_current, or understand the engine's internal numerical behavior.
+触发场景：任何需要编写 InitFields、ext_current，或理解引擎内部数值行为的时候。
 
 ---
 
-## Fiducial Units Overview
+## 基准单位概述
 
-Entity's kernels (Ampere solver, pusher, deposition) use a fiducial unit system for normalization. In most cases, users only need to work with "physical units" -- parameters in the TOML such as `larmor0`, `extent`, etc. are specified in physical units.
+Entity 的内核（Ampere 求解器、pusher、沉积）使用一套基准单位制进行归一化。在大多数情况下，用户只需要使用"物理单位"——TOML 中的参数如 `larmor0`、`extent` 等都是以物理单位指定的。
 
-### PIC Equations (CGS units, orthonormal basis)
+### PIC 方程（CGS 单位，正交归一基）
 
 ```
 ∂B/(c∂t) = -∇×E
@@ -26,51 +26,51 @@ dxᵢ/(c dt) = βᵢ
 J = (1/V) Σ_{i∈V} qᵢ wᵢ βᵢ c
 ```
 
-### Fiducial Quantities Definition
+### 基准量定义
 
-Introduce a **fiducial particle**: charge q₀ > 0, mass m₀. In a uniform magnetic field B₀, the Larmor radius of this particle moving in the perpendicular plane with βγ = 1 is:
+引入一个**基准粒子**：电荷 q₀ > 0，质量 m₀。在均匀磁场 B₀ 中，该粒子以 βγ = 1 在垂直于磁场的平面内运动时的 Larmor 半径为：
 
 ```
 ρ₀ = m₀ c² / (q₀ B₀)
 ```
 
-In Gaussian units, we freely choose **q₀/m₀ ≡ 1** and **c ≡ 1**, hence **B₀ ≡ 1/ρ₀**.
+在高斯单位制中，我们自由选取 **q₀/m₀ ≡ 1** 和 **c ≡ 1**，因此 **B₀ ≡ 1/ρ₀**。
 
-For a plasma composed of static ions of charge -q₀ and fiducial particles of charge q₀, both with number density n₀, the oscillation frequency and skin depth are:
+对于一个由电荷为 -q₀ 的静止离子和电荷为 q₀ 的基准粒子组成、数密度均为 n₀ 的等离子体，其振荡频率和趋肤深度为：
 
 ```
 ω₀² = 4π n₀ q₀² / m₀
 d₀ ≡ 1/ω₀
 ```
 
-Fiducial current density and number density:
+基准电流密度和数密度：
 
 ```
 J₀ ≡ 4π q₀ n₀
 n₀ ≡ PPC₀ / V₀
 ```
 
-### Complete Fiducial Quantities Table
+### 完整基准量表
 
-| Symbol | Description | Definition | Code Implementation |
+| 符号 | 描述 | 定义 | 代码实现 |
 |------|------|------|---------|
-| c | Speed of light | ≡ 1 | — |
-| PPC₀ | Fiducial particles per cell | Base quantity | `Simulation::params().ppc0()` |
-| d₀ | Fiducial skin depth | Base quantity | `Simulation::params().skindepth0()` |
-| ρ₀ | Fiducial Larmor radius | Base quantity | `Simulation::params().larmor0()` |
-| V₀ | Fiducial cell volume | See V₀ definition below | `Simulation::params().V0()` |
-| n₀ | Fiducial number density | ≡ PPC₀ / V₀ | `Simulation::params().n0()` |
-| 4πq₀ | Fiducial particle charge | ≡ (n₀ d₀²)⁻¹ | `Simulation::params().q0()` |
-| m₀ | Fiducial particle mass | ≡ q₀ | — (no independent variable) |
-| σ₀ | Fiducial magnetization parameter | ≡ (d₀/ρ₀)² | `Simulation::params().sigma0()` |
-| B₀ | Fiducial magnetic field strength | ≡ ρ₀⁻¹ | `Simulation::params().B0()` |
-| J₀ | Fiducial current density | ≡ 4πq₀ n₀ | — |
+| c | 光速 | ≡ 1 | — |
+| PPC₀ | 每格基准粒子数 | 基础量 | `Simulation::params().ppc0()` |
+| d₀ | 基准趋肤深度 | 基础量 | `Simulation::params().skindepth0()` |
+| ρ₀ | 基准 Larmor 半径 | 基础量 | `Simulation::params().larmor0()` |
+| V₀ | 基准网格体积 | 见下文 V₀ 定义 | `Simulation::params().V0()` |
+| n₀ | 基准数密度 | ≡ PPC₀ / V₀ | `Simulation::params().n0()` |
+| 4πq₀ | 基准粒子电荷 | ≡ (n₀ d₀²)⁻¹ | `Simulation::params().q0()` |
+| m₀ | 基准粒子质量 | ≡ q₀ | —（无独立变量） |
+| σ₀ | 基准磁化参数 | ≡ (d₀/ρ₀)² | `Simulation::params().sigma0()` |
+| B₀ | 基准磁场强度 | ≡ ρ₀⁻¹ | `Simulation::params().B0()` |
+| J₀ | 基准电流密度 | ≡ 4πq₀ n₀ | — |
 
-**Critical note**: `q0()` in the code returns **4πq₀**, not q₀ itself. m₀ has no independent variable in the code because we can choose m₀ ≡ q₀ in Gaussian units. In the TOML, a species' `charge` = qᵢ/q₀ and `mass` = mᵢ/m₀, both dimensionless.
+**关键提示**：代码中的 `q0()` 返回的是 **4πq₀**，而不是 q₀ 本身。m₀ 在代码中没有独立变量，因为在高斯单位制中我们可以选取 m₀ ≡ q₀。在 TOML 中，某个物种的 `charge` = qᵢ/q₀，`mass` = mᵢ/m₀，两者均为无量纲量。
 
-### Normalized Equations
+### 归一化方程
 
-Define q̃ᵢ ≡ qᵢ/q₀, m̃ᵢ ≡ mᵢ/m₀, **e** ≡ **E**/B₀, **b** ≡ **B**/B₀, **j** ≡ 4π**J**/J₀:
+定义 q̃ᵢ ≡ qᵢ/q₀，m̃ᵢ ≡ mᵢ/m₀，**e** ≡ **E**/B₀，**b** ≡ **B**/B₀，**j** ≡ 4π**J**/J₀：
 
 ```
 ∂b/∂t = -∇×e
@@ -82,29 +82,29 @@ dxᵢ/dt = βᵢ
 j = (V₀/V)·(1/PPC₀)·Σ_{i∈V} q̃ᵢ wᵢ βᵢ
 ```
 
-All field quantities in the output data are ratios relative to fiducial values, and these quantities are insensitive to resolution and particle sampling.
+输出数据中的所有场量都是相对于基准值的比值，这些量对分辨率和粒子采样不敏感。
 
-### Definition of Fiducial Volume V₀
+### 基准体积 V₀ 的定义
 
 ```
 V₀ ≡ (Δx)^D                            (Cartesian coordinates)
 V₀ ≡ √(det h)|_{r=Δr/2, θ=Δθ/2}       (spherical coordinates, first cell near the pole)
 ```
 
-where D is the simulation dimension. End users do not need to know the specific value of V₀ -- all factors like V₀ and n₀ cancel out after normalization.
+其中 D 是模拟维度。最终用户无需知道 V₀ 的具体数值——像 V₀ 和 n₀ 这样的因子在归一化之后都会相互抵消。
 
-### Physical Quantity Conversion
+### 物理量换算
 
-Physical quantities in any formula are converted to dimensionless quantities through the following substitutions:
+任何公式中的物理量都通过以下替换转换为无量纲量：
 
 ```
 n → ñ n₀,   m → m̃ m₀,   q → q̃ q₀
 B → b B₀,   E → e B₀,   4πJ → j J₀,   ct → t
 ```
 
-After substituting the equivalence relations, all fiducial unknowns ultimately reduce to ρ₀ and d₀, with no residual extra factors.
+代入等价关系后，所有基准未知量最终都归结为 ρ₀ 和 d₀，不会残留额外的因子。
 
-**Example**: ratio of plasma rest-mass energy density to magnetic field energy density
+**示例**：等离子体静止质量能量密度与磁场能量密度之比
 
 ```
 U_B / (ρ_p c²) ≡ (B²/8π) / (n_p m_p c²)
@@ -112,88 +112,88 @@ U_B / (ρ_p c²) ≡ (B²/8π) / (n_p m_p c²)
                 = (b / 2 ñ_p m̃_p) · σ₀
 ```
 
-where ñ_p = n_p/n₀, m̃_p = m_p/m₀, b = B/B₀.
+其中 ñ_p = n_p/n₀，m̃_p = m_p/m₀，b = B/B₀。
 
 ---
 
-## Ampere Kernel Normalization (Critical!)
+## Ampere 内核归一化（关键！）
 
-### Ampere Discretization Formula
+### Ampere 离散化公式
 
-The engine's Ampere solver uses the following discretization:
+引擎的 Ampere 求解器使用如下离散化：
 
 ```
 dE/dt = - (larmor0 / skindepth0²) × J_total
 ```
 
-where `J_total = J_deposited + J_external`.
+其中 `J_total = J_deposited + J_external`。
 
-### Constraints on External Current
+### 对外部电流的约束
 
-Because the Ampere kernel has a `-larmor0/skindepth0²` scaling factor in front, the current values you return in ext_current are **automatically multiplied** by this factor when they enter the engine.
+由于 Ampere 内核前面带有一个 `-larmor0/skindepth0²` 的缩放因子，你在 ext_current 中返回的电流值进入引擎时会被**自动乘上**该因子。
 
-**This means ext_current return values must be pre-compensated**:
+**这意味着 ext_current 的返回值必须预先补偿**：
 
 ```
 text_current_return_value = physical_current × (skindepth0² / larmor0)
 ```
 
-### Constraints on InitFields
+### 对 InitFields 的约束
 
-Field values defined by InitFields are written directly into EM arrays and **do NOT go through the Ampere kernel**. Therefore:
+InitFields 定义的场值直接写入 EM 数组，**不经过 Ampere 内核**。因此：
 
-- **Field values returned by InitFields are in code normalized units** -- just return them directly, no extra normalization coefficients needed
-- The engine internally handles all unit conversions through relations like B0 = 1/larmor0
+- **InitFields 返回的场值采用代码归一化单位**——直接返回即可，无需额外的归一化系数
+- 引擎内部通过 B0 = 1/larmor0 之类的关系处理所有单位换算
 
 ---
 
-## Unit Domain Boundaries
+## 单位域边界
 
-Different code regions in Entity use different unit conventions:
+Entity 中不同的代码区域使用不同的单位约定：
 
-| Code Region | Units Used | Meaning |
+| 代码区域 | 使用的单位 | 含义 |
 |----------|---------|------|
-| InitPrtls | **Physical units** | Position = global physical coordinates, velocity = local tetrad basis |
-| CustomPostStep | **Code units** | Values in fields.em are already normalized code units |
-| InitFields | **Code normalized units** | Returned ex/bx written directly to EM arrays, no extra coefficients |
-| ext_current | **Code units (pre-compensated)** | Returned jx must include skindepth0²/larmor0 compensation |
-| Ampere Kernel | **Code units** | Internally auto-applies larmor0/(ppc0·skindepth0²) factor |
-| CustomFieldOutput | **Code units** | Directly reads domain.fields.em |
+| InitPrtls | **物理单位** | 位置 = 全局物理坐标，速度 = 局部正交归一基 |
+| CustomPostStep | **代码单位** | fields.em 中的值已经是归一化的代码单位 |
+| InitFields | **代码归一化单位** | 返回的 ex/bx 直接写入 EM 数组，无需额外系数 |
+| ext_current | **代码单位（预补偿）** | 返回的 jx 必须包含 skindepth0²/larmor0 补偿 |
+| Ampere Kernel | **代码单位** | 内部自动应用 larmor0/(ppc0·skindepth0²) 因子 |
+| CustomFieldOutput | **代码单位** | 直接读取 domain.fields.em |
 
 ---
 
-## Full Derivation Chain
+## 完整推导链
 
-Using the axion-PIC project as an example, demonstrating why the `skindepth0²/larmor0` compensation is needed:
+以 axion-PIC 项目为例，演示为什么需要 `skindepth0²/larmor0` 补偿：
 
-### Physical Equation
+### 物理方程
 ```
 dE/dt = -J_a - J_plasma
 J_a = ε · ω · B · sin(kx - ωt)   (axion contribution to current)
 ```
 
-### Numerical Discretization
+### 数值离散化
 ```
 E_new = E_old - Δt · (larmor0/skindepth0²) · J_total
 ```
 
-### To make the E-field change match the traveling wave solution dE/dt = -ε·ω·B·sin(kx-ωt)
+### 为使电场变化与行波解 dE/dt = -ε·ω·B·sin(kx-ωt) 一致
 ```
 J_ext = ε · ω · B · sin(kx-ωt) · (skindepth0² / larmor0)
        ^^^^^^^^^^^^^^^^^^^^^^^^   ^^^^^^^^^^^^^^^^^^^^^^^^
        Physical current           Normalization compensation coefficient
 ```
 
-### Verification Formula
+### 验证公式
 ```
 coef = skindepth0² / larmor0
 ```
 
 ---
 
-## Code Examples
+## 代码示例
 
-### Correct Usage in InitFields
+### InitFields 中的正确用法
 
 ```cpp
 template <Dimension D>
@@ -214,7 +214,7 @@ struct InitFields {
 };
 ```
 
-### Correct Usage in ext_current
+### ext_current 中的正确用法
 
 ```cpp
 struct ExtCurrent {
@@ -233,13 +233,13 @@ struct ExtCurrent {
 
 ---
 
-## Common Pitfalls
+## 常见陷阱
 
-1. **Extra multiplication/division by normalization coefficients in InitFields** -- the most subtle bug. Field values returned by InitFields are in code normalized units; just write them directly. Extra operations will cause the field value magnitudes to be completely wrong. Symptom: B-field is N times weaker, all physical results are wrong
-2. **Forgetting to multiply ext_current by skindepth0²/larmor0** -- current strength is wrong, causing incorrect dE/dt magnitude
-3. **Confusing physical units with code units** -- using code unit values in InitPrtls, or directly comparing physical values in CustomPostStep
-4. **Unreasonable choices of larmor0 and skindepth0** -- e.g., larmor0 too large causing B0 too small, or skindepth0 too small causing n0 to blow up
+1. **在 InitFields 中多乘/多除了归一化系数**——最隐蔽的 bug。InitFields 返回的场值采用代码归一化单位，直接写出即可。多余的操作会导致场值量级完全错误。症状：磁场弱了 N 倍，所有物理结果都是错的
+2. **忘记给 ext_current 乘上 skindepth0²/larmor0**——电流强度错误，导致 dE/dt 的量级不正确
+3. **混淆物理单位和代码单位**——在 InitPrtls 中使用了代码单位的值，或在 CustomPostStep 中直接拿物理值做比较
+4. **larmor0 和 skindepth0 的选取不合理**——例如 larmor0 过大导致 B0 过小，或 skindepth0 过小导致 n0 爆炸
 
-### Real Lessons from axion-PIC
+### 来自 axion-PIC 的真实教训
 
-During axion-PIC development, InitFields initially had the incorrect `return -epsilon * B0 * cos(k*x) / larmor0`. This bug was discovered because DivE was non-zero in vacuum tests. After correcting to directly return code normalized values, DivE returned to zero. Meanwhile, ext_current correctly kept the `skindepth0²/larmor0` compensation.
+在 axion-PIC 开发过程中，InitFields 最初错误地写成了 `return -epsilon * B0 * cos(k*x) / larmor0`。这个 bug 是在真空测试中发现 DivE 非零时被发现的。改正为直接返回代码归一化值之后，DivE 恢复为零。与此同时，ext_current 正确地保留了 `skindepth0²/larmor0` 补偿。

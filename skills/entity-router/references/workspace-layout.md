@@ -1,26 +1,25 @@
-# Multi-site Workspace Contract
+# 多站点工作区契约
 
-A resource identity is always the pair `(site_id, absolute path)` plus its
-fingerprint. A Site may be a local machine or one SSH access boundary covering
-an HPC login node, scheduler, compute nodes, and shared filesystem.
+一个资源的 identity 始终是 `(site_id, 绝对路径)` 这一对组合加上它的
+fingerprint。一个 Site 可以是一台本地机器，也可以是一个 SSH 访问边界，
+覆盖一台 HPC 登录节点、scheduler、计算节点和共享文件系统。
 
-## Controller layout
+## 控制器布局
 
 ```text
 ~/.entity-router/
 └── router.db                         # controller authority
 ```
 
-`router.db` contains compact facts and evidence references only. It never lives
-inside a source checkout and is never copied into provider-private roots such
-as `.codex`, `.claude`, or `.kimi-code`. Controllers imported from v3 may still
-carry the preserved pre-migration files (`registry.json`, `sites/`, `cases/`);
-they are read-only historical evidence and are never read or written by the
-current runtime.
+`router.db` 只包含紧凑的事实和证据引用。它绝不放在
+源代码检出目录内，也绝不复制到 `.codex`、`.claude` 或
+`.kimi-code` 等 provider 私有根目录。从 v3 导入的控制器可能仍
+带有迁移前保留的文件（`registry.json`、`sites/`、`cases/`）；
+它们是只读的历史证据，当前运行时绝不读取或写入它们。
 
-## Owner-site layout
+## Owner-site 布局
 
-Roots are independent and need not share a parent:
+各根目录相互独立，不需要共享父目录：
 
 ```text
 <build_root>/<case_uid>/<build_id>
@@ -29,25 +28,25 @@ Roots are independent and need not share a parent:
 <analysis_root>/<case_uid>/<analysis_id>
 ```
 
-Builds and runs are immutable once their identities are committed. Raw data
-remains authoritative at the execution/data Site; fetch only inventory, logs,
-figures, reports, or an explicitly selected subset.
+构建和运行在其 identity 提交之后即不可变。原始数据
+在执行/数据 Site 保持权威；只取回盘点清单、日志、
+图件、报告或明确选定的子集。
 
-## Source authority
+## 源权威
 
-Each Case has one editable source authority. A clean Git tree or a
-content-addressed manifest identifies its exact content. Dirty and untracked
-files are included in the manifest; `dirty=true` alone is not an identity.
-Other checkouts are replicas until exact equality is proven. PGen, TOML, and
-design edits occur only at the source authority.
+每个 Case 只有一个可编辑的源权威。干净的 Git 工作树或
+内容寻址 manifest 标识其确切内容。脏文件和未跟踪
+文件也包含在 manifest 中；仅有 `dirty=true` 不构成一个 identity。
+其他检出目录在证明完全相等之前都只是副本。PGen、TOML 和
+design 的编辑只发生在源权威处。
 
-## Execution envelope
+## 执行边界
 
-The controller derives allowed roots and immutable Step requests. The Site
-executor may write only beneath those roots and never writes `router.db`.
-Receipts remain under the Operation staging root so Apply can recover after a
-lost controller process.
+控制器推导允许的根目录和不可变的 Step 请求。Site
+执行器只能在这些根目录之下写入，且绝不写 `router.db`。
+receipt 保留在 Operation 的暂存根目录下，以便 Apply 在
+控制器进程丢失后能够恢复。
 
-Site-local module setup or policy belongs in a trusted Site adapter, not in the
-GoalSpec or generic Router core. Passwords, tokens, private keys, mutable session
-memory, and full skill copies do not belong in project or controller state.
+Site 本地的 module 配置或策略应放在受信任的 Site 适配器中，
+而不是 GoalSpec 或通用 Router 核心中。密码、令牌、私钥、可变
+会话记忆以及完整的 skill 副本都不应进入项目或控制器状态。

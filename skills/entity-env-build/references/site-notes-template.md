@@ -1,35 +1,35 @@
-# Machine: <hostname>
+# 机器：<hostname>
 > last_updated: <YYYY-MM-DD>
 
 <!--
-  Template for ~/.entity-env-build/site-notes/<hostname>.md
-  Generated at runtime by the AI agent — NOT shipped in skill source.
+  ~/.entity-env-build/site-notes/<hostname>.md 的模板
+  由 AI agent 在运行时生成——不随技能源码发布。
 
-  The AI agent reads this file at the start of Phase 2 (environment probing) and
-  writes to it after discovering new issues or completing builds.
+  AI agent 在第 2 阶段（环境探测）开始时读取本文件，并在
+  发现新问题或完成构建后写入它。
 
-  SECTIONS:
-  - Machine Profile     → static: what hardware/software does this machine have?
-  - Known-good Combos   → what dependency sets have been proven to work?
-  - Known Issues        → what breaks, and how do you fix it?
-  - Build History       → what builds have been done on this machine?
+  各小节：
+  - 机器档案     → 静态信息：这台机器有什么硬件/软件？
+  - 已知可用组合 → 哪些依赖组合已被证明可用？
+  - 已知问题     → 什么会坏，怎么修？
+  - 构建历史     → 这台机器上做过哪些构建？
 
-  Keep entries concise. Prefer bullet lists over prose.
-  Update last_updated at the top whenever you edit.
+  条目保持简洁。优先使用要点列表而非散文。
+  每次编辑时更新顶部的 last_updated。
 -->
 
-## Machine Profile
-<!-- Fill once per machine; update when the environment changes -->
-- Login nodes:
-- Scheduler:
-- GPU partitions:
-- CPU partitions:
-- Module init:
-- Default Python:
-- Notable constraints: <!-- e.g. "NEVER compile on login nodes", "compute nodes no internet", "Python 3.6 only" -->
+## 机器档案
+<!-- 每台机器填写一次；环境变化时更新 -->
+- 登录节点：
+- Scheduler：
+- GPU 分区：
+- CPU 分区：
+- Module 初始化：
+- 默认 Python：
+- 显著约束：<!-- 例如 "绝不在登录节点编译"、"计算节点无外网"、"只有 Python 3.6" -->
 
-## Known-good Combinations
-<!-- Add after each successful build. Format:
+## 已知可用组合
+<!-- 每次成功构建后添加。格式：
 ### <pgen> | <backend> | <MPI on/off>
 - DTK: <version> | Kokkos: <version> | ADIOS2: <version> | HDF5: <version>
 - OpenMPI: <version> | Compiler: <name+version>
@@ -38,17 +38,17 @@
 - Notes: <any non-obvious detail>
 -->
 
-## Known Issues
-<!-- Add whenever you discover a non-obvious problem. Format:
-### <descriptive title>
-- Symptom: <error message pattern>
-- Trigger: <what causes it>
-- Fix: <concrete steps>
+## 已知问题
+<!-- 每当发现不直观的问题时添加。格式：
+### <描述性标题>
+- 症状：<错误信息模式>
+- 触发：<什么导致的>
+- 修复：<具体步骤>
 -->
 
-## Build History
-<!-- Append after each build. Format:
+## 构建历史
+<!-- 每次构建后追加。格式：
 | <date> | <site_id> | <entity ver> | <source rev> | <backend> | <result> | <build root> |
 -->
-| Date | Entity | PGen | Backend | Precision | Opt | Result | Workdir |
+| 日期 | Entity | PGen | 后端 | 精度 | 优化 | 结果 | Workdir |
 |------|--------|------|---------|-----------|-----|--------|---------|

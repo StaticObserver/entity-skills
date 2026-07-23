@@ -1,16 +1,16 @@
-# 02 — Field Initialization (InitFields)
+# 02 — 场初始化（InitFields）
 
-> Based on Entity v1.4.4
+> 基于 Entity v1.4.4
 
-## When to Use
+## 何时使用
 
-When you need to set up the initial electromagnetic field configuration for a simulation. Trigger keywords: initial B-field, initial E-field, magnetic field configuration, electric field distribution, Wald, dipole, Harris sheet.
+当你需要为模拟设置初始电磁场构型时使用。触发关键词：initial B-field、initial E-field、磁场构型、电场分布、Wald、dipole、Harris sheet。
 
-**If the simulation does not require an initial field (e.g., pure particle electrostatic), skip this reference.**
+**如果模拟不需要初始场（例如纯粒子静电问题），请跳过本参考。**
 
 ---
 
-## InitFields Signature
+## InitFields 签名
 
 ```cpp
 template <Dimension D>
@@ -42,7 +42,7 @@ private:
 };
 ```
 
-### Instantiation
+### 实例化
 
 ```cpp
 // Declare in PGen
@@ -52,22 +52,22 @@ InitFields<D> init_flds;
 PGen(...) : init_flds { B0, theta, ... } {}
 ```
 
-**The init_flds instance name is mandatory** (detected by the engine via C++20 concepts).
+**init_flds 实例名是强制的**（引擎通过 C++20 concepts 检测它）。
 
 ---
 
-## Parameter Descriptions
+## 参数说明
 
-### Coord Parameter
-- `coord_t<D>` — D-dimensional physical coordinate array. `x[0]` = x1 coordinate, `x[1]` = x2 coordinate, `x[2]` = x3 coordinate
-- In Cartesian: x1=x, x2=y, x3=z
-- In Spherical: x1=r, x2=θ, x3=φ
+### Coord 参数
+- `coord_t<D>` — D 维物理坐标数组。`x[0]` = x1 坐标，`x[1]` = x2 坐标，`x[2]` = x3 坐标
+- Cartesian 中：x1=x，x2=y，x3=z
+- Spherical 中：x1=r，x2=θ，x3=φ
 
-### SRPIC: Tetrad (Orthonormal) Basis
+### SRPIC：Tetrad（正交归一）基
 
-Field values are returned in the **local tetrad (orthonormal) basis**. The code automatically handles coordinate transformations and staggered grid placement.
+场值以**局部 tetrad（正交归一）基**返回。代码自动处理坐标变换和交错网格放置。
 
-| Cartesian Component | Physical Meaning | Spherical Component | Physical Meaning |
+| Cartesian 分量 | 物理含义 | Spherical 分量 | 物理含义 |
 |---------------|---------|---------------|---------|
 | ex1 | Ex | ex1 | Er |
 | ex2 | Ey | ex2 | Eθ |
@@ -76,35 +76,35 @@ Field values are returned in the **local tetrad (orthonormal) basis**. The code 
 | bx2 | By | bx2 | Bθ |
 | bx3 | Bz | bx3 | Bφ |
 
-### GRPIC: Coordinate Basis
+### GRPIC：坐标基
 
-Field values are returned in the **coordinate basis**. An additional D field (electric displacement vector) is required.
+场值以**坐标基**返回。需要额外定义 D 场（电位移矢量）。
 
-**Two ways to define GR fields:**
+**定义 GR 场的两种方式：**
 
-**Method 1: Set B and D directly**
+**方法 1：直接设置 B 和 D**
 ```cpp
 Inline auto bx1(const coord_t<D>& x) const -> real_t { return ...; }
 Inline auto dx1(const coord_t<D>& x) const -> real_t { return ...; }
 ```
 
-**Method 2: Set magnetic potential A (code computes B = ∇×A via finite differences)**
+**方法 2：设置磁势 A（代码通过有限差分计算 B = ∇×A）**
 ```cpp
 Inline auto A_1(const coord_t<D>& x) const -> real_t { return ...; }
 Inline auto A_0(const coord_t<D>& x) const -> real_t { return ...; }
 Inline auto A_3(const coord_t<D>& x) const -> real_t { return ...; }
 ```
 
-Metric API in GRPIC (accessible from InitFields):
+GRPIC 中的度规 API（可从 InitFields 访问）：
 - `metric.sqrt_det_h()` — √det(h) = √|g|
-- `metric.alpha()` — lapse function
-- `metric.beta1()` — shift vector β¹
-- `metric.spin()` — black hole spin parameter a
-- `metric.template h_<i,j>()` — spatial metric components hij
+- `metric.alpha()` — lapse 函数
+- `metric.beta1()` — shift 矢量 β¹
+- `metric.spin()` — 黑洞自旋参数 a
+- `metric.template h_<i,j>()` — 空间度规分量 hij
 
 ---
 
-## Required Includes
+## 必需的 Include
 
 ```cpp
 // Math utilities
@@ -115,13 +115,13 @@ Metric API in GRPIC (accessible from InitFields):
 #include "enums.h"
 ```
 
-No additional archetype includes are needed -- InitFields directly returns scalar values.
+不需要额外的 archetype include —— InitFields 直接返回标量值。
 
 ---
 
-## Code Examples
+## 代码示例
 
-### Example 1: Uniform B-field (SRPIC, 2D Cartesian)
+### 示例 1：均匀 B 场（SRPIC，2D Cartesian）
 
 ```cpp
 template <Dimension D>
@@ -150,7 +150,7 @@ struct InitFields {
 };
 ```
 
-### Example 2: Harris Current Sheet (SRPIC, 2D Reconnection)
+### 示例 2：Harris 电流片（SRPIC，2D 重联）
 
 ```cpp
 template <Dimension D>
@@ -175,7 +175,7 @@ struct InitFields {
 };
 ```
 
-### Example 3: Wald Vacuum Solution (GRPIC, Kerr-Schild)
+### 示例 3：Wald 真空解（GRPIC，Kerr-Schild）
 
 ```cpp
 template <class M, Dimension D>
@@ -198,9 +198,9 @@ struct InitFields {
 };
 ```
 
-The code automatically computes B and D fields from A_3 via finite differences.
+代码自动通过有限差分从 A_3 计算 B 和 D 场。
 
-### Example 4: Field Setter Inheritance (Time-Dependent Fields)
+### 示例 4：场设置器继承（随时间变化的场）
 
 ```cpp
 // Base static field
@@ -227,27 +227,27 @@ struct DriveFields : public InitFields<D> {
 };
 ```
 
-In the PGen, replace `InitFields` with `DriveFields`, and pass time parameters through `AtmFields` or `MatchFields`.
+在 PGen 中，将 `InitFields` 替换为 `DriveFields`，并通过 `AtmFields` 或 `MatchFields` 传递时间参数。
 
 ---
 
-## Constraints and Incompatibilities
+## 约束与不兼容性
 
-| Constraint | Description |
+| 约束 | 说明 |
 |------|------|
-| init_flds instance name is mandatory | Cannot be renamed; the engine detects it by name |
-| SR does not need dx | Only define ex + bx; undefined components default to 0 |
-| GR must set both B and D (or A) | Setting only bx without dx → D field is 0 → electric field solver anomalies |
-| Poles in spherical coordinates | Use `cmp::AlmostZero(math::sin(x[1]))` to detect and handle specially |
-| E×B = 0 constraint | For pure magnetic field initialization, E×B=0 must hold, otherwise there will be artificial Poynting flux |
+| init_flds 实例名是强制的 | 不能重命名；引擎按名称检测它 |
+| SR 不需要 dx | 只需定义 ex + bx；未定义的分量默认为 0 |
+| GR 必须同时设置 B 和 D（或 A） | 只设置 bx 而不设置 dx → D 场为 0 → 电场求解异常 |
+| 球坐标中的极点 | 使用 `cmp::AlmostZero(math::sin(x[1]))` 检测并特殊处理 |
+| E×B = 0 约束 | 纯磁场初始化时必须满足 E×B=0，否则会产生人为的 Poynting 通量 |
 
 ---
 
-## Common Pitfalls
+## 常见陷阱
 
-1. **Extra multiplication/division by normalization coefficients in InitFields** — Field values returned by InitFields are in code normalized units; just return physical values directly. No need to consider extra normalization coefficients such as larmor0. See `00-normalization.md` for details
-2. **Confusion with spherical coordinates** — In Spherical coordinates, ex2 = Eθ, not Ey; the physical meaning is completely different
-3. **Mixing SR vs GR basis** — SR returns orthonormal basis, GR returns coordinate basis. If you mistakenly use SR's tetrad convention in GR, field values will be distorted in regions with non-trivial metric
-4. **Forgetting the D field** — In GR, setting only bx without dx; the code does not error but the electric field solution is wrong
-5. **Inheritance-based Field Setter** — Derived classes need `this->` to access base class members (because it is a template class)
-6. **Performance note** — These methods are called for every grid point. Avoid repeated calculations within the method; pre-compute constants in the constructor whenever possible
+1. **在 InitFields 中额外地乘以或除以归一化系数** —— InitFields 返回的场值是代码归一化单位下的值；直接返回物理值即可。无需考虑 larmor0 等额外的归一化系数。详见 `00-normalization.md`
+2. **球坐标混淆** —— 在 Spherical 坐标中，ex2 = Eθ，而不是 Ey；物理含义完全不同
+3. **混淆 SR 与 GR 的基** —— SR 返回正交归一基，GR 返回坐标基。如果在 GR 中误用 SR 的 tetrad 约定，场值在度规非平庸的区域会发生畸变
+4. **忘记 D 场** —— 在 GR 中只设置 bx 而不设置 dx；代码不会报错，但电场解是错误的
+5. **基于继承的场设置器** —— 派生类需要 `this->` 才能访问基类成员（因为它是模板类）
+6. **性能注意事项** —— 这些方法会对每个格点调用。避免在方法内重复计算；尽可能在构造函数中预先计算常量

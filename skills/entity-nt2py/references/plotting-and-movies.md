@@ -1,22 +1,22 @@
-# Plotting and Movies
+# 绘图与影片
 
-Use this reference for nt2py plotting accessors and animation export. First
-select a bounded data subset using the container-specific reference.
+当使用 nt2py 绘图访问器和动画导出时使用本参考文档。先按容器特有的
+参考文档选取一个有边界的数据子集。
 
-## Contents
+## 目录
 
-- Standard xarray plots
-- Field overview with `inspect`
-- Spherical and qspherical plots
-- Single-quantity movie
-- Custom movie
-- Low-level export
-- Source basis
+- 标准 xarray 绘图
+- 用 `inspect` 做场总览
+- 球坐标与准球坐标绘图
+- 单量影片
+- 自定义影片
+- 低层导出
+- 源码依据
 
-## Standard xarray plots
+## 标准 xarray 绘图
 
-Fields and spectra use xarray plotting. Select one time and reduce spatial data
-to one or two dimensions before plotting:
+场和能谱使用 xarray 绘图。绘图前先选取一个时间，并将空间数据归约到
+一或两个维度：
 
 ```python
 import matplotlib.pyplot as plt
@@ -29,13 +29,13 @@ plt.savefig("Bz-last.png", dpi=150, bbox_inches="tight")
 plt.close()
 ```
 
-Plotting triggers Dask computation. Set output paths, close figures, and check
-that the expected file was created.
+绘图会触发 Dask 计算。设置输出路径、关闭图形，并确认预期的文件
+确实已创建。
 
-## Field overview with `inspect`
+## 用 `inspect` 做场总览
 
-Importing `nt2` registers the `Dataset.inspect` accessor. It accepts data with
-one or two remaining dimensions after time selection:
+导入 `nt2` 会注册 `Dataset.inspect` 访问器。它接受时间选取后剩余
+一或两个维度的数据：
 
 ```python
 snapshot = data.fields.isel(t=-1)
@@ -47,12 +47,12 @@ fig.savefig("field-overview.png", dpi=150, bbox_inches="tight")
 plt.close(fig)
 ```
 
-`only_fields` and `skip_fields` are lists of regular expressions matched from
-the start of each variable name. `only_fields` takes precedence. `plot_kwargs`
-maps field-name regexes to xarray plot arguments.
+`only_fields` 和 `skip_fields` 是正则表达式列表，从每个变量名的开头
+开始匹配。`only_fields` 优先。`plot_kwargs` 将场名正则映射到 xarray
+绘图参数。
 
-If `t` is still a dimension, `inspect.plot()` enters movie mode and requires a
-`name`:
+如果 `t` 仍是维度，`inspect.plot()` 会进入影片模式并要求提供
+`name`：
 
 ```python
 movie_data = data.fields[["Ex", "Bx"]]
@@ -65,13 +65,13 @@ ok = movie_data.inspect.plot(
 )
 ```
 
-Still-image mode returns a Matplotlib `Figure`; movie mode returns `True` or
-`False`. More than two dimensions after removing `t` is an error.
+静态图模式返回 Matplotlib `Figure`；影片模式返回 `True` 或 `False`。
+去掉 `t` 后超过两个维度会报错。
 
-## Spherical and qspherical plots
+## 球坐标与准球坐标绘图
 
-The `DataArray.polar` accessor requires exactly two dimensions, `r` and `th`,
-and no time dimension:
+`DataArray.polar` 访问器要求恰好两个维度 `r` 和 `th`，且没有时间
+维度：
 
 ```python
 q = data.fields["Br"].isel(t=-1)
@@ -80,11 +80,11 @@ plt.savefig("Br-polar.png", dpi=150, bbox_inches="tight")
 plt.close()
 ```
 
-The accessor draws on rectilinear Cartesian axes. Useful options include
-`invert_x`, `invert_y`, `cbar_position`, `cbar_size`, `title`, and `label`.
-`polar.contour()` has the same dimensionality requirements.
+该访问器绘制在直线笛卡尔坐标轴上。常用选项包括 `invert_x`、
+`invert_y`、`cbar_position`、`cbar_size`、`title` 和 `label`。
+`polar.contour()` 有相同的维度要求。
 
-For field lines, operate on a time-selected spherical dataset:
+对于场线，在时间选取后的球坐标数据集上操作：
 
 ```python
 snapshot = data.fields.isel(t=-1)
@@ -95,12 +95,12 @@ snapshot.polar.fieldplot(
 )
 ```
 
-Supported sampling templates are `dipole` and `monopole`. Field-line integration
-is a plotting utility, not an accuracy-certified physics integrator.
+支持的采样模板是 `dipole` 和 `monopole`。场线积分是绘图工具，
+不是经过精度认证的物理积分器。
 
-## Single-quantity movie
+## 单量影片
 
-A time-dependent `DataArray` has a `.movie` accessor:
+随时间变化的 `DataArray` 具有 `.movie` 访问器：
 
 ```python
 q = data.fields["Bz"]
@@ -113,13 +113,12 @@ ok = q.movie.plot(
 )
 ```
 
-It requires a `t` dimension. Frames are indexed by time position, not passed as
-physical time values to the xarray plot call.
+它要求存在 `t` 维度。帧按时间位置索引，而不是作为物理时间值传给
+xarray 绘图调用。
 
-## Custom movie
+## 自定义影片
 
-`Data.makeMovie` passes both the physical time value and the `Data` object to
-the callback:
+`Data.makeMovie` 会把物理时间值和 `Data` 对象都传给回调：
 
 ```python
 def plot_frame(t, data):
@@ -133,31 +132,31 @@ ok = data.makeMovie(
 )
 ```
 
-In v1.5.3, when `data.attrs["simulation.name"]` exists, `Data.makeMovie` uses
-that attribute as the output name. When the attribute is absent, it consumes
-`name=` or defaults to `movie`. Do not pass `name=` without first checking the
-attribute: in the attribute-present branch v1.5.3 leaves that keyword in
-`movie_kwargs`, causing a duplicate `name` argument. Use the lower-level export
-functions when the filename must be controlled independently.
+在 v1.5.3 中，当 `data.attrs["simulation.name"]` 存在时，
+`Data.makeMovie` 使用该属性作为输出名。当该属性缺失时，它消费
+`name=`，否则默认为 `movie`。不要在不先检查该属性的情况下传
+`name=`：在属性存在的分支中，v1.5.3 会把该关键字留在
+`movie_kwargs` 里，导致 `name` 参数重复。当需要独立控制文件名时，
+使用低层导出函数。
 
-## Low-level export
+## 低层导出
 
 ```python
 from nt2.plotters.export import makeFrames, makeMovie, makeFramesAndMovie
 ```
 
-- `makeFrames(plot, times, fpath, data=None, num_cpus=None)` writes numbered PNGs.
-- `makeMovie(input=..., output=..., ...)` invokes external `ffmpeg`.
-- `makeFramesAndMovie(name=..., plot=..., times=..., ...)` performs both stages.
+- `makeFrames(plot, times, fpath, data=None, num_cpus=None)` 写出编号的 PNG。
+- `makeMovie(input=..., output=..., ...)` 调用外部 `ffmpeg`。
+- `makeFramesAndMovie(name=..., plot=..., times=..., ...)` 执行两个阶段。
 
-The default worker count is all detected CPUs. Set `num_cpus` explicitly on a
-login node or shared machine. Combined export writes frames under
-`<name>/frames/` and defaults to `<name>.mp4`. Inspect the boolean result and
-output file; a successful frame stage does not guarantee ffmpeg success.
+默认工作进程数是检测到的全部 CPU。在登录节点或共享机器上显式设置
+`num_cpus`。组合导出将帧写到 `<name>/frames/` 下，默认输出
+`<name>.mp4`。检查布尔返回值和输出文件；帧阶段成功并不保证 ffmpeg
+成功。
 
-## Source basis
+## 源码依据
 
-- Inspect accessor: <https://github.com/entity-toolkit/nt2py/blob/v1.5.3/nt2/plotters/inspect.py>
-- Polar accessor: <https://github.com/entity-toolkit/nt2py/blob/v1.5.3/nt2/plotters/polar.py>
-- Movie accessor: <https://github.com/entity-toolkit/nt2py/blob/v1.5.3/nt2/plotters/movie.py>
-- Export functions: <https://github.com/entity-toolkit/nt2py/blob/v1.5.3/nt2/plotters/export.py>
+- Inspect 访问器：<https://github.com/entity-toolkit/nt2py/blob/v1.5.3/nt2/plotters/inspect.py>
+- Polar 访问器：<https://github.com/entity-toolkit/nt2py/blob/v1.5.3/nt2/plotters/polar.py>
+- Movie 访问器：<https://github.com/entity-toolkit/nt2py/blob/v1.5.3/nt2/plotters/movie.py>
+- 导出函数：<https://github.com/entity-toolkit/nt2py/blob/v1.5.3/nt2/plotters/export.py>

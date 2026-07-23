@@ -1,26 +1,26 @@
-# Dependency Build Scripts
+# 依赖构建脚本
 
-Use this reference when local source builds are required after existing system/module/prefix dependencies cannot satisfy `requirements.json`.
+当现有的系统/module/前缀依赖无法满足 `requirements.json`、必须进行本地源码构建时，使用本参考。
 
-## Source Of Rules
+## 规则来源
 
-The build scripts should follow the same decision model as Entity's `dependencies.py` and the official dependency page:
+构建脚本应遵循与 Entity 的 `dependencies.py` 及官方依赖页面相同的决策模型：
 
-- Prefer existing system/module `MPI` and `HDF5` when available.
-- Use source builds as a last resort.
-- Keep compiler/toolchain consistent across Kokkos, HDF5, ADIOS2, MPI, and Entity.
-- Use the supported Entity profile: C++20 + Kokkos 5.x + ADIOS2 2.11.x.
-- Build ADIOS2 with Kokkos support.
-- For CUDA builds, use Kokkos `nvcc_wrapper` after Kokkos is installed.
-- Keep generated dependency scripts in the execution site's `entity.deps_root/scripts/`.
+- 优先使用现有的系统/module `MPI` 与 `HDF5`（如可用）。
+- 源码构建是最后手段。
+- 保持编译器/工具链在 Kokkos、HDF5、ADIOS2、MPI 与 Entity 之间一致。
+- 使用受支持的 Entity profile：C++20 + Kokkos 5.x + ADIOS2 2.11.x。
+- 构建带 Kokkos 支持的 ADIOS2。
+- 对于 CUDA 构建，在 Kokkos 安装完成后使用 Kokkos `nvcc_wrapper`。
+- 生成的依赖脚本保存在执行站点的 `entity.deps_root/scripts/` 下。
 
-Official reference: https://entity-toolkit.github.io/wiki/content/1-getting-started/2-dependencies/
+官方参考：https://entity-toolkit.github.io/wiki/content/1-getting-started/2-dependencies/
 
-## Script Generator Role
+## 脚本生成器的角色
 
-Use `scripts/entity_generate.py deps` to generate local dependency build scripts adapted to this skill's layout.
+使用 `scripts/entity_generate.py deps` 生成适配本技能目录布局的本地依赖构建脚本。
 
-Expected interface:
+预期接口：
 
 ```bash
 python3 scripts/entity_generate.py deps requirements.json \
@@ -28,27 +28,27 @@ python3 scripts/entity_generate.py deps requirements.json \
   --checkpoint entity-deps.local.json
 ```
 
-Default output directory:
+默认输出目录：
 
 ```text
 <deps_root>/scripts/
 ```
 
-Generated scripts should be reviewed before execution. They are not the source of truth; `requirements.json` and `entity-deps.local.json` are.
+生成的脚本在执行前应经过审查。它们不是事实来源；`requirements.json` 与 `entity-deps.local.json` 才是。
 
-Current generator scope:
+当前生成器范围：
 
-- `kokkos`, `hdf5`, and `adios2` source-build scripts are generated directly.
-- `mpi` emits a deliberate stop script until a reviewed OpenMPI/UCX policy is added.
-- every script writes configure/build/install logs under `entity.artifacts_root/build-logs`.
-- Kokkos and ADIOS2 scripts include the official baseline switches such as `CMAKE_CXX_EXTENSIONS=OFF`, position-independent code, disabled ADIOS2 Python/Fortran/ZeroMQ, disabled ADIOS2 tests, and disabled ADIOS2 examples.
-- exact Kokkos/ADIOS2/HDF5 source tags can be pinned through `requirements.environment.dependency_versions`.
+- 直接生成 `kokkos`、`hdf5`、`adios2` 的源码构建脚本。
+- `mpi` 会生成一个有意停止的脚本，直到加入经过审查的 OpenMPI/UCX 策略。
+- 每个脚本都把 configure/build/install 日志写入 `entity.artifacts_root/build-logs` 下。
+- Kokkos 与 ADIOS2 脚本包含官方基线开关，如 `CMAKE_CXX_EXTENSIONS=OFF`、位置无关代码、禁用 ADIOS2 Python/Fortran/ZeroMQ、禁用 ADIOS2 测试、禁用 ADIOS2 示例。
+- 可通过 `requirements.environment.dependency_versions` 固定精确的 Kokkos/ADIOS2/HDF5 源码标签。
 
-## Dependency Order
+## 依赖顺序
 
-Only generate scripts for missing or incompatible dependencies.
+只为缺失或不兼容的依赖生成脚本。
 
-Recommended order:
+推荐顺序：
 
 ```text
 MPI only if required and no compatible system/module MPI exists
@@ -57,21 +57,21 @@ HDF5 only if output=true
 ADIOS2 only if output=true
 ```
 
-## Generated Script Requirements
+## 生成脚本的要求
 
-Every generated script should:
+每个生成的脚本应当：
 
-- use `set -euo pipefail`;
-- write logs under `entity.artifacts_root/build-logs`;
-- install under a prefix recorded in `entity-deps.local.json`;
-- use compilers from `entity-deps.local.json.selected.compiler`;
-- preserve MPI on/off and backend choices from `requirements.json`;
-- avoid writing into `ENTITY_CHECKOUT`;
-- be idempotent enough to re-run after deleting its build directory.
+- 使用 `set -euo pipefail`；
+- 将日志写入 `entity.artifacts_root/build-logs` 下；
+- 安装到 `entity-deps.local.json` 中记录的前缀下；
+- 使用来自 `entity-deps.local.json.selected.compiler` 的编译器；
+- 保留 `requirements.json` 中的 MPI 开/关与后端选择；
+- 避免写入 `ENTITY_CHECKOUT`；
+- 具有足够的幂等性，删除其构建目录后可重新运行。
 
-## Recording
+## 记录
 
-After generating scripts, update `entity-deps.local.json.build_scripts`:
+生成脚本后，更新 `entity-deps.local.json.build_scripts`：
 
 ```json
 {
@@ -90,4 +90,4 @@ After generating scripts, update `entity-deps.local.json.build_scripts`:
 }
 ```
 
-After a dependency build script is executed, update the corresponding selected dependency entry with prefix, version if known, CMake config path, compiler signature, and validation evidence.
+依赖构建脚本执行后，用前缀、版本（若已知）、CMake config 路径、编译器签名与验证证据更新对应的选定依赖条目。

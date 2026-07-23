@@ -1,17 +1,17 @@
-# ADIOS2 Build Notes
+# ADIOS2 构建笔记
 
-ADIOS2 is the most complex dependency due to its multi-library dependency chain
-(Kokkos + HDF5) and GPU-aware compilation.
+ADIOS2 是最复杂的依赖，因为它有多库依赖链（Kokkos + HDF5）以及
+GPU-aware 编译。
 
-## Version Policy
+## 版本策略
 
-| Profile | ADIOS2 Version | Kokkos Support | CUDA via |
+| Profile | ADIOS2 版本 | Kokkos 支持 | CUDA 经由 |
 |---------|---------------|----------------|----------|
-| modern  | 2.11.x        | ON             | Kokkos only |
+| modern  | 2.11.x        | ON             | 仅 Kokkos |
 
-## CMake Options
+## CMake 选项
 
-Baseline:
+基线：
 ```
 -DCMAKE_CXX_EXTENSIONS=OFF
 -DCMAKE_POSITION_INDEPENDENT_CODE=TRUE
@@ -25,30 +25,31 @@ Baseline:
 -DADIOS2_BUILD_TOOLS=OFF
 ```
 
-Profile/backend-dependent:
-| Condition | Options |
+依 profile/后端而定：
+| 条件 | 选项 |
 |-----------|---------|
 | MPI=ON     | `-DADIOS2_USE_MPI=ON -DADIOS2_HAVE_HDF5_VOL=ON` |
 | MPI=OFF    | `-DADIOS2_USE_MPI=OFF -DADIOS2_HAVE_HDF5_VOL=OFF` |
-| all supported builds | `-DADIOS2_USE_Kokkos=ON` |
-| CUDA | `-DADIOS2_USE_CUDA=OFF` (CUDA goes through Kokkos) |
+| 所有受支持的构建 | `-DADIOS2_USE_Kokkos=ON` |
+| CUDA | `-DADIOS2_USE_CUDA=OFF`（CUDA 经由 Kokkos） |
 
-CUDA additionally requires:
+CUDA 额外要求：
 ```
 -DCMAKE_CUDA_COMPILER=<cuda_prefix>/bin/nvcc
 -DCMAKE_CUDA_ARCHITECTURES=<arch_number>
 ```
-These are needed because ADIOS2+Kokkos triggers CMake `enable_language(CUDA)`.
+这些是必需的，因为 ADIOS2+Kokkos 会触发 CMake 的 `enable_language(CUDA)`。
 
-CMAKE_PREFIX_PATH must include both Kokkos and HDF5 prefixes before ADIOS2 configure,
-with Kokkos first (so ADIOS2 finds KokkosConfig.cmake before falling back to non-Kokkos).
+CMAKE_PREFIX_PATH 必须在 ADIOS2 configure 之前同时包含 Kokkos 与 HDF5
+前缀，且 Kokkos 在前（这样 ADIOS2 会先于回退到非 Kokkos 路径之前找到
+KokkosConfig.cmake）。
 
-## Known Issues
+## 已知问题
 
-### CUDA GPU Dynamic Libraries Required
-- Symptom: linker error `cannot find -l cuda`, `libcuda.so not found`, or `libcudart.so` missing
-- Trigger: ADIOS2 2.11.x with Kokkos CUDA backend links against CUDA runtime libraries
-- Fix: Add BOTH stubs and real lib paths to linker flags. Stubs first (login nodes prefer them for non-GPU symbols), then real lib path (GPU nodes need libcuda.so and libcudart.so):
+### 需要 CUDA GPU 动态库
+- 症状：链接错误 `cannot find -l cuda`、`libcuda.so not found`，或缺少 `libcudart.so`
+- 触发：带 Kokkos CUDA 后端的 ADIOS2 2.11.x 会链接 CUDA 运行时库
+- 修复：把 stubs 与真实库路径都加入链接器标志。stubs 在前（登录节点为非 GPU 符号更偏好它们），然后是真实库路径（GPU 节点需要 libcuda.so 与 libcudart.so）：
   ```bash
   STUBS="<cuda_prefix>/targets/x86_64-linux/lib/stubs"
   CUDA_LIB="<cuda_prefix>/targets/x86_64-linux/lib"
@@ -56,39 +57,39 @@ with Kokkos first (so ADIOS2 finds KokkosConfig.cmake before falling back to non
   export CMAKE_EXE_LINKER_FLAGS="-L$STUBS -L$CUDA_LIB ${CMAKE_EXE_LINKER_FLAGS:-}"
   export CMAKE_SHARED_LINKER_FLAGS="-L$STUBS -L$CUDA_LIB ${CMAKE_SHARED_LINKER_FLAGS:-}"
   ```
-  The stubs provide enough symbols for ADIOS2 to link on login nodes;
-  the real lib path is needed for GPU nodes at link and runtime.
-  The generated build script adds both paths automatically.
+  stubs 提供足够的符号让 ADIOS2 能在登录节点上链接；
+  真实库路径在 GPU 节点的链接期与运行期都需要。
+  生成的构建脚本会自动添加这两个路径。
 
-### enable_language(CUDA) Without Required Variables
-- Symptom: CMake error "No CMAKE_CUDA_COMPILER could be found"
-- Trigger: ADIOS2 with Kokkos CUDA backend triggers CUDA language support
-- Fix: Set `-DCMAKE_CUDA_COMPILER=<cuda_prefix>/bin/nvcc` explicitly in cmake configure
+### 缺少必需变量的 enable_language(CUDA)
+- 症状：CMake 错误 "No CMAKE_CUDA_COMPILER could be found"
+- 触发：带 Kokkos CUDA 后端的 ADIOS2 触发 CUDA 语言支持
+- 修复：在 cmake configure 中显式设置 `-DCMAKE_CUDA_COMPILER=<cuda_prefix>/bin/nvcc`
 
-### Incomplete cmake --install (Missing Targets Files)
-- Symptom: Entity cmake configure fails with "adios2 targets not found", or `cmake --install` exits non-zero
-- Trigger: ADIOS2 `cmake --install` attempts to install ALL targets including tools (`adios2_remote_server`, `bpls`, etc.). On login nodes without `libcuda.so.1`, tool targets fail to link, and the install step is all-or-nothing.
-- Fix: The generated build script now passes `-DADIOS2_BUILD_TOOLS=OFF` to skip tools entirely. Entity only needs the libraries (libadios2_core.so, libadios2_c.so, libadios2_cxx.so), not the CLI tools.
+### 不完整的 cmake --install（缺少 targets 文件）
+- 症状：Entity cmake configure 失败并报 "adios2 targets not found"，或 `cmake --install` 以非零退出
+- 触发：ADIOS2 的 `cmake --install` 尝试安装所有目标，包括工具（`adios2_remote_server`、`bpls` 等）。在没有 `libcuda.so.1` 的登录节点上，工具目标链接失败，而安装步骤是全有或全无的。
+- 修复：生成的构建脚本现在传 `-DADIOS2_BUILD_TOOLS=OFF` 以完全跳过工具。Entity 只需要库（libadios2_core.so、libadios2_c.so、libadios2_cxx.so），不需要 CLI 工具。
 
-### GCC libstdc++ ABI Version Mismatch
-- Symptom: `undefined reference to std::__cxx11::...` during ADIOS2 link
-- Trigger: Mixing GCC versions (old system GCC libstdc++ vs new compiler)
-- Fix: Ensure LD_LIBRARY_PATH includes the selected compiler's lib64 directory.
-  This is handled by env.sh generation.
+### GCC libstdc++ ABI 版本不匹配
+- 症状：ADIOS2 链接期间出现 `undefined reference to std::__cxx11::...`
+- 触发：混用 GCC 版本（旧系统 GCC 的 libstdc++ 与新编译器）
+- 修复：确保 LD_LIBRARY_PATH 包含所选编译器的 lib64 目录。
+  这由 env.sh 生成处理。
 
-### nvcc_wrapper With Wrong Host Compiler
-- Symptom: ADIOS2 configure detects wrong host compiler
-- Trigger: Kokkos nvcc_wrapper script has stale NVCC_WRAPPER_DEFAULT_COMPILER
-- Fix: Patch nvcc_wrapper or create a wrapper script that sets the variable first:
+### nvcc_wrapper 使用了错误的 host 编译器
+- 症状：ADIOS2 configure 检测到错误的 host 编译器
+- 触发：Kokkos nvcc_wrapper 脚本带有过期的 NVCC_WRAPPER_DEFAULT_COMPILER
+- 修复：修补 nvcc_wrapper，或创建一个先设置该变量的 wrapper 脚本：
   ```bash
   #!/bin/bash
   export NVCC_WRAPPER_DEFAULT_COMPILER=/path/to/g++
   exec /path/to/kokkos/bin/nvcc_wrapper "$@"
   ```
 
-## Post-Build Validation
+## 构建后验证
 
-Expected install structure:
+预期安装结构：
 ```
 <prefix>/
 ├── bin/
@@ -107,7 +108,7 @@ Expected install structure:
 │       └── adios2-cxx-targets-release.cmake
 ```
 
-Verify:
+验证：
 ```bash
 # CMake config
 ls <prefix>/lib64/cmake/adios2/adios2-config.cmake

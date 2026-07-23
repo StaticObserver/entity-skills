@@ -1,4 +1,4 @@
 interface:
   display_name: "Entity Router"
-  short_description: "Orchestrate multi-site Entity simulation cases"
-  default_prompt: "Use $entity-router to express this managed Entity task as a minimal GoalSpec, create one immutable Plan, Apply or recover the same Operation, and report controller-local Status unless one live scheduler observation is needed."
+  short_description: "编排多站点的 Entity 模拟 Case"
+  default_prompt: "使用 $entity-router 把这个受管理的 Entity 任务表达为最小化的 GoalSpec，创建一个不可变的 Plan，对同一个 Operation 执行 Apply 或恢复，除非需要一次实时的 scheduler 观测，否则只汇报控制器本地的 Status。"

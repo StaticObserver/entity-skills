@@ -1,18 +1,18 @@
-# 04 — External Current Source (ext_current)
+# 04 — 外部电流源（ext_current）
 
-> Based on Entity v1.4.4
+> 基于 Entity v1.4.4
 
-## When to Use
+## 何时使用
 
-When you need to add an external source current to Ampere's law. Trigger keywords: external current, antenna drive, axion current, Wald current, J_ext, current source term.
+当你需要在安培定律中添加外部源电流时使用。触发关键词：外部电流、天线驱动、轴子电流、Wald 电流、J_ext、电流源项。
 
-**Only applies to Minkowski metric (SRPIC). GRPIC does not support ext_current.**
+**仅适用于 Minkowski 度规（SRPIC）。GRPIC 不支持 ext_current。**
 
 ---
 
-## API Signature
+## API 签名
 
-### Official API (coordinate-only access)
+### 官方 API（仅可访问坐标）
 
 ```cpp
 struct ExtCurrent {
@@ -26,9 +26,9 @@ struct ExtCurrent {
 };
 ```
 
-**Instance name `ext_current` is mandatory** — the engine detects it via C++20 concept.
+**实例名 `ext_current` 是强制性的**——引擎通过 C++20 concept 检测它。
 
-### Engine-Modified API (access to EM fields and time)
+### 引擎修改版 API（可访问电磁场和时间）
 
 ```cpp
 // Requires modifying Entity engine source (ampere_mink.hpp) to extend Context
@@ -43,30 +43,30 @@ struct ExtCurrent {
 };
 ```
 
-**Important**: Context extension requires modifying `src/engines/srpic/ampere_mink.hpp`. This is an **engine modification** — route to entity-core-dev.
+**重要**：扩展 Context 需要修改 `src/engines/srpic/ampere_mink.hpp`。这属于**引擎修改**——请转交 entity-core-dev。
 
 ---
 
-## Parameter Description
+## 参数说明
 
-| Parameter | Meaning | Units |
+| 参数 | 含义 | 单位 |
 |-----------|---------|-------|
-| `coord_t<D> x` | Physical coordinates of the current grid point | code units |
-| `real_t` return value | External current density component | j0 = n0 * q0 * c (requires normalization compensation) |
-| `coeff = skindepth0^2 / larmor0` | Ampere normalization compensation coefficient | — |
+| `coord_t<D> x` | 当前网格点的物理坐标 | 代码单位 |
+| `real_t` 返回值 | 外部电流密度分量 | j0 = n0 * q0 * c（需要归一化补偿） |
+| `coeff = skindepth0^2 / larmor0` | 安培归一化补偿系数 | — |
 
 ---
 
-## Normalization Compensation (Critical!)
+## 归一化补偿（关键！）
 
-**See `00-normalization.md` for the full derivation.**
+**完整推导见 `00-normalization.md`。**
 
-Ampere discretization formula:
+安培离散化公式：
 ```
 dE/dt = - (larmor0 / (ppc0 * skindepth0^2)) x (J_deposited + J_external)
 ```
 
-**Every current component returned in ext_current must be pre-multiplied by `skindepth0^2 / larmor0`**:
+**ext_current 返回的每个电流分量都必须预先乘以 `skindepth0^2 / larmor0`**：
 
 ```cpp
 struct ExtCurrent {
@@ -82,19 +82,19 @@ struct ExtCurrent {
 
 ---
 
-## Required Includes
+## 必需的头文件
 
 ```cpp
 #include "utils/numeric.h"  // ZERO, ONE, SQR, math::
 ```
 
-No additional archetype needed — ext_current is called directly by the engine kernel.
+不需要额外的 archetype——ext_current 由引擎 kernel 直接调用。
 
 ---
 
-## Code Examples
+## 代码示例
 
-### Example 1: Static Current Source (Wald vacuum proof of concept)
+### 示例 1：静态电流源（Wald 真空概念验证）
 
 ```cpp
 struct ExtCurrent {
@@ -116,7 +116,7 @@ ExtCurrent ext_current;
 PGen(...) : ext_current { larmor0, skindepth0, amplitude } {}
 ```
 
-### Example 2: Traveling Wave Current Source (axion-PIC mode)
+### 示例 2：行波电流源（axion-PIC 模式）
 
 ```cpp
 struct ExtCurrent {
@@ -132,27 +132,27 @@ struct ExtCurrent {
 };
 ```
 
-**Issue**: The official ext_current can only access coordinates, not `time`. Time-dependent current sources require:
-1. Updating the ext_current's time member in `CustomPostStep` (if ext_current is not const)
-2. Or modifying the engine so Context includes time → entity-core-dev
+**问题**：官方 ext_current 只能访问坐标，无法访问 `time`。时间相关的电流源需要：
+1. 在 `CustomPostStep` 中更新 ext_current 的 time 成员（前提是 ext_current 不是 const）
+2. 或者修改引擎使 Context 包含 time → entity-core-dev
 
 ---
 
-## Constraints and Incompatibilities
+## 约束与不兼容性
 
-| Constraint | Description |
+| 约束 | 说明 |
 |------------|-------------|
-| **Minkowski only** | ext_current is only valid in the SRPIC engine. GRPIC does not support it |
-| **All three components must be defined** | Even unused ones must return ZERO. Undefined components = undefined behavior |
-| **Cannot access real-time EM fields (official API)** | Only coordinates are readable. Use Context extension for field access (engine modification) |
-| **Cannot directly read time** | Must pass time through ext_current's member variable in CustomPostStep (if not const) |
+| **仅限 Minkowski** | ext_current 仅在 SRPIC 引擎中有效。GRPIC 不支持 |
+| **必须定义全部分量** | 即使未使用的分量也必须返回 ZERO。未定义的分量 = 未定义行为 |
+| **无法访问实时电磁场（官方 API）** | 只能读取坐标。如需访问电磁场，请使用 Context 扩展（引擎修改） |
+| **无法直接读取时间** | 必须通过 ext_current 的成员变量传递时间，并在 CustomPostStep 中更新（前提是不是 const） |
 
 ---
 
-## Common Pitfalls
+## 常见陷阱
 
-1. **Forgetting to multiply by skindepth0^2/larmor0** — values returned by ext_current go directly into the Ampere kernel and are scaled by larmor0/skindepth0^2. No compensation → wrong order-of-magnitude current strength. **This is the most common ext_current bug**
-2. **Attempting to use ext_current in GRPIC** — compilation failure or undefined behavior at runtime. The Ampere solver must be modified for GR
-3. **Time-dependent current source without time access** — the official API has no time parameter. Must pass via member variable and update in CustomPostStep
-4. **EM field access limitations** — EM field access in Context is an engine modification, not part of the standard API. If PGen needs to read real-time B/E to compute current → mark as engine modification
-5. **All three components defined** — missing one undetected jx method may cause anomalous behavior for that component (depends on trait detection logic)
+1. **忘记乘以 skindepth0^2/larmor0**——ext_current 返回的值会直接进入安培 kernel，并被乘以 larmor0/skindepth0^2 进行缩放。不做补偿 → 电流强度量级错误。**这是最常见的 ext_current bug**
+2. **试图在 GRPIC 中使用 ext_current**——会导致编译失败或运行时未定义行为。GR 下的安培求解器必须修改
+3. **时间相关的电流源却无法访问时间**——官方 API 没有 time 参数。必须通过成员变量传递，并在 CustomPostStep 中更新
+4. **电磁场访问限制**——在 Context 中访问电磁场属于引擎修改，不属于标准 API。如果 PGen 需要读取实时 B/E 来计算电流 → 标记为引擎修改
+5. **必须定义全部三个分量**——遗漏某个未被检测到的 jx 方法可能导致该分量出现异常行为（取决于 trait 检测逻辑）
