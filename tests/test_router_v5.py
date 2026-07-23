@@ -3,8 +3,10 @@
 import json
 import os
 import shutil
+import signal
 import sys
 import tempfile
+import time
 import unittest
 from unittest import mock
 import shlex
@@ -219,6 +221,35 @@ else:
         self.assertEqual(submit_user.exception.status, "needs_decision")
         self.assertEqual(submit_user.exception.decisions[0]["field"], "compute.submit_user")
 
+    def test_run_plan_rejects_unregistered_scheduler_kind(self):
+        profile = dict(self.profile, site_id="pbs-site")
+        profile["scheduler"] = {"kind": "pbs"}
+        self.store.upsert_site(profile)
+        goal = dict(self.goal, site="pbs-site")
+        with self.assertRaises(PlanError) as caught:
+            plan_goal(self.store, self.project, goal, [self.plan_file])
+        self.assertIn("scheduler kinds: none, slurm", str(caught.exception))
+        self.assertIn("'pbs'", str(caught.exception))
+
+    def test_executor_rejects_unsupported_scheduler_kind(self):
+        executor, envelope, unused_root, unused_comment = self._launch_intent()
+        envelope["request"]["scheduler"] = "pbs"
+        with self.assertRaises(executor.ExecutorError) as caught:
+            executor.execute(envelope)
+        self.assertIn("scheduler kind is not supported: pbs", str(caught.exception))
+
+    def test_site_discover_rejects_unregistered_scheduler_kind(self):
+        profile = dict(self.profile, site_id="pbs-site")
+        profile["scheduler"] = {"kind": "pbs"}
+        profile_path = os.path.join(self.temp, "pbs-site.json")
+        atomic_write_json(profile_path, profile)
+        code, payload = self.cli("site", "add", "--profile", profile_path)
+        self.assertEqual(code, 0, payload)
+        code, payload = self.cli("site", "discover", "pbs-site")
+        self.assertEqual(code, 2)
+        self.assertIn("scheduler kinds: none, slurm", payload["error"])
+        self.assertIn("'pbs'", payload["error"])
+
     def test_plan_hash_is_stable_and_plan_artifact_is_not_source(self):
         first = self.make_plan()
         second = plan_goal(self.store, self.project, self.goal, [self.plan_file])
@@ -260,6 +291,9 @@ else:
         self.assertEqual(status["remote_calls"], 0)
         self.assertEqual(status["current"]["run_id"], envelope["plan"]["run_id"])
         self.assertEqual(status["run"]["scheduler"]["job_id"], "42")
+        self.assertEqual(
+            [step["request"]["scheduler"] for step in envelope["plan"]["steps"]],
+            ["slurm", "slurm", "slurm"])
 
     def test_public_cli_is_plan_apply_status(self):
         goal_path = os.path.join(self.project, "goal.json")
@@ -852,7 +886,8 @@ else:
             "receipt": receipt,
             "allowed_roots": [os.path.join(self.staging_root, "case-x", "op-tz"),
                               run_root],
-            "request": {"run_root": run_root, "submit_script": submit,
+            "request": {"scheduler": "slurm", "run_root": run_root,
+                        "submit_script": submit,
                         "job_name": "entity-op-tz", "submit_user": "tester"},
         }
         entity_router_executor.receipt_base(envelope, "intent_written")
@@ -910,6 +945,335 @@ print('|'.join([r['job_id'], r['job_name'], r['user'], r['run_root'],
         self.assertEqual(result["effect"]["job_id"], "42")
         self.assertEqual(result["effect"]["state"], "COMPLETED")
         self.assertEqual(self.submit_count(), 0)
+
+    def _make_direct_plan(self, body, walltime="00:10:00"):
+        """Plan a run Goal against a scheduler-less local Site whose
+        executable is a real script the direct backend actually launches."""
+        self._write_executable("nvidia-smi", "print('fake gpu')")
+        profile = dict(self.profile)
+        profile["site_id"] = "local-direct"
+        profile["scheduler"] = {"kind": "none"}
+        self.store.upsert_site(profile)
+        executable = os.path.join(self.build_root, "entity-direct.xc")
+        with open(executable, "w") as handle:
+            handle.write("#!/bin/bash\n%s\n" % body)
+        os.chmod(executable, 0o755)
+        goal = dict(self.goal, site="local-direct", executable=executable)
+        goal["compute"] = dict(self.goal["compute"], walltime=walltime)
+        envelope = plan_goal(self.store, self.project, goal, [self.plan_file])
+        with open(self.plan_file, "w") as handle:
+            json.dump(envelope, handle)
+        return envelope
+
+    def _direct_identity(self):
+        status = status_for_project(self.store, self.project)
+        return (status.get("run") or {}).get("scheduler") or {}
+
+    def _wait_exit_file(self, path, seconds=20):
+        deadline = time.time() + seconds
+        while time.time() < deadline:
+            if os.path.isfile(path):
+                with open(path, "r") as handle:
+                    return handle.read().strip()
+            time.sleep(0.1)
+        self.fail("exit file did not appear: %s" % path)
+
+    def _wait_lines(self, path, seconds=20):
+        deadline = time.time() + seconds
+        while time.time() < deadline:
+            if os.path.isfile(path):
+                with open(path, "r") as handle:
+                    return handle.read().splitlines()
+            time.sleep(0.1)
+        self.fail("file did not appear: %s" % path)
+
+    def _wait_pid_gone(self, pid, seconds=20):
+        deadline = time.time() + seconds
+        while time.time() < deadline:
+            try:
+                os.kill(pid, 0)
+            except OSError:
+                return
+            time.sleep(0.1)
+        self.fail("process %s is still running" % pid)
+
+    def _kill_direct_run(self):
+        """Best-effort cleanup so no test leaks a background process group."""
+        pgid = self._direct_identity().get("pgid")
+        if pgid:
+            try:
+                os.killpg(pgid, signal.SIGKILL)
+            except OSError:
+                pass
+
+    def test_direct_run_script_is_deterministic(self):
+        from entity_router_executor import RENDER_BACKENDS
+        run_spec = {
+            "executable": self.executable, "input_name": "input.toml",
+            "compute": {"nodes": 1, "tasks": 1, "gpus": 1, "cpus_per_task": 2,
+                        "walltime": "00:10:00", "partition": "", "qos": "",
+                        "submit_user": "tester", "precision": "double"},
+        }
+        first = RENDER_BACKENDS["direct"](run_spec)
+        self.assertEqual(first, RENDER_BACKENDS["direct"](run_spec))
+        self.assertIn("set -eu", first)
+        self.assertIn("timeout 600 ", first)
+        self.assertIn("-input input.toml", first)
+        self.assertIn(".entity-exit-code", first)
+
+    def test_direct_backend_end_to_end(self):
+        marker = os.path.join(self.temp, "direct-ran.txt")
+        envelope = self._make_direct_plan('echo ran >> "%s"\nsleep 0.2' % marker)
+        steps = envelope["plan"]["steps"]
+        self.assertEqual([step["request"]["scheduler"] for step in steps],
+                         ["direct", "direct", "direct"])
+        submit = steps[1]["request"]["submit_script"]
+        self.assertTrue(submit.endswith("run.sh"))
+        try:
+            applied = apply_plan(self.store, envelope["goal"], envelope["plan"],
+                                 {"run_id": "direct-test"}, plan_path=self.plan_file)
+            self.assertEqual(applied["status"], "completed")
+            with open(submit, "r") as handle:
+                script = handle.read()
+            self.assertIn("set -eu", script)
+            self.assertIn("timeout 600 ", script)
+            self.assertIn("-input input.toml", script)
+            self.assertIn(".entity-exit-code", script)
+            run_root = steps[1]["request"]["run_root"]
+            exit_code = self._wait_exit_file(
+                os.path.join(run_root, ".entity-exit-code"))
+            self.assertEqual(exit_code, "0")
+            self.assertTrue(os.path.isfile(os.path.join(run_root, "run.log")))
+            with open(marker, "r") as handle:
+                self.assertEqual(handle.read().splitlines(), ["ran"])
+            status = status_for_project(self.store, self.project, live=True)
+            self.assertEqual(status["live"]["scheduler"], "direct")
+            self.assertEqual(status["live"]["state"], "EXITED")
+            self.assertEqual(status["live"]["exit_code"], 0)
+            kinds = [item["kind"] for item in status["divergences"]]
+            self.assertEqual(kinds, ["state_mismatch"])
+            self.assertEqual(status["divergences"][0]["recorded"], "submitted")
+            self.assertEqual(status["divergences"][0]["observed"], "EXITED")
+            self._wait_pid_gone(status["run"]["scheduler"]["pid"])
+        finally:
+            self._kill_direct_run()
+
+    def test_direct_live_status_running_then_job_gone(self):
+        envelope = self._make_direct_plan("sleep 30")
+        try:
+            applied = apply_plan(self.store, envelope["goal"], envelope["plan"],
+                                 {"run_id": "direct-live"}, plan_path=self.plan_file)
+            self.assertEqual(applied["status"], "completed")
+            status = status_for_project(self.store, self.project, live=True)
+            self.assertEqual(status["live"]["state"], "RUNNING")
+            identity = status["run"]["scheduler"]
+            self.assertEqual(status["live"]["pid"], identity["pid"])
+            os.killpg(identity["pgid"], signal.SIGKILL)
+            status = status_for_project(self.store, self.project, live=True)
+            self.assertEqual(status["live"]["state"], "NOT_FOUND")
+            kinds = [item["kind"] for item in status["divergences"]]
+            self.assertEqual(kinds, ["job_gone"])
+            self.assertEqual(status["divergences"][0]["pid"], identity["pid"])
+            self.assertTrue(status["divergences"][0]["confirmed"])
+        finally:
+            self._kill_direct_run()
+
+    def test_direct_walltime_enforced_with_exit_124(self):
+        envelope = self._make_direct_plan("sleep 30", walltime="00:00:01")
+        try:
+            applied = apply_plan(self.store, envelope["goal"], envelope["plan"],
+                                 {"run_id": "direct-timeout"}, plan_path=self.plan_file)
+            self.assertEqual(applied["status"], "completed")
+            run_root = envelope["plan"]["steps"][1]["request"]["run_root"]
+            exit_code = self._wait_exit_file(
+                os.path.join(run_root, ".entity-exit-code"))
+            self.assertEqual(exit_code, "124")
+            status = status_for_project(self.store, self.project, live=True)
+            self.assertEqual(status["live"]["state"], "EXITED")
+            self.assertEqual(status["live"]["exit_code"], 124)
+            self._wait_pid_gone(status["run"]["scheduler"]["pid"])
+        finally:
+            self._kill_direct_run()
+
+    def test_direct_reapply_recovers_launch_effect_not_committed(self):
+        marker = os.path.join(self.temp, "direct-ran.txt")
+        envelope = self._make_direct_plan('echo ran >> "%s"\nsleep 5' % marker)
+        actor = {"run_id": "direct-crash", "provider": "unittest"}
+        original = ExecutorClient.invoke
+        crashed = {"value": False}
+
+        def crash_after_launch(client, command, request):
+            result = original(client, command, request)
+            if (not crashed["value"] and command == "execute"
+                    and request["kind"] == "run.launch.v2"):
+                crashed["value"] = True
+                raise SystemExit("simulated controller crash")
+            return result
+
+        try:
+            with mock.patch.object(ExecutorClient, "invoke", crash_after_launch):
+                with self.assertRaises(SystemExit):
+                    apply_plan(self.store, envelope["goal"], envelope["plan"],
+                               actor, plan_path=self.plan_file)
+            recovered = apply_plan(self.store, envelope["goal"], envelope["plan"],
+                                   actor, plan_path=self.plan_file)
+            self.assertEqual(recovered["status"], "completed")
+            self.assertEqual(self._wait_lines(marker), ["ran"])
+        finally:
+            self._kill_direct_run()
+
+    def _direct_launch_intent(self):
+        """Fabricate a direct launch intent receipt as if the controller
+        crashed after the process started but before the effect receipt
+        landed."""
+        import entity_router_executor
+        run_root = os.path.join(self.run_root, "case-d", "run-d")
+        os.makedirs(run_root)
+        submit = os.path.join(run_root, "run.sh")
+        with open(submit, "w") as handle:
+            handle.write("#!/bin/bash\nset -eu\nsleep 30\n")
+        receipt = os.path.join(self.staging_root, "case-d", "op-d", "receipts",
+                               "run-launch.json")
+        envelope = {
+            "schema_version": 1,
+            "operation_id": "op-d",
+            "plan_hash": "sha256:" + "1" * 16,
+            "step_index": 2,
+            "step_id": "launch",
+            "kind": "run.launch.v2",
+            "site_id": "local-direct",
+            "receipt": receipt,
+            "allowed_roots": [os.path.join(self.staging_root, "case-d", "op-d"),
+                              run_root],
+            "request": {"scheduler": "direct", "run_root": run_root,
+                        "submit_script": submit,
+                        "job_name": "entity-op-d", "submit_user": "tester"},
+        }
+        entity_router_executor.receipt_base(envelope, "intent_written")
+        return entity_router_executor, envelope, run_root
+
+    def test_direct_launch_recovery_claims_running_process(self):
+        executor, envelope, unused_root = self._direct_launch_intent()
+        first = executor.execute(envelope)
+        self.assertEqual(first["status"], "completed", first)
+        pid = first["effect"]["pid"]
+        self.assertEqual(first["effect"]["pgid"], pid)
+        try:
+            # a controller crash lost the effect receipt; recovery must claim
+            # the still-running process instead of launching a second one
+            executor.receipt_base(envelope, "intent_written")
+            recovered = executor.execute(envelope)
+            self.assertEqual(recovered["status"], "completed", recovered)
+            self.assertEqual(recovered["effect"]["pid"], pid)
+            self.assertEqual(recovered["effect"]["comment"],
+                             first["effect"]["comment"])
+        finally:
+            try:
+                os.killpg(first["effect"]["pgid"], signal.SIGKILL)
+            except OSError:
+                pass
+
+    def test_direct_live_status_flags_untracked_job_in_run_root(self):
+        envelope = self._make_direct_plan("sleep 30")
+        foreign = None
+        try:
+            applied = apply_plan(self.store, envelope["goal"], envelope["plan"],
+                                 {"run_id": "direct-untracked"},
+                                 plan_path=self.plan_file)
+            self.assertEqual(applied["status"], "completed")
+            run_root = envelope["plan"]["steps"][1]["request"]["run_root"]
+            foreign_dir = os.path.join(run_root, "foreign")
+            os.makedirs(foreign_dir)
+            foreign_script = os.path.join(foreign_dir, "run.sh")
+            with open(foreign_script, "w") as handle:
+                handle.write("#!/bin/bash\nsleep 30\n")
+            subprocess = __import__("subprocess")
+            foreign = subprocess.Popen(
+                ["bash", foreign_script, "entity-router:op-foreign:0000000000000000"],
+                cwd=run_root, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL, start_new_session=True,
+            )
+            deadline = time.time() + 10
+            while True:
+                status = status_for_project(self.store, self.project, live=True)
+                self.assertEqual(status["live"]["state"], "RUNNING")
+                untracked = [item for item in status["divergences"]
+                             if item["kind"] == "untracked_job"]
+                if untracked:
+                    break
+                if time.time() > deadline:
+                    self.fail("foreign process was never scanned")
+                time.sleep(0.2)
+            self.assertEqual(len(untracked), 1)
+            self.assertEqual(untracked[0]["pid"], foreign.pid)
+            self.assertNotIn("unknown", untracked[0])
+            self.assertEqual(os.path.realpath(untracked[0]["run_root"]),
+                             os.path.realpath(run_root))
+        finally:
+            if foreign is not None:
+                try:
+                    os.killpg(foreign.pid, signal.SIGKILL)
+                except OSError:
+                    pass
+                foreign.wait()
+            self._kill_direct_run()
+
+    def test_direct_untracked_scan_degrades_to_unknown(self):
+        envelope = self._make_direct_plan("sleep 5")
+        try:
+            applied = apply_plan(self.store, envelope["goal"], envelope["plan"],
+                                 {"run_id": "direct-unknown"},
+                                 plan_path=self.plan_file)
+            self.assertEqual(applied["status"], "completed")
+            self._write_executable("pgrep", """import sys
+sys.stderr.write('pgrep: permission denied\\n')
+raise SystemExit(2)
+""")
+            status = status_for_project(self.store, self.project, live=True)
+            self.assertTrue(status["ok"])  # unknown is not a failure
+            self.assertEqual(status["live"]["state"], "RUNNING")
+            untracked = [item for item in status["divergences"]
+                         if item["kind"] == "untracked_job"]
+            self.assertEqual(len(untracked), 1)
+            self.assertTrue(untracked[0]["unknown"])
+            self.assertTrue(untracked[0]["detail"])
+        finally:
+            self._kill_direct_run()
+
+    def test_site_discover_direct_reports_environment_and_gpus(self):
+        self._write_executable("nvidia-smi", "print('FakeGPU A100')")
+        profile = dict(self.profile, site_id="direct-site")
+        profile["scheduler"] = {"kind": "none"}
+        profile_path = os.path.join(self.temp, "direct-site.json")
+        atomic_write_json(profile_path, profile)
+        code, payload = self.cli("site", "add", "--profile", profile_path)
+        self.assertEqual(code, 0, payload)
+        code, payload = self.cli("site", "discover", "direct-site")
+        self.assertEqual(code, 0, payload)
+        self.assertFalse(payload["state_mutated"])
+        self.assertEqual(payload["gpus"], ["FakeGPU A100"])
+        self.assertIn("bash", payload["environment"]["bash"].lower())
+        self.assertTrue(payload["environment"]["python3"].startswith("Python"))
+        self.assertTrue(payload["roots"]["run_root"]["writable"])
+        self.assertTrue(payload["roots"]["staging_root"]["writable"])
+        self.assertEqual(payload["suggested_policy"], {})
+
+    def test_site_discover_direct_warns_without_nvidia_smi(self):
+        self._write_executable("nvidia-smi", """import sys
+sys.stderr.write('no devices found\\n')
+raise SystemExit(1)
+""")
+        profile = dict(self.profile, site_id="direct-bare")
+        profile["scheduler"] = {"kind": "none"}
+        profile_path = os.path.join(self.temp, "direct-bare.json")
+        atomic_write_json(profile_path, profile)
+        code, payload = self.cli("site", "add", "--profile", profile_path)
+        self.assertEqual(code, 0, payload)
+        code, payload = self.cli("site", "discover", "direct-bare")
+        self.assertEqual(code, 0, payload)
+        self.assertEqual(payload["gpus"], [])
+        self.assertTrue(any("nvidia-smi" in warning
+                            for warning in payload["warnings"]))
 
     def test_cli_sqlite_error_returns_json_envelope(self):
         import subprocess

@@ -387,12 +387,23 @@ def site_list(args):
 
 
 def site_discover(args):
-    """Enumerate legal Slurm partitions/QoS on a Site so policy defaults are
-    chosen from facts, not guesses. Read-only; at most two scheduler calls."""
+    """Probe a Site so policy defaults are chosen from facts, not guesses.
+    Read-only; dispatched by the Site scheduler kind."""
     store = OperationStore(args.router_home, create=False)
     profile = store.get_site(args.site_id)
-    if profile.get("scheduler", {}).get("kind") != "slurm":
-        raise EntityCtlError("site discovery currently supports Slurm sites only")
+    kind = profile.get("scheduler", {}).get("kind")
+    backend = DISCOVER_BACKENDS.get(kind)
+    if backend is None:
+        raise EntityCtlError(
+            "site discovery currently supports scheduler kinds: %s (got '%s')"
+            % (", ".join(sorted(DISCOVER_BACKENDS)), kind)
+        )
+    return backend(profile)
+
+
+def _slurm_site_discover(profile):
+    """Enumerate legal Slurm partitions/QoS on a Site so policy defaults are
+    chosen from facts, not guesses. Read-only; at most two scheduler calls."""
     ssh = profile.get("transport", {}).get("kind") == "ssh"
     remote_calls = 0
     code, stdout, stderr = run_on_site(
@@ -452,6 +463,103 @@ def site_discover(args):
         "suggested_policy": suggested,
         "warnings": warnings,
     }
+
+
+DISCOVER_BACKENDS = {"slurm": _slurm_site_discover}
+
+
+def _direct_site_discover(profile):
+    """Probe a scheduler-less Site: basic execution environment (bash,
+    python3, timeout), GPU availability via nvidia-smi, and writability of
+    the declared roots.  Read-only; at most three bounded probes."""
+    ssh = profile.get("transport", {}).get("kind") == "ssh"
+    remote_calls = 0
+    warnings = []
+    environment = {"bash": "", "python3": "", "timeout": ""}
+    code, stdout, stderr = run_on_site(profile, [
+        "bash", "-c",
+        "bash --version | head -1; python3 --version 2>&1; "
+        "command -v timeout || command -v gtimeout || true",
+    ])
+    if ssh:
+        remote_calls += 1
+    if code != 0:
+        raise EntityCtlError(
+            "environment probe failed on Site %s: %s"
+            % (profile["site_id"], (stderr.strip() or stdout.strip()))
+        )
+    lines = [line.strip() for line in stdout.splitlines()]
+    environment["bash"] = lines[0] if len(lines) > 0 else ""
+    environment["python3"] = lines[1] if len(lines) > 1 else ""
+    environment["timeout"] = lines[2] if len(lines) > 2 else ""
+    if not environment["python3"].startswith("Python"):
+        warnings.append("python3 is unavailable; the Site executor cannot run")
+    if not environment["timeout"]:
+        warnings.append(
+            "no timeout/gtimeout on the Site; run.sh uses its embedded "
+            "bash timeout for walltime enforcement"
+        )
+    gpus = []
+    try:
+        code, stdout, stderr = run_on_site(
+            profile, ["nvidia-smi", "--query-gpu=name", "--format=csv,noheader"]
+        )
+    except OSError as exc:
+        code, stdout, stderr = 127, "", str(exc)
+    if ssh:
+        remote_calls += 1
+    if code != 0:
+        warnings.append(
+            "nvidia-smi unavailable; GPU runs will fail preflight: %s"
+            % (stderr.strip() or stdout.strip() or "exit %d" % code)
+        )
+    else:
+        gpus = [line.strip() for line in stdout.splitlines() if line.strip()]
+    roots = {}
+    declared = sorted(
+        (name, path) for name, path in profile.get("roots", {}).items() if path
+    )
+    if declared:
+        code, stdout, stderr = run_on_site(profile, [
+            "bash", "-c",
+            'for d in "$@"; do probe="$d"; '
+            'while [ ! -d "$probe" ]; do probe=$(dirname "$probe"); done; '
+            'if [ -w "$probe" ]; then echo "$d|writable"; '
+            'else echo "$d|readonly"; fi; done',
+            "bash",
+        ] + [path for unused_name, path in declared])
+        if ssh:
+            remote_calls += 1
+        if code != 0:
+            raise EntityCtlError(
+                "root probe failed on Site %s: %s"
+                % (profile["site_id"], (stderr.strip() or stdout.strip()))
+            )
+        writable = {}
+        for line in stdout.splitlines():
+            path, unused, state = line.rpartition("|")
+            if path and state in {"writable", "readonly"}:
+                writable[path] = state == "writable"
+        for name, path in declared:
+            roots[name] = {"path": path, "writable": writable.get(path, False)}
+            if not roots[name]["writable"]:
+                warnings.append("root %s is not writable: %s" % (name, path))
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "ok": True,
+        "kind": "entityctl.site.discover",
+        "state_mutated": False,
+        "remote_calls": remote_calls,
+        "site_id": profile["site_id"],
+        "environment": environment,
+        "gpus": gpus,
+        "roots": roots,
+        "suggested_policy": {},
+        "warnings": warnings,
+    }
+
+
+DISCOVER_BACKENDS["none"] = _direct_site_discover
 
 
 def plan_operation(args):

@@ -322,7 +322,9 @@ def _validate_derivations(goal, plan, profile, source_profile, plan_path):
     if payloads != [{"source": input_path, "target": expected_input_target,
                      "sha256": input_sha256}]:
         raise OperationError("derived input payload is invalid")
-    expected_submit = os.path.join(expected_run, "run.sbatch")
+    expected_submit = os.path.join(
+        expected_run,
+        "run.sbatch" if preflight["request"].get("scheduler") == "slurm" else "run.sh")
     expected_manifest = os.path.join(expected_run, "run-manifest.json")
     expected_job_name = "entity-%s" % plan["operation_id"]
     if (preflight["request"].get("run_spec") != run_spec
@@ -612,7 +614,7 @@ def _same_path(left, right):
         return left == right
 
 
-def _reconcile_job(profile, scheduler, job_id, live_state, observed_at):
+def _slurm_reconcile_job(profile, scheduler, job_id, live_state, observed_at):
     """Classify divergence between the recorded job and scheduler reality.
 
     Returns (divergences, extra_remote_calls). Only Slurm facts are used;
@@ -699,12 +701,23 @@ def status_for_project(store, project_root, live=False):
     if not live or not run_identity:
         return result
     scheduler = run_identity.get("scheduler", {})
+    if not scheduler:
+        return result
+    profile = store.get_site(run_identity["site_id"])
+    kind = profile.get("scheduler", {}).get("kind")
+    backend = LIVE_STATUS_BACKENDS.get(kind)
+    if backend is None:
+        raise OperationError(
+            "live status currently supports scheduler kinds: %s (got '%s')"
+            % (", ".join(sorted(LIVE_STATUS_BACKENDS)), kind)
+        )
+    return backend(profile, scheduler, result)
+
+
+def _slurm_live_status(profile, scheduler, result):
     job_id = scheduler.get("job_id", "")
     if not job_id:
         return result
-    profile = store.get_site(run_identity["site_id"])
-    if profile.get("scheduler", {}).get("kind") != "slurm":
-        raise OperationError("live status currently supports Slurm only")
     ssh = profile.get("transport", {}).get("kind") == "ssh"
     code, stdout, stderr = run_on_site(
         profile, ["squeue", "-h", "-j", job_id, "-o", "%T"]
@@ -724,9 +737,135 @@ def status_for_project(store, project_root, live=False):
     observed_at = now_utc()
     result["live"] = {"scheduler": "slurm", "job_id": job_id,
                       "state": state, "observed_at": observed_at}
-    divergences, extra_calls = _reconcile_job(
+    divergences, extra_calls = _slurm_reconcile_job(
         profile, scheduler, job_id, state, observed_at
     )
     result["divergences"] = divergences
     result["remote_calls"] += extra_calls
     return result
+
+
+LIVE_STATUS_BACKENDS = {"slurm": _slurm_live_status}
+
+
+def _direct_foreign_scan(profile, run_root, recorded_pid, recorded_pgid):
+    """Scan for entity run.sh processes working in the Case run root that are
+    not the recorded launch.  Returns (foreign, unknown, detail): the scan
+    degrades to unknown — never to a failure — when pgrep/lsof are missing
+    or the probe itself fails (restricted permissions, container boundary).
+    Members of the recorded process group (e.g. the run.sh timeout watcher,
+    which inherits the launcher argv) are part of the recorded launch, not
+    foreign work."""
+    script = (
+        "command -v pgrep >/dev/null 2>&1 && command -v lsof >/dev/null 2>&1 "
+        "|| { echo UNSUPPORTED; exit 0; }; "
+        "pids=$(pgrep -f 'run\\.sh entity-router:' 2>/dev/null); rc=$?; "
+        "if [ $rc -gt 1 ]; then echo SCAN_FAILED; exit 0; fi; "
+        "for pid in $pids; do "
+        "cwd=$(lsof -a -p \"$pid\" -d cwd -Fn 2>/dev/null | sed -n 's/^n//p'); "
+        "pgid=$(ps -o pgid= -p \"$pid\" 2>/dev/null | tr -d ' '); "
+        "[ -n \"$cwd\" ] && echo \"$pid|$pgid|$cwd\"; done; true"
+    )
+    try:
+        code, stdout, stderr = run_on_site(profile, ["bash", "-c", script])
+    except OSError as exc:
+        return [], True, "out-of-band process scan failed (%s)" % exc
+    if code != 0:
+        return [], True, "out-of-band process scan failed (%s)" % (
+            stderr.strip() or stdout.strip() or "exit %d" % code)
+    if "UNSUPPORTED" in stdout:
+        return [], True, ("pgrep/lsof are unavailable on the Site; foreign "
+                          "processes cannot be scanned")
+    if "SCAN_FAILED" in stdout:
+        return [], True, "out-of-band process scan was refused on the Site"
+    foreign = []
+    for line in stdout.splitlines():
+        fields = line.strip().split("|", 2)
+        if len(fields) != 3 or not fields[0].isdigit():
+            continue
+        pid = int(fields[0])
+        if pid == recorded_pid or (fields[1] and fields[1] == str(recorded_pgid)):
+            continue
+        if _same_path(fields[2], run_root):
+            foreign.append({"pid": pid, "run_root": fields[2]})
+    return foreign, False, ""
+
+
+def _direct_live_status(profile, scheduler, result):
+    """Probe a scheduler-less run: the exit file decides terminal state,
+    kill -0 on the recorded pid decides RUNNING, and a dead process without
+    an exit file is reported as job_gone.  At most three bounded probes:
+    exit file, process liveness, and the foreign-process scan."""
+    pid = scheduler.get("pid")
+    if not pid:
+        return result
+    exit_file = scheduler.get("exit_file", "")
+    run_root = scheduler.get("run_root", "")
+    ssh = profile.get("transport", {}).get("kind") == "ssh"
+    remote_calls = 0
+    exit_code = None
+    if exit_file:
+        try:
+            code, stdout, unused = run_on_site(profile, ["cat", exit_file])
+        except OSError:
+            code, stdout = 127, ""
+        if ssh:
+            remote_calls += 1
+        if code == 0 and stdout.strip().isdigit():
+            exit_code = int(stdout.strip())
+    divergences = []
+    observed_at = now_utc()
+    if exit_code is not None:
+        result["live"] = {"scheduler": "direct", "pid": pid, "state": "EXITED",
+                          "exit_code": exit_code, "observed_at": observed_at}
+        divergences.append({
+            "kind": "state_mismatch", "pid": pid,
+            "recorded": "submitted", "observed": "EXITED",
+            "detail": "recorded process exited with code %s without the "
+                      "router observing it" % exit_code,
+            "observed_at": observed_at,
+        })
+    else:
+        try:
+            code, unused_out, unused_err = run_on_site(profile, ["kill", "-0", str(pid)])
+        except OSError:
+            code = 127
+        if ssh:
+            remote_calls += 1
+        observed_at = now_utc()
+        if code == 0:
+            result["live"] = {"scheduler": "direct", "pid": pid,
+                              "state": "RUNNING", "observed_at": observed_at}
+        else:
+            result["live"] = {"scheduler": "direct", "pid": pid,
+                              "state": "NOT_FOUND", "observed_at": observed_at}
+            divergences.append({
+                "kind": "job_gone", "pid": pid, "confirmed": True,
+                "detail": "recorded process %s is gone and no exit file "
+                          "was written" % pid,
+                "observed_at": observed_at,
+            })
+    if run_root:
+        foreign, unknown, detail = _direct_foreign_scan(
+            profile, run_root, pid, scheduler.get("pgid") or pid)
+        if ssh:
+            remote_calls += 1
+        if unknown:
+            divergences.append({
+                "kind": "untracked_job", "unknown": True,
+                "detail": detail, "observed_at": observed_at,
+            })
+        for item in foreign:
+            divergences.append({
+                "kind": "untracked_job", "pid": item["pid"],
+                "run_root": item["run_root"],
+                "detail": "process %s runs in the Case run root but is not "
+                          "the recorded process %s" % (item["pid"], pid),
+                "observed_at": observed_at,
+            })
+    result["divergences"] = divergences
+    result["remote_calls"] += remote_calls
+    return result
+
+
+LIVE_STATUS_BACKENDS["none"] = _direct_live_status

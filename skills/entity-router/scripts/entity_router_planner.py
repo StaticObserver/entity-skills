@@ -266,7 +266,7 @@ def _current_build_executable(case, profile, explicit):
     return candidates[0], current_id
 
 
-def _site_policy(profile, compute):
+def _slurm_site_policy(profile, compute):
     policy = profile.get("policy", {})
     normalized = dict(compute)
     normalized.setdefault("nodes", 1)
@@ -307,6 +307,59 @@ def _site_policy(profile, compute):
                 or not re.match(r"^[A-Za-z0-9_.@+-]*$", normalized[field])):
             raise PlanError("Site policy produced invalid compute.%s" % field)
     return normalized
+
+
+def _direct_site_policy(profile, compute):
+    """Policy for scheduler-less Sites: no partition/QoS/scheduler account
+    exists, so those fields normalize to empty strings and the submit user
+    defaults to the current user without a needs_decision round-trip."""
+    policy = profile.get("policy", {})
+    normalized = dict(compute)
+    normalized.setdefault("nodes", 1)
+    normalized.setdefault("tasks", 1)
+    normalized.setdefault("cpus_per_task", int(policy.get("default_cpus_per_gpu", 1)))
+    normalized.setdefault("partition", "")
+    normalized.setdefault("qos", "")
+    if "submit_user" not in normalized:
+        if policy.get("default_submit_user"):
+            normalized["submit_user"] = policy["default_submit_user"]
+        else:
+            normalized["submit_user"] = getpass.getuser()
+    maximum = policy.get("max_cpu_per_gpu")
+    if maximum is not None and normalized["cpus_per_task"] > int(maximum):
+        raise PlanError(
+            "compute.cpus_per_task exceeds Site max_cpu_per_gpu=%s" % maximum,
+            "needs_decision",
+            [{"field": "compute.cpus_per_task",
+              "question": "choose no more than %s CPUs per GPU" % maximum}],
+        )
+    for field in ["partition", "qos", "submit_user"]:
+        if (not isinstance(normalized[field], str)
+                or not re.match(r"^[A-Za-z0-9_.@+-]*$", normalized[field])):
+            raise PlanError("Site policy produced invalid compute.%s" % field)
+    return normalized
+
+
+RUN_BACKENDS = {
+    "slurm": {"scheduler": "slurm", "validate_policy": _slurm_site_policy},
+    "none": {"scheduler": "direct", "validate_policy": _direct_site_policy},
+}
+
+
+def _run_backend(profile):
+    kind = profile.get("scheduler", {}).get("kind")
+    backend = RUN_BACKENDS.get(kind)
+    if backend is None:
+        raise PlanError(
+            "run Goal currently supports scheduler kinds: %s (got '%s')"
+            % (", ".join(sorted(RUN_BACKENDS)), kind)
+        )
+    return kind, backend
+
+
+def _site_policy(profile, compute):
+    unused_kind, backend = _run_backend(profile)
+    return backend["validate_policy"](profile, compute)
 
 
 def _content_sha256(profile, path):
@@ -431,8 +484,8 @@ def plan_goal(store, project_root, goal, controller_artifacts=None):
     case, create_case = _resolve_case(store, project_root, goal)
     site_id = goal["site"]
     profile = store.get_site(site_id)
-    if profile.get("scheduler", {}).get("kind") != "slurm":
-        raise PlanError("run Goal currently requires a Slurm Site")
+    unused_kind, backend = _run_backend(profile)
+    scheduler_kind = backend["scheduler"]
     roots = profile.get("roots", {})
     for key in ["build_root", "run_root", "staging_root"]:
         if not roots.get(key):
@@ -466,7 +519,8 @@ def plan_goal(store, project_root, goal, controller_artifacts=None):
     staging_root = os.path.join(roots["staging_root"], case["case_uid"], operation_id)
     receipt_root = os.path.join(staging_root, "receipts")
     manifest = os.path.join(run_root, "run-manifest.json")
-    submit_script = os.path.join(run_root, "run.sbatch")
+    submit_script = os.path.join(
+        run_root, "run.sbatch" if scheduler_kind == "slurm" else "run.sh")
     staged_input = os.path.join(staging_root, "payloads", "input.toml")
     launch_receipt = os.path.join(receipt_root, "run-launch.json")
     prepare_receipt = os.path.join(receipt_root, "run-prepare.json")
@@ -491,8 +545,8 @@ def plan_goal(store, project_root, goal, controller_artifacts=None):
             "step_id": "preflight", "kind": "run.preflight.v1", "site_id": site_id,
             "receipt": preflight_receipt,
             "allowed_roots": [staging_root],
-            "request": {"run_spec": run_spec, "job_name": job_name,
-                        "staging_root": staging_root},
+            "request": {"scheduler": scheduler_kind, "run_spec": run_spec,
+                        "job_name": job_name, "staging_root": staging_root},
         },
         {
             "step_id": "prepare", "kind": "run.prepare.v2", "site_id": site_id,
@@ -500,8 +554,8 @@ def plan_goal(store, project_root, goal, controller_artifacts=None):
             "allowed_roots": [staging_root, run_root],
             "payloads": [{"source": input_path, "target": staged_input,
                           "sha256": input_sha256}],
-            "request": {"run_root": run_root, "manifest": manifest,
-                        "manifest_payload": manifest_payload,
+            "request": {"scheduler": scheduler_kind, "run_root": run_root,
+                        "manifest": manifest, "manifest_payload": manifest_payload,
                         "submit_script": submit_script, "run_spec": run_spec,
                         "staging_root": staging_root, "staged_input": staged_input},
             "identity": run_identity,
@@ -510,8 +564,9 @@ def plan_goal(store, project_root, goal, controller_artifacts=None):
             "step_id": "launch", "kind": "run.launch.v2", "site_id": site_id,
             "receipt": launch_receipt,
             "allowed_roots": [staging_root, run_root],
-            "request": {"run_root": run_root, "submit_script": submit_script,
-                        "job_name": job_name, "submit_user": compute["submit_user"]},
+            "request": {"scheduler": scheduler_kind, "run_root": run_root,
+                        "submit_script": submit_script, "job_name": job_name,
+                        "submit_user": compute["submit_user"]},
             "identity": run_identity,
         },
     ]
@@ -730,16 +785,16 @@ PLAN_STEP_SCHEMAS = {
     "run": [
         ("preflight", "run.preflight.v1",
          {"step_id", "kind", "site_id", "receipt", "allowed_roots", "request"},
-         {"run_spec", "job_name", "staging_root"}),
+         {"scheduler", "run_spec", "job_name", "staging_root"}),
         ("prepare", "run.prepare.v2",
          {"step_id", "kind", "site_id", "receipt", "allowed_roots", "payloads",
           "request", "identity"},
-         {"run_root", "manifest", "manifest_payload", "submit_script", "run_spec",
-          "staging_root", "staged_input"}),
+         {"scheduler", "run_root", "manifest", "manifest_payload", "submit_script",
+          "run_spec", "staging_root", "staged_input"}),
         ("launch", "run.launch.v2",
          {"step_id", "kind", "site_id", "receipt", "allowed_roots", "request",
           "identity"},
-         {"run_root", "submit_script", "job_name", "submit_user"}),
+         {"scheduler", "run_root", "submit_script", "job_name", "submit_user"}),
     ],
     "build": [
         ("register", "build.register.v1",

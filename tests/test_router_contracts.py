@@ -93,8 +93,8 @@ class RouterContractTest(unittest.TestCase):
         with open(os.path.join(ROUTER_ROOT, "SKILL.md"), "r") as handle:
             skill = handle.read()
         self.assertIn("status", skill)
-        self.assertIn("controller-local", skill)
-        self.assertIn("at most three bounded scheduler queries", skill)
+        self.assertIn("控制器本地", skill)
+        self.assertIn("最多做三次有界的后端查询", skill)
 
 
 if __name__ == "__main__":
