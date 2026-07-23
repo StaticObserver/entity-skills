@@ -1,7 +1,8 @@
 """Gate E: analysis reproducibility.
 
-Light version: the analysis report and a rerunnable script must exist, and
-the physics claims in the submission must appear in the agent's report
+Light version: the analysis report and a rerunnable script must exist (both
+are required deliverables in task.md; a missing script fails), and the
+physics claims in the submission must appear in the agent's report
 (string-level consistency). A full clean-room re-run of the analysis script
 is out of scope for v1 and reported as unknown when requested evidence is
 missing.
@@ -35,9 +36,9 @@ def run(project: Path, submission: Dict[str, Any]) -> Dict[str, Any]:
     scripts = sorted(project.glob("analysis/*.py")) + sorted(project.glob("analysis/*.ipynb"))
     checks.append(_check(
         "analysis_script_exists",
-        "pass" if scripts else "unknown",
+        "pass" if scripts else "fail",
         f"{len(scripts)} analysis script(s): {[s.name for s in scripts]}" if scripts
-        else "no rerunnable analysis script found; reproducibility unverified",
+        else "no rerunnable analysis script found (task.md requires analysis/analyze.py)",
     ))
 
     if report_path.is_file():

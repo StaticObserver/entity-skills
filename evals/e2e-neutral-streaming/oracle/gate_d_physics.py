@@ -20,6 +20,36 @@ def _check(name: str, status: str, detail: str) -> Dict[str, str]:
     return {"name": name, "status": status, "detail": detail}
 
 
+def weighted_mean(values, weights=None):
+    """Mean of values; weighted by the particle weight column when given.
+
+    Returns (mean, weighted). Falls back to a simple mean when weights are
+    absent or non-positive (and says so via the flag).
+    """
+    values = list(values)
+    if weights is not None:
+        weights = list(weights)
+        total = sum(weights)
+        if total > 0:
+            return sum(v * w for v, w in zip(values, weights)) / total, True
+    return sum(values) / len(values), False
+
+
+def ux_drift_max(snapshot_species_means):
+    """Max over ALL snapshots of |mean_ux - 0.2| / 0.2.
+
+    snapshot_species_means: per snapshot, the per-species mean ux values;
+    the per-snapshot value averages across species (as before), the reported
+    metric is the max over time — drift anywhere in the run counts, not just
+    at the last snapshot.
+    """
+    deviations = []
+    for means in snapshot_species_means:
+        avg = sum(means) / len(means)
+        deviations.append(abs(avg - 0.2) / 0.2)
+    return max(deviations) if deviations else None
+
+
 def evaluate(metrics: Dict[str, Any], thresholds: Dict[str, Any]) -> List[Dict[str, str]]:
     """Compare extracted metrics against frozen thresholds.
 
@@ -42,18 +72,34 @@ def evaluate(metrics: Dict[str, Any], thresholds: Dict[str, Any]) -> List[Dict[s
     else:
         checks.append(_check("particle_count_conservation", "unknown", "no particle counts extracted"))
 
-    ux = metrics.get("ux_mean_final")
+    ux = metrics.get("ux_drift_relative_max")
     if ux is not None:
-        tol = spec["ux_drift_relative_change"]["tolerance"]
-        change = abs(ux - 0.2) / 0.2
-        ok = change <= tol
+        tol = spec["ux_drift_relative_max"]["tolerance"]
+        ok = ux <= tol
+        n_snap = metrics.get("ux_snapshots")
+        span = f" over {n_snap} snapshots" if n_snap else ""
+        how = ("weight-averaged" if metrics.get("ux_weighted")
+               else "simple mean (no usable weight column)")
         checks.append(_check(
-            "ux_drift_relative_change",
+            "ux_drift_relative_max",
             "pass" if ok else "fail",
-            f"|mean_ux(final) - 0.2| / 0.2 = {change:.4f} (tolerance {tol})",
+            f"max{span} |mean_ux - 0.2| / 0.2 = {ux:.4f} (tolerance {tol}; {how})",
         ))
     else:
-        checks.append(_check("ux_drift_relative_change", "unknown", "no particle ux extracted"))
+        checks.append(_check("ux_drift_relative_max", "unknown", "no particle ux extracted"))
+
+    n_min = metrics.get("min_particles_per_species")
+    if n_min is not None:
+        floor = spec["min_particles_per_species"]["tolerance"]
+        ok = n_min >= floor
+        checks.append(_check(
+            "min_particles_per_species",
+            "pass" if ok else "fail",
+            f"last-snapshot sampled particles per species: min {n_min} (minimum {floor})",
+        ))
+    else:
+        checks.append(_check("min_particles_per_species", "unknown",
+                             "no per-species particle counts extracted"))
 
     b1 = metrics.get("b1_mean_deviation_max")
     if b1 is not None:
@@ -190,14 +236,29 @@ def extract_metrics(data_root: Path) -> Dict[str, Any]:
     times = list(particles.times)
     if times:
         counts: Dict[str, Any] = {}
-        ux_means: List[float] = []
-        for sp in particles.species:
-            first = particles.sel(t=times[0], method="nearest").sel(sp=sp).load(cols=["ux", "w"])
-            last = particles.sel(t=times[-1], method="nearest").sel(sp=sp).load(cols=["ux", "w"])
-            counts[str(sp)] = (len(first["ux"].values), len(last["ux"].values))
-            ux_means.append(float(np.mean(last["ux"].values)))
-        metrics["particle_counts"] = counts
-        metrics["ux_mean_final"] = sum(ux_means) / len(ux_means)
+        per_snapshot_means: List[List[float]] = []
+        all_weighted = True
+        for t_index, t in enumerate(times):
+            species_means: List[float] = []
+            for sp in particles.species:
+                snapshot = particles.sel(t=t, method="nearest").sel(sp=sp).load(cols=["ux", "w"])
+                ux_vals = [float(v) for v in snapshot["ux"].values]
+                try:
+                    w_vals = [float(v) for v in snapshot["w"].values]
+                except Exception:
+                    w_vals = None
+                mean, weighted = weighted_mean(ux_vals, w_vals)
+                all_weighted = all_weighted and weighted
+                species_means.append(mean)
+                if t_index == 0 or t_index == len(times) - 1:
+                    slot = counts.setdefault(str(sp), [0, 0])
+                    slot[0 if t_index == 0 else 1] = len(ux_vals)
+            per_snapshot_means.append(species_means)
+        metrics["particle_counts"] = {k: tuple(v) for k, v in counts.items()}
+        metrics["min_particles_per_species"] = min(v[1] for v in counts.values())
+        metrics["ux_drift_relative_max"] = ux_drift_max(per_snapshot_means)
+        metrics["ux_snapshots"] = len(times)
+        metrics["ux_weighted"] = all_weighted
     return metrics
 
 

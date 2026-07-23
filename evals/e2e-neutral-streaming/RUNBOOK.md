@@ -14,9 +14,9 @@
 
 站点与约束：
 
-- 服务器：`ssh siyuan`（siyuan 与 pi2 是两个不同集群，不得混用）；
-- GPU partition：`debuga100`，1 node / **2 GPU（MPI，2 tasks）** / walltime ≤ 10 分钟；
-- 禁止在登录节点编译；数据分析只用 CPU 资源，不占用 GPU 节点；
+- 服务器：`ssh m87`（个人主机，单 GPU，**无 Slurm、无 MPI**，环境由 agent 自行探索）；
+- 资源上限：1 GPU / walltime ≤ 10 分钟；
+- 数据分析只用 CPU 资源，不占用 GPU；
 - 源码与依赖：agent 自行发现（source-cache 已预置在可发现位置，路径不进任务文本）；
 - 不使用公网；不修改只读依赖和冻结源码；analysis 不写入 raw-data root；
 - 凭据不进入任何源码、脚本、日志或结果文件；
@@ -25,7 +25,7 @@
 
 ## 两个变体
 
-| | S：`skills-v5` | N：`no-entity-skills` |
+| | S：`skills-v5`（完整 bundle） | N：`skills-no-router`（仅无 entity-router） |
 |---|---|---|
 | Entity skills | `entityctl install` 发布当前 bundle（commit `6c6e205`） | `~/.claude/skills/` 下 entity-* 投影临时移走 |
 | 模型 / 任务文本 / shell·ssh 工具 | 相同 | 相同 |
@@ -37,13 +37,32 @@
 推荐直接用封装脚本（内部等价于下面的手动步骤）：
 
 ```bash
-# 开跑（建目录、注册 trace、启动 agent；N 组会先检查 entity-* 已移走）
+# 开跑（建目录、注册 trace、启动 agent；启动前校验技能投影状态：
+# S 组要求 entity-router 在场，N 组要求仅 entity-router 已移走、
+# env-build/pgen/nt2py 三者保留——不满足则拒绝启动）
 evals/e2e-neutral-streaming/run_round.sh skills-v5 2026-07-21-S1 [model]
-evals/e2e-neutral-streaming/run_round.sh no-entity-skills 2026-07-21-N1 [model]
+evals/e2e-neutral-streaming/run_round.sh skills-no-router 2026-07-22-Snr1 [model]
 
-# 收尾（导入 transcript、阶段切分、关闭 trace；finish 必须是最后一步）
+# 收尾（先快照 project 产物到 traces/<run>/project-snapshot/，再导入
+# transcript、阶段切分、关闭 trace；finish 必须是最后一步；重复执行会
+# 检测到 terminal event 并直接跳过）
 evals/e2e-neutral-streaming/finish_round.sh 2026-07-21-S1 completed
+
+# 远端清理（先拉 slurm 脚本/日志到 traces/<run>/remote-logs/，默认 dry-run，
+# -f 才真正删除远端 data_root 及其 run 目录，最后 squeue 确认无残留作业）
+evals/e2e-neutral-streaming/clean_remote.sh 2026-07-21-S1 -f
 ```
+
+`run_round.sh` 会一并把 `fixtures/submission.schema.json` 拷进 project
+（submission.json 必须符合它，schema 符合度对所有组公平），开跑前自检
+`~/entity-eval-runs/` 必须为空（非空直接退出），并对 `~/.claude/projects/`
+下早于今天的 entity-eval-runs session 目录打印残留警告。S 组开跑前还会把
+`entityctl doctor` 的 bundle_version/bundle_hash 写入
+`~/entity-eval-traces/<run>/bundle.json`（只读取版本事实，不安装）。
+
+每轮结束后：清理 `~/.claude/projects/` 下本轮 session 目录（slug 形如
+`-Users-…-entity-eval-runs-<run>-project`），再按上面 `clean_remote.sh`
+清理远端。
 
 手动步骤：
 
@@ -62,7 +81,7 @@ python3 $OBS start \
   --skill skills/entity-router --skill skills/entity-pgen \
   --skill skills/entity-env-build --skill skills/entity-nt2py \
   --trace-home ~/entity-eval-runs/<run>/traces
-# → 输出 <run-dir>（N 组去掉 --skill 行，--variant no-entity-skills）
+# → 输出 <run-dir>（N 组去掉 --skill 行，--variant skills-no-router）
 # 注：--agent-configuration / --tool-configuration 要求小写 SHA-256 hex，
 #     例如 shasum -a 256 <claude-settings.json> | cut -d' ' -f1
 
@@ -93,13 +112,15 @@ agent 的运行命令、settings、环境与裸跑逐字节一致。
 
 ```text
 ├── project/       # Agent 工作区（PGen、TOML、docs、分析脚本）
-├── controller/    # S 组 Router home（export ENTITY_ROUTER_HOME 指到这里；N 组不用）
-└── traces/        # skill_observer --trace-home 指到这里
+└── controller/    # S 组 Router home（export ENTITY_ROUTER_HOME 指到这里；N 组不创建）
 ```
 
-远端 `siyuan` 上的 source/build/run/analysis 根由 site profile 的 `roots`
+Harness 状态在 agent 不可及的 `~/entity-eval-traces/<run>/`（trace home、
+transcript、`project-snapshot/`、`remote-logs/`、`bundle.json`）。
+
+远端 `m87` 上的 source/build/run/analysis 根由 site profile 的 `roots`
 决定（S 组用 `entityctl site add` 注册时指定，建议每轮换路径，如
-`~/entity-eval/<run-name>/`）；Slurm 日志在远端 run root 的 `logs/`。
+`~/entity-eval/<run-name>/`）；m87 无 Slurm，run 日志由 agent 自行落盘。
 
 ## Oracle 独立复核
 

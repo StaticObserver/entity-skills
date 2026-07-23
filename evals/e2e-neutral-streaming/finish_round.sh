@@ -22,6 +22,25 @@ RUN="$HOME/entity-eval-runs/$RUN_NAME"
 HARNESS="$HOME/entity-eval-traces/$RUN_NAME"
 RUN_DIR="$(cat "$HARNESS/run_dir.txt")"
 
+# Snapshot agent artifacts BEFORE anything else (B1: S1 lost its pgen/TOML to
+# cleanup before review). Missing items are skipped silently.
+SNAP="$HARNESS/project-snapshot"
+mkdir -p "$SNAP"
+for item in input.toml pgen.hpp submission.json docs analysis oracle-report.json; do
+  if [[ -e "$RUN/project/$item" ]]; then
+    cp -R "$RUN/project/$item" "$SNAP/"
+  fi
+done
+echo "==> project snapshot: $SNAP"
+
+# Idempotency (C3): a terminal event means this round was already closed.
+if [[ -f "$RUN_DIR/events.jsonl" ]] && \
+   grep -qE '"type": ?"run\.(finished|failed)"' "$RUN_DIR/events.jsonl"; then
+  echo "==> terminal event already present in $RUN_DIR/events.jsonl;"
+  echo "    round $RUN_NAME was already closed — nothing to do."
+  exit 0
+fi
+
 TRANSCRIPT="${3:-}"
 if [[ -z "$TRANSCRIPT" && -s "$HARNESS/transcript.jsonl" ]]; then
   TRANSCRIPT="$HARNESS/transcript.jsonl"
@@ -48,10 +67,27 @@ set +e
 python3 "$OBS" phases --run-dir "$RUN_DIR" --transcript "$TRANSCRIPT"
 PHASES_RC=$?
 set -e
-if [[ $PHASES_RC -ne 0 ]]; then
-  echo "warning: phases reports comparable=false (unclassified > 10%);" >&2
-  echo "         inspect $RUN_DIR/phases.json before trusting comparisons" >&2
+# C3: warn from the FINAL on-disk phases.json, not from the exit code of a
+# possibly superseded pass.
+if [[ -f "$RUN_DIR/phases.json" ]]; then
+  COMPARABLE="$(python3 -c '
+import json, sys
+print(json.load(open(sys.argv[1])).get("comparable"))
+' "$RUN_DIR/phases.json")"
+  if [[ "$COMPARABLE" == "False" ]]; then
+    echo "warning: phases.json reports comparable=false (unclassified > 10%);" >&2
+    echo "         inspect $RUN_DIR/phases.json before trusting comparisons" >&2
+  fi
+elif [[ $PHASES_RC -ne 0 ]]; then
+  echo "warning: phases exited $PHASES_RC and left no phases.json at $RUN_DIR" >&2
 fi
+
+# Activities report (the comparison metric surface: per-category counters,
+# job lifecycle, skill adoption). Always exits 0; phases.json above is kept
+# only for wall-clock/token totals — phase segmentation itself is deprecated
+# as a comparison metric (it assumed the router pipeline's fixed order).
+python3 "$OBS" activities --run-dir "$RUN_DIR" --transcript "$TRANSCRIPT" || \
+  echo "warning: activities report failed; continuing" >&2
 
 read INPUT_TOKENS OUTPUT_TOKENS <<< "$(printf '%s' "$IMPORT_OUT" | python3 -c '
 import json, sys

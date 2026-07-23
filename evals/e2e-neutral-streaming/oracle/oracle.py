@@ -73,7 +73,10 @@ def main() -> int:
     gates = []
     gates.append(gate_b_pgen_build.run(project, spec, submission))
     if args.transcript:
-        gates.append(gate_a_safety.run(args.transcript, submission))
+        # The agent necessarily references its own run root; only cross-round
+        # references are violations (derive the run name from the project path).
+        gates.append(gate_a_safety.run(args.transcript, submission,
+                                       self_run_name=project.parent.name))
     else:
         gates.append({"gate": "A-safety", "status": "unknown",
                       "checks": [{"name": "transcript", "status": "unknown",

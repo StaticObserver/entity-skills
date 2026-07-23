@@ -10,11 +10,17 @@
       "tolerance": 0,
       "gold_observation": "exactly conserved"
     },
-    "ux_drift_relative_change": {
-      "definition": "Weight-averaged streaming four-velocity ux per species stays at the initialized drift (0.2 c).",
-      "formula": "abs(mean_ux(t_last) - 0.2) / 0.2 <= tolerance, mean over all macro-particles of the species at the last snapshot",
+    "ux_drift_relative_max": {
+      "definition": "Weight-averaged streaming four-velocity ux per species stays at the initialized drift (0.2 c) for the WHOLE run, not just the last snapshot.",
+      "formula": "max over every particle snapshot of abs(mean_ux(t) - 0.2) / 0.2 <= tolerance, where mean_ux(t) averages the weight-averaged per-species means (simple mean fallback when no usable weight column)",
       "tolerance": 0.05,
       "gold_observation": "0.198/0.196 at t=45.1 (~1-2%)"
+    },
+    "min_particles_per_species": {
+      "definition": "Enough macro-particles per species are sampled at the last particle snapshot for the ux statistic to be meaningful.",
+      "formula": "min over species of N_sp_sampled(t_last) >= tolerance",
+      "tolerance": 100,
+      "gold_observation": "~410 per species at stride 10"
     },
     "b1_mean_absolute_deviation": {
       "definition": "Domain-averaged B1 keeps the imposed uniform background (normalized units, larmor0 = 1).",

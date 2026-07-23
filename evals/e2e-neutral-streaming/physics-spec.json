@@ -43,15 +43,15 @@
     "deposit": "zigzag",
     "shape_order": 1,
     "output": true,
-    "mpi": true,
+    "mpi": false,
     "debug": false,
     "tests": false,
     "cxx_standard": 20
   },
   "resource_ceiling": {
     "nodes": 1,
-    "tasks": 2,
-    "gpus": 2,
+    "tasks": 1,
+    "gpus": 1,
     "walltime": "00:10:00"
   },
   "required_outputs": {
@@ -59,6 +59,9 @@
     "particle_snapshots_min": 2,
     "field_quantities": ["E", "B", "J", "Rho"],
     "particle_quantities": ["x1", "ux1", "ux2", "ux3", "weight", "species"]
+  },
+  "output": {
+    "particle_stride_max": 20
   },
   "runtime": {
     "status": "frozen_by_gold_run_2026-07-21",
