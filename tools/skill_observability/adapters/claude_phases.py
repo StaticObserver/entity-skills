@@ -32,6 +32,14 @@ from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
 from ..core import TraceError, _assert_write_root_safe, load_manifest, run_paths, sha256_bytes
+from .skill_adoption import (
+    ADOPTION_RULES,
+    COMPILED_ADOPTION_RULES,
+    SKILL_DOC_RE,
+    match_text,
+    serialize_input,
+    summarize_skill_adoption,
+)
 
 # Lifecycle order. Index in this list is the phase priority: a rule match may
 # only advance the current phase, never regress it.
@@ -51,40 +59,17 @@ DEFAULT_RULES: Sequence[Tuple[str, str]] = (
     ("discover", r"\bssh\b|\bsinfo\b|\bsqueue\b|\bscontrol\b|\bls\b|\bfind\b|module (list|avail|load)|\bwhich\b|\benv\b"),
 )
 
-# Skill adoption rule table. Ordered (category, regex) pairs matched against
-# the same "<tool name> <tool targets>" text as the phase rules, subject to
-# the same SKILL_DOC_RE skip. Each tool_use item counts in at most ONE
-# category: the first rule that matches wins, so `entityctl apply` is
-# skill.router only and `entity-build.sh` is skill.env_build only.
-ADOPTION_RULES: Sequence[Tuple[str, str]] = (
-    ("control_plane_surgery", r"\bsqlite3?\b"),
-    ("skill.router", r"\bentityctl\b"),
-    ("skill.env_build", r"entity[-_]checkpoint|entity[-_]compat|entity-build\.sh"),
-    ("skill.pgen", r"pgen_preflight"),
-    ("skill.nt2py", r"\bnt2\b|nt2\.Data|inspect_nt2_data"),
-    ("raw.sbatch", r"\bsbatch\b"),
-    ("raw.srun", r"\bsrun\b"),
-    ("raw.scancel", r"\bscancel\b"),
-    ("raw.scheduler_poll", r"\b(squeue|sacct|scontrol)\b"),
-    ("raw.build", r"\b(cmake|make|nvcc|spack)\b"),
-)
-
-COMPILED_ADOPTION_RULES: List[Tuple[str, "re.Pattern[str]"]] = [
-    (category, re.compile(pattern)) for category, pattern in ADOPTION_RULES
-]
-
-# Tool targets under an installed skill directory are orientation (reading
-# SKILL.md/references), never phase work or skill adoption.
-SKILL_DOC_RE = re.compile(r"/\.claude/skills/")
+# Skill adoption rule table, match text construction, and the SKILL_DOC_RE
+# skip now live in adapters/skill_adoption.py (shared with
+# claude_activities); the names above are re-exported for compatibility.
 
 SSH_RE = re.compile(r"\bssh\b|\bscp\b|\brsync\b")
 
-# Fields whose *values* rule patterns are matched against. Deliberately only
-# tool targets (command line, file paths, search patterns) — never free-form
-# content such as Write/Edit file bodies or subagent prompts. A plan document
-# that merely *mentions* submission.json must not trigger the submission
-# phase; only a Write whose file_path IS submission.json may.
+# Kept as aliases for the shared helpers; see adapters/skill_adoption.py
+# for why only tool targets (command line, file paths, search patterns)
+# are matched — never free-form content such as Write/Edit file bodies.
 _MATCH_FIELDS = ("command", "file_path", "path", "pattern", "notebook_path")
+_serialize_input = serialize_input
 
 _UNCLASSIFIED = "unclassified"
 
@@ -98,16 +83,6 @@ def _parse_time(value: Any) -> Optional[datetime]:
     except ValueError:
         return None
     return parsed if parsed.tzinfo is not None else None
-
-
-def _serialize_input(value: Any) -> str:
-    """Build the match text for a tool input from target fields only."""
-    if isinstance(value, str):
-        return value
-    if isinstance(value, Mapping):
-        parts = [str(value[key]) for key in _MATCH_FIELDS if key in value]
-        return " ".join(parts)
-    return ""
 
 
 def compile_rules(rules: Optional[Sequence[Mapping[str, str]]]) -> List[Tuple[int, "re.Pattern[str]"]]:
@@ -202,7 +177,7 @@ def segment_transcript(
     buckets[_UNCLASSIFIED] = _empty_bucket()
     current = -1  # index into PHASE_ORDER; -1 = unclassified
     session_id = ""
-    adoption_counts: Dict[str, int] = {category: 0 for category, _ in COMPILED_ADOPTION_RULES}
+    adoption_calls: List[Dict[str, Any]] = []
 
     for number, line in enumerate(raw.decode("utf-8").splitlines(), 1):
         if not line.strip():
@@ -233,15 +208,12 @@ def segment_transcript(
                 item_type = item.get("type")
                 if item_type == "tool_use":
                     calls += 1
-                    text = "%s %s" % (item.get("name") or "", _serialize_input(item.get("input")))
+                    adoption_calls.append({"name": item.get("name"), "input": item.get("input")})
+                    text = match_text(item.get("name"), item.get("input"))
                     if SSH_RE.search(text):
                         ssh += 1
                     if SKILL_DOC_RE.search(text):
                         continue  # reading installed skill docs is orientation
-                    for category, pattern in COMPILED_ADOPTION_RULES:
-                        if pattern.search(text):
-                            adoption_counts[category] += 1
-                            break
                     for phase_index, pattern in compiled:
                         if phase_index > best and pattern.search(text):
                             best = phase_index
@@ -265,28 +237,7 @@ def segment_transcript(
     phases = [_finalize_bucket(name, buckets[name]) for name in PHASE_ORDER]
     unclassified = _finalize_bucket(_UNCLASSIFIED, buckets[_UNCLASSIFIED])
 
-    skill_calls = {
-        name: adoption_counts["skill." + name]
-        for name in ("router", "env_build", "pgen", "nt2py")
-    }
-    skill_calls["total"] = sum(skill_calls.values())
-    raw_calls = {
-        name: adoption_counts["raw." + name]
-        for name in ("sbatch", "srun", "scancel", "scheduler_poll", "build")
-    }
-    raw_calls["total"] = sum(raw_calls.values())
-    skill_total = skill_calls["total"]
-    raw_total = raw_calls["total"]
-    skill_adoption = {
-        "skill_calls": skill_calls,
-        "raw_calls": raw_calls,
-        "control_plane_surgery_calls": adoption_counts["control_plane_surgery"],
-        "skill_call_share": (
-            round(skill_total / (skill_total + raw_total), 6)
-            if skill_total + raw_total > 0
-            else None
-        ),
-    }
+    skill_adoption = summarize_skill_adoption(adoption_calls)
 
     totals = _empty_bucket()
     for bucket in [*phases, unclassified]:

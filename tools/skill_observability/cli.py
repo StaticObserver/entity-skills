@@ -29,6 +29,7 @@ from .evidence import (
 from .adapters.codex_rollout import import_codex_rollout
 from .adapters.claude_transcript import import_claude_transcript
 from .adapters.claude_phases import write_phases_report
+from .adapters.claude_activities import write_activities_report
 from .adapters.kimi_wire import import_kimi_session
 
 
@@ -221,6 +222,57 @@ def command_phases(args: argparse.Namespace) -> int:
         "artifact_id": artifact["artifact_id"],
     })
     return 0 if report["comparable"] else 1
+
+
+def command_activities(args: argparse.Namespace) -> int:
+    rules = None
+    if args.rules:
+        try:
+            rules = json.loads(args.rules.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise TraceError(f"cannot read rules file: {exc}") from exc
+        if not isinstance(rules, list):
+            raise TraceError("rules file must contain a JSON array of category/pattern objects")
+    report = write_activities_report(
+        args.run_dir,
+        transcript_path=args.transcript,
+        rules=rules,
+        output_path=args.output,
+    )
+    event = append_event(
+        args.run_dir,
+        event_type="validation.finished",
+        source_kind="validator",
+        source_id="skill-observer.activities",
+        evidence_level="observed",
+        phase="verify",
+        payload={
+            "kind": "claude-activities",
+            "transcript_sha256": report["source"]["transcript_sha256"],
+            "session_id": report["source"]["session_id"],
+            "categories_present": [c["name"] for c in report["categories"] if c["records"] > 0],
+            "unclassified_tool_share": report["unclassified_tool_share"],
+            # descriptive metric only: unclassified share never gates the exit code
+            "status": "pass",
+        },
+    )
+    artifact = register_artifact(
+        args.run_dir,
+        path=Path(report["written_to"]),
+        role="activities-report",
+        authority="derived:claude-transcript",
+        produced_by=event["event_id"],
+        media_type="application/json",
+        phase="verify",
+    )
+    _json_out({
+        "ok": True,
+        "written_to": report["written_to"],
+        "unclassified_tool_share": report["unclassified_tool_share"],
+        "submissions_total": report["job_lifecycle"]["submissions_total"],
+        "artifact_id": artifact["artifact_id"],
+    })
+    return 0
 
 
 def command_artifact(args: argparse.Namespace) -> int:
@@ -420,6 +472,18 @@ def build_parser() -> argparse.ArgumentParser:
     phases.add_argument("--output", type=Path,
                         help="Report path (default: <run-dir>/phases.json)")
     phases.set_defaults(func=command_phases)
+
+    activities = sub.add_parser(
+        "activities",
+        help="Tag a Claude Code transcript with activity categories (offline, post-hoc)",
+    )
+    _add_run_dir(activities)
+    activities.add_argument("--transcript", type=Path, required=True)
+    activities.add_argument("--rules", type=Path,
+                            help="Optional JSON array of {\"category\", \"pattern\"} overrides")
+    activities.add_argument("--output", type=Path,
+                            help="Report path (default: <run-dir>/activities.json)")
+    activities.set_defaults(func=command_activities)
 
     artifact = sub.add_parser("artifact", help="Fingerprint and link an existing artifact")
     _add_run_dir(artifact)
