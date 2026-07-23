@@ -38,7 +38,9 @@
 
 > **模板是针对特定 CFL 优化的；必须使用与该模板匹配的 CFL。**
 
-论文中的 CFL 使用标准约定。换算为 Entity 的 CFL 需乘以 √(N_dim)：
+论文（Blinne et al. 2018）的 CFL 使用归一化约定（Yee 极限为 1）。Entity 的
+CFL 是标准约定——`dt = CFL * dx0`，其中 `dx0 = metric.dxMin()`（见
+`src/framework/parameters/algorithms.cpp`）——因此换算需除以 √(N_dim)：
 - **2D**：Entity CFL = 论文 CFL / √2
 - **3D**：Entity CFL = 论文 CFL / √3
 
