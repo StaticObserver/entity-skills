@@ -5,8 +5,47 @@ All notable changes to the Entity skills bundle are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 The bundle is versioned with semantic versioning, starting at 0.x: the first
 version considered production-satisfactory will be released as 1.0.0. Schema
-versions (store, plan, GoalSpec, checkpoint, compat checker) are independent
-integer compatibility contracts and are not the product version.
+versions (store, checkpoint, compat checker) are independent integer
+compatibility contracts and are not the product version.
+
+## [Unreleased]
+
+Case-centric restructure: the plan/apply control plane is replaced by
+deterministic primitives. Agents plan the simulation flow; the CLI reads and
+writes deterministic records, renders deterministic scripts, and probes
+evidence — big flows are no longer wrapped in code.
+
+### Added
+
+- `entityctl status` human-readable dashboard: readiness board
+  (source/pgen/build/run/data/analysis with evidence), run ledger, pending
+  items, and derived next steps; `--json` preserves the machine contract.
+- Primitive commands: `show`, `render-run`, `snapshot-source`, and
+  `record build|run-prepare|run-launch|run-exit|data|intent`. Write
+  primitives probe their own evidence before booking facts and fail with
+  zero writes; `record run-launch` keeps exactly-once via receipts, runs a
+  Slurm preflight before submitting, and can adopt externally submitted
+  jobs (`--adopt-job` / `--adopt-pid`).
+- `record intent`: the research intent is the only stored pointer, shown on
+  the dashboard.
+- Six per-activity playbooks (`skills/entity-router/playbooks/`):
+  setup-env, develop-pgen, build, run-simulation, analyze-data, debug.
+- `store migrate` v1→v2: archives legacy operations to
+  `<router_home>/archive/`, then installs the slimmed store.
+
+### Changed
+
+- `entity-router/SKILL.md` rewritten around the research workflow;
+  control-plane internals moved to `references/router-runtime.md`.
+- Store schema v2: drops the operations/steps tables and the whole
+  Operation API; concurrency degrades to the `BEGIN IMMEDIATE` file lock,
+  events remain as passive audit.
+
+### Removed
+
+- The plan/apply protocol: `entityctl plan/apply/operation cancel`,
+  GoalSpec and plan JSON schemas, the planner, the apply engine, and
+  claim/lease machinery. Legacy operations are export-archived on migrate.
 
 ## [0.5.0] - 2026-07-22
 
