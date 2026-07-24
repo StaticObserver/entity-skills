@@ -1,20 +1,26 @@
 #!/usr/bin/env python3
-"""Transactional controller store for Entity Router operations.
+"""Transactional controller store for Entity Router Case facts.
 
 The database contains only compact control facts and evidence references.  Raw
 simulation data, long logs, build trees, and run artifacts remain on their
 owner sites.  This module is standard-library only and Python 3.6 compatible.
+
+Schema v2 (2026-07): the retired plan/apply protocol tables (operations,
+steps) and the cases.active_operation_id column are gone; the record
+primitives book identities/current/events directly.  Concurrency control
+degrades to the BEGIN IMMEDIATE file lock in ``transaction`` — there is no
+claim/lease mechanism anymore.  ``entityctl store migrate`` archives a v1
+database's operations/steps to JSON before rebuilding the store (see
+entityctl.py).
 """
 
 from __future__ import print_function
 
 import contextlib
-import datetime
 import hashlib
 import json
 import os
 import sqlite3
-import uuid
 
 from entity_router_common import (
     RouterError,
@@ -24,7 +30,7 @@ from entity_router_common import (
 )
 
 
-STORE_SCHEMA_VERSION = 1
+STORE_SCHEMA_VERSION = 2
 
 
 class StoreError(RouterError):
@@ -53,11 +59,8 @@ def _load(value, default=None):
     return json.loads(value)
 
 
-def _utc_after(seconds):
-    value = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(seconds=seconds)
-    return value.replace(microsecond=0).isoformat().replace("+00:00", "Z")
-
-
+# v2: no operations/steps tables and no cases.active_operation_id; events
+# keeps its operation_id column as a passive audit field only.
 SCHEMA = """
 PRAGMA foreign_keys = ON;
 
@@ -79,7 +82,6 @@ CREATE TABLE IF NOT EXISTS cases (
     source_json TEXT NOT NULL,
     current_json TEXT NOT NULL,
     legacy_json TEXT NOT NULL,
-    active_operation_id TEXT,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );
@@ -102,41 +104,6 @@ CREATE TABLE IF NOT EXISTS identities (
 
 CREATE UNIQUE INDEX IF NOT EXISTS one_current_identity
 ON identities(case_uid, dimension) WHERE is_current = 1;
-
-CREATE TABLE IF NOT EXISTS operations (
-    operation_id TEXT PRIMARY KEY,
-    case_uid TEXT NOT NULL REFERENCES cases(case_uid),
-    goal_hash TEXT NOT NULL,
-    plan_hash TEXT NOT NULL,
-    goal_json TEXT NOT NULL,
-    plan_json TEXT NOT NULL,
-    status TEXT NOT NULL,
-    result_json TEXT NOT NULL,
-    actor_json TEXT NOT NULL,
-    claim_token TEXT,
-    claim_expires_at TEXT,
-    created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL,
-    UNIQUE(case_uid, plan_hash)
-);
-
-CREATE UNIQUE INDEX IF NOT EXISTS one_active_operation
-ON operations(case_uid) WHERE status IN ('pending','running');
-
-CREATE TABLE IF NOT EXISTS steps (
-    operation_id TEXT NOT NULL REFERENCES operations(operation_id),
-    step_index INTEGER NOT NULL,
-    step_id TEXT NOT NULL,
-    kind TEXT NOT NULL,
-    spec_json TEXT NOT NULL,
-    status TEXT NOT NULL,
-    effect_json TEXT NOT NULL,
-    evidence_json TEXT NOT NULL,
-    error_json TEXT NOT NULL,
-    updated_at TEXT NOT NULL,
-    PRIMARY KEY (operation_id, step_index),
-    UNIQUE(operation_id, step_id)
-);
 
 CREATE TABLE IF NOT EXISTS events (
     event_id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -183,7 +150,9 @@ class OperationStore(object):
                 "SELECT value FROM meta WHERE key='schema_version'"
             ).fetchone()[0]
             if int(current) != STORE_SCHEMA_VERSION:
-                raise StoreError("unsupported Router store schema: %s" % current)
+                raise StoreError(
+                    "unsupported Router store schema: %s (expected %s; run "
+                    "entityctl store migrate)" % (current, STORE_SCHEMA_VERSION))
             connection.commit()
         finally:
             connection.close()
@@ -247,11 +216,10 @@ class OperationStore(object):
             connection.execute(
                 """INSERT OR REPLACE INTO cases(
                        case_uid,case_id,project_root,source_json,current_json,legacy_json,
-                       active_operation_id,created_at,updated_at)
-                   VALUES(?,?,?,?,?,?,
-                       COALESCE((SELECT active_operation_id FROM cases WHERE case_uid=?),NULL),?,?)""",
+                       created_at,updated_at)
+                   VALUES(?,?,?,?,?,?,?,?)""",
                 (case_uid, case_id, normalized_project, _json(source), _json(current),
-                 _json(legacy or {}), case_uid,
+                 _json(legacy or {}),
                  existing["created_at"] if existing else (created_at or timestamp), timestamp),
             )
             if normalized_project:
@@ -302,17 +270,11 @@ class OperationStore(object):
             identities[dimension]["items"].append(payload)
             if item["is_current"]:
                 identities[dimension]["current_id"] = item["identity_id"]
-        active = None
-        if row["active_operation_id"]:
-            active = self._operation_from_row(connection, connection.execute(
-                "SELECT * FROM operations WHERE operation_id=?",
-                (row["active_operation_id"],),
-            ).fetchone(), include_plan=False)
         return {
             "case_uid": row["case_uid"], "case_id": row["case_id"],
             "project_root": row["project_root"], "source": _load(row["source_json"]),
             "current": _load(row["current_json"]), "identities": identities,
-            "legacy": _load(row["legacy_json"]), "active_operation": active,
+            "legacy": _load(row["legacy_json"]),
             "created_at": row["created_at"], "updated_at": row["updated_at"],
         }
 
@@ -349,359 +311,6 @@ class OperationStore(object):
         finally:
             connection.close()
 
-    def create_operation(self, case_uid, goal, plan, actor):
-        plan_hash = plan["plan_hash"]
-        goal_hash = canonical_hash(goal)
-        with self.transaction() as connection:
-            row = connection.execute(
-                "SELECT * FROM operations WHERE case_uid=? AND plan_hash=?",
-                (case_uid, plan_hash),
-            ).fetchone()
-            if row is not None:
-                return self._operation_from_row(connection, row)
-            active = connection.execute(
-                "SELECT operation_id,plan_hash FROM operations WHERE case_uid=? "
-                "AND status IN ('pending','running')",
-                (case_uid,),
-            ).fetchone()
-            if active is not None:
-                raise StoreError(
-                    "Case has another active Operation: %s" % active["operation_id"]
-                )
-            operation_id = plan["operation_id"]
-            timestamp = now_utc()
-            connection.execute(
-                """INSERT INTO operations(
-                       operation_id,case_uid,goal_hash,plan_hash,goal_json,plan_json,
-                       status,result_json,actor_json,created_at,updated_at)
-                   VALUES(?,?,?,?,?,?,?,?,?,?,?)""",
-                (operation_id, case_uid, goal_hash, plan_hash, _json(goal), _json(plan),
-                 "pending", _json({}), _json(actor), timestamp, timestamp),
-            )
-            for index, step in enumerate(plan["steps"]):
-                connection.execute(
-                    """INSERT INTO steps(operation_id,step_index,step_id,kind,spec_json,
-                           status,effect_json,evidence_json,error_json,updated_at)
-                       VALUES(?,?,?,?,?,'pending','{}','[]','{}',?)""",
-                    (operation_id, index, step["step_id"], step["kind"], _json(step), timestamp),
-                )
-            connection.execute(
-                "UPDATE cases SET active_operation_id=?,updated_at=? WHERE case_uid=?",
-                (operation_id, timestamp, case_uid),
-            )
-            self._event(connection, case_uid, operation_id, "operation.created",
-                        {"plan_hash": plan_hash}, actor)
-            row = connection.execute(
-                "SELECT * FROM operations WHERE operation_id=?", (operation_id,)
-            ).fetchone()
-            return self._operation_from_row(connection, row)
-
-    def _operation_from_row(self, connection, row, include_plan=True):
-        if row is None:
-            return None
-        steps = []
-        for item in connection.execute(
-                "SELECT * FROM steps WHERE operation_id=? ORDER BY step_index",
-                (row["operation_id"],)):
-            step = {
-                "index": item["step_index"], "step_id": item["step_id"],
-                "kind": item["kind"], "status": item["status"],
-                "effect": _load(item["effect_json"]),
-                "evidence": _load(item["evidence_json"], []),
-                "error": _load(item["error_json"]), "updated_at": item["updated_at"],
-            }
-            if include_plan:
-                step["spec"] = _load(item["spec_json"])
-            steps.append(step)
-        result = {
-            "operation_id": row["operation_id"], "case_uid": row["case_uid"],
-            "goal_hash": row["goal_hash"], "plan_hash": row["plan_hash"],
-            "status": row["status"], "result": _load(row["result_json"]),
-            "actor": _load(row["actor_json"]), "steps": steps,
-            "created_at": row["created_at"], "updated_at": row["updated_at"],
-        }
-        if include_plan:
-            result["goal"] = _load(row["goal_json"])
-            result["plan"] = _load(row["plan_json"])
-        return result
-
-    def get_operation(self, operation_id):
-        connection = self._connect()
-        try:
-            row = connection.execute(
-                "SELECT * FROM operations WHERE operation_id=?", (operation_id,)
-            ).fetchone()
-            if row is None:
-                raise StoreError("unknown Operation: %s" % operation_id)
-            return self._operation_from_row(connection, row)
-        finally:
-            connection.close()
-
-    def latest_operation(self, case_uid):
-        """Most recent Operation of a Case (plan excluded), or None.  Used by
-        the read-only dashboard to surface the latest Goal and terminal
-        outcome without loading full history."""
-        connection = self._connect()
-        try:
-            row = connection.execute(
-                "SELECT * FROM operations WHERE case_uid=? "
-                "ORDER BY created_at DESC, rowid DESC LIMIT 1",
-                (case_uid,),
-            ).fetchone()
-            if row is None:
-                return None
-            result = self._operation_from_row(connection, row, include_plan=False)
-            result["goal"] = _load(row["goal_json"])
-            return result
-        finally:
-            connection.close()
-
-    def claim_operation(self, operation_id, actor, ttl_seconds=3600):
-        token = str(uuid.uuid4())
-        with self.transaction() as connection:
-            row = connection.execute(
-                "SELECT status,claim_token,claim_expires_at FROM operations WHERE operation_id=?",
-                (operation_id,),
-            ).fetchone()
-            if row is None:
-                raise StoreError("unknown Operation: %s" % operation_id)
-            if row["status"] in {"completed", "needs_decision", "blocked", "anomaly", "cancelled"}:
-                return ""
-            now = now_utc()
-            if (row["claim_token"] and row["claim_expires_at"]
-                    and row["claim_expires_at"] > now):
-                raise StoreError("Operation is already being applied")
-            connection.execute(
-                "UPDATE operations SET claim_token=?,claim_expires_at=?,status='running',updated_at=? "
-                "WHERE operation_id=?",
-                (token, _utc_after(ttl_seconds), now, operation_id),
-            )
-            case_uid = connection.execute(
-                "SELECT case_uid FROM operations WHERE operation_id=?", (operation_id,)
-            ).fetchone()[0]
-            self._event(connection, case_uid, operation_id, "operation.claimed",
-                        {"claim_token": token, "ttl_seconds": ttl_seconds}, actor)
-        return token
-
-    def renew_claim(self, operation_id, token, ttl_seconds=90):
-        with self.transaction() as connection:
-            changed = connection.execute(
-                "UPDATE operations SET claim_expires_at=?,updated_at=? "
-                "WHERE operation_id=? AND claim_token=?",
-                (_utc_after(ttl_seconds), now_utc(), operation_id, token),
-            ).rowcount
-            if changed != 1:
-                raise StoreError("Operation claim is no longer held")
-
-    def release_claim(self, operation_id, token, actor):
-        if not token:
-            return
-        with self.transaction() as connection:
-            row = connection.execute(
-                "SELECT case_uid,claim_token FROM operations WHERE operation_id=?",
-                (operation_id,),
-            ).fetchone()
-            if row is None or row["claim_token"] != token:
-                return
-            connection.execute(
-                "UPDATE operations SET claim_token=NULL,claim_expires_at=NULL,updated_at=? "
-                "WHERE operation_id=?", (now_utc(), operation_id),
-            )
-            self._event(connection, row["case_uid"], operation_id,
-                        "operation.claim_released", {}, actor)
-
-    def update_step(self, operation_id, step_index, status, effect=None,
-                    evidence=None, error=None, actor=None):
-        allowed = {"pending", "intent_written", "effect_observed", "verified",
-                   "committed", "needs_decision", "blocked", "anomaly"}
-        if status not in allowed:
-            raise StoreError("invalid Step status: %s" % status)
-        with self.transaction() as connection:
-            row = connection.execute(
-                "SELECT o.case_uid,s.step_id FROM steps s JOIN operations o "
-                "ON o.operation_id=s.operation_id WHERE s.operation_id=? AND s.step_index=?",
-                (operation_id, step_index),
-            ).fetchone()
-            if row is None:
-                raise StoreError("unknown Operation Step")
-            connection.execute(
-                """UPDATE steps SET status=?,effect_json=?,evidence_json=?,error_json=?,updated_at=?
-                   WHERE operation_id=? AND step_index=?""",
-                (status, _json(effect or {}), _json(evidence or []), _json(error or {}),
-                 now_utc(), operation_id, step_index),
-            )
-            self._event(connection, row["case_uid"], operation_id,
-                        "step.%s" % status,
-                        {"step_index": step_index, "step_id": row["step_id"]}, actor or {})
-
-    def commit_step(self, operation_id, step_index, effect, evidence, identities,
-                    current, actor, claim_token=None):
-        """Atomically commit one verified Step and all controller projections.
-
-        When ``claim_token`` is given the write only lands while the caller
-        still holds the Operation claim, so a stale applier cannot commit
-        after losing its lease."""
-        with self.transaction() as connection:
-            operation = connection.execute(
-                "SELECT case_uid,claim_token FROM operations WHERE operation_id=?",
-                (operation_id,)
-            ).fetchone()
-            if operation is None:
-                raise StoreError("unknown Operation: %s" % operation_id)
-            if claim_token is not None and operation["claim_token"] != claim_token:
-                raise StoreError("Operation claim is no longer held")
-            case_uid = operation["case_uid"]
-            step = connection.execute(
-                "SELECT step_id FROM steps WHERE operation_id=? AND step_index=?",
-                (operation_id, step_index),
-            ).fetchone()
-            if step is None:
-                raise StoreError("unknown Operation Step")
-            for item in identities or []:
-                self.add_identity(
-                    case_uid, item["dimension"], item["identity_id"], item["payload"],
-                    bool(item.get("current", True)), connection,
-                )
-            connection.execute(
-                "UPDATE cases SET current_json=?,updated_at=? WHERE case_uid=?",
-                (_json(current), now_utc(), case_uid),
-            )
-            connection.execute(
-                """UPDATE steps SET status='committed',effect_json=?,evidence_json=?,
-                       error_json='{}',updated_at=? WHERE operation_id=? AND step_index=?""",
-                (_json(effect or {}), _json(evidence or []), now_utc(), operation_id, step_index),
-            )
-            connection.execute(
-                "UPDATE operations SET updated_at=? WHERE operation_id=?",
-                (now_utc(), operation_id),
-            )
-            self._event(connection, case_uid, operation_id, "step.committed",
-                        {"step_index": step_index, "step_id": step["step_id"]}, actor)
-
-    def finish_operation(self, operation_id, status, result, actor, claim_token=None):
-        if status not in {"completed", "needs_decision", "blocked", "anomaly", "cancelled"}:
-            raise StoreError("invalid Operation terminal status: %s" % status)
-        with self.transaction() as connection:
-            row = connection.execute(
-                "SELECT case_uid,claim_token FROM operations WHERE operation_id=?",
-                (operation_id,)
-            ).fetchone()
-            if row is None:
-                raise StoreError("unknown Operation: %s" % operation_id)
-            if claim_token is not None and row["claim_token"] != claim_token:
-                raise StoreError("Operation claim is no longer held")
-            connection.execute(
-                """UPDATE operations SET status=?,result_json=?,claim_token=NULL,
-                       claim_expires_at=NULL,updated_at=? WHERE operation_id=?""",
-                (status, _json(result or {}), now_utc(), operation_id),
-            )
-            connection.execute(
-                "UPDATE cases SET active_operation_id=NULL,updated_at=? WHERE case_uid=?",
-                (now_utc(), row["case_uid"]),
-            )
-            self._event(connection, row["case_uid"], operation_id,
-                        "operation.%s" % status, result or {}, actor)
-
-    def reopen_operation(self, operation_id, actor):
-        """Re-activate a terminal non-completed Operation so the same Plan can
-        be applied again; committed Steps are still skipped on resume."""
-        with self.transaction() as connection:
-            row = connection.execute(
-                "SELECT case_uid,status FROM operations WHERE operation_id=?",
-                (operation_id,),
-            ).fetchone()
-            if row is None:
-                raise StoreError("unknown Operation: %s" % operation_id)
-            if row["status"] == "completed":
-                raise StoreError("completed Operation cannot be reopened")
-            if row["status"] in {"pending", "running"}:
-                return
-            active = connection.execute(
-                "SELECT active_operation_id FROM cases WHERE case_uid=?",
-                (row["case_uid"],),
-            ).fetchone()
-            if (active and active["active_operation_id"]
-                    and active["active_operation_id"] != operation_id):
-                raise StoreError(
-                    "Case has another active Operation: %s" % active["active_operation_id"]
-                )
-            connection.execute(
-                "UPDATE operations SET status='pending',result_json='{}',updated_at=? "
-                "WHERE operation_id=?",
-                (now_utc(), operation_id),
-            )
-            connection.execute(
-                "UPDATE cases SET active_operation_id=?,updated_at=? WHERE case_uid=?",
-                (operation_id, now_utc(), row["case_uid"]),
-            )
-            self._event(connection, row["case_uid"], operation_id,
-                        "operation.reopened", {"previous_status": row["status"]}, actor)
-
-    def refresh_operation(self, operation_id, actor):
-        """Re-activate a completed Operation so every Step re-executes on the
-        next apply. Used to refresh derived artifacts (data inventory) after
-        the underlying run products changed without a Plan change."""
-        with self.transaction() as connection:
-            row = connection.execute(
-                "SELECT case_uid,status FROM operations WHERE operation_id=?",
-                (operation_id,),
-            ).fetchone()
-            if row is None:
-                raise StoreError("unknown Operation: %s" % operation_id)
-            if row["status"] != "completed":
-                raise StoreError("only a completed Operation can be refreshed")
-            timestamp = now_utc()
-            connection.execute(
-                "UPDATE operations SET status='pending',result_json='{}',"
-                "claim_token=NULL,claim_expires_at=NULL,updated_at=? "
-                "WHERE operation_id=?",
-                (timestamp, operation_id),
-            )
-            connection.execute(
-                "UPDATE steps SET status='pending',updated_at=? WHERE operation_id=?",
-                (timestamp, operation_id),
-            )
-            connection.execute(
-                "UPDATE cases SET active_operation_id=?,updated_at=? WHERE case_uid=?",
-                (operation_id, timestamp, row["case_uid"]),
-            )
-            self._event(connection, row["case_uid"], operation_id,
-                        "operation.refreshed", {}, actor)
-
-    def cancel_operation(self, operation_id, actor, reason=""):
-        """Terminal escape hatch: cancel a pending/running Operation and release
-        the Case so a different Plan can proceed.  The status check and the
-        terminal update happen in one transaction so a concurrent finish
-        cannot be clobbered between two transactions."""
-        with self.transaction() as connection:
-            row = connection.execute(
-                "SELECT case_uid,status FROM operations WHERE operation_id=?", (operation_id,)
-            ).fetchone()
-            if row is None:
-                raise StoreError("unknown Operation: %s" % operation_id)
-            if row["status"] == "cancelled":
-                return
-            if row["status"] not in {"pending", "running"}:
-                raise StoreError(
-                    "Operation is already %s and cannot be cancelled" % row["status"]
-                )
-            result = {"reason": reason or "cancelled via entityctl"}
-            changed = connection.execute(
-                """UPDATE operations SET status='cancelled',result_json=?,
-                       claim_token=NULL,claim_expires_at=NULL,updated_at=?
-                   WHERE operation_id=? AND status IN ('pending','running')""",
-                (_json(result), now_utc(), operation_id),
-            ).rowcount
-            if changed != 1:
-                raise StoreError(
-                    "Operation changed state while being cancelled; retry")
-            connection.execute(
-                "UPDATE cases SET active_operation_id=NULL,updated_at=? WHERE case_uid=?",
-                (now_utc(), row["case_uid"]),
-            )
-            self._event(connection, row["case_uid"], operation_id,
-                        "operation.cancelled", result, actor)
-
     def record_event(self, case_uid, operation_id, event_type, payload, actor,
                      connection=None):
         """Public event writer for the primitive record commands, which book
@@ -729,15 +338,13 @@ class OperationStore(object):
         connection = self._connect()
         try:
             result = {"schema_version": STORE_SCHEMA_VERSION, "sites": [], "cases": [],
-                      "projects": [], "operations": [], "events": []}
+                      "projects": [], "events": []}
             result["sites"] = [_load(row["profile_json"]) for row in
                                connection.execute("SELECT profile_json FROM sites ORDER BY site_id")]
             result["projects"] = [dict(row) for row in
                                   connection.execute("SELECT * FROM projects ORDER BY project_root")]
             for row in connection.execute("SELECT * FROM cases ORDER BY case_uid"):
                 result["cases"].append(self._case_from_row(connection, row))
-            for row in connection.execute("SELECT * FROM operations ORDER BY created_at"):
-                result["operations"].append(self._operation_from_row(connection, row))
             for row in connection.execute("SELECT * FROM events ORDER BY event_id"):
                 item = dict(row)
                 item["payload"] = _load(item.pop("payload_json"))

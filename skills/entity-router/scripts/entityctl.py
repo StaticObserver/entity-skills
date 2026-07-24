@@ -40,7 +40,13 @@ from entity_router_record import (
     show_case,
     snapshot_source,
 )
-from entity_router_store import OperationStore, STORE_SCHEMA_VERSION, canonical_hash, store_path
+from entity_router_store import (
+    OperationStore,
+    SCHEMA as STORE_SCHEMA,
+    STORE_SCHEMA_VERSION,
+    canonical_hash,
+    store_path,
+)
 
 
 SCHEMA_VERSION = 1
@@ -271,14 +277,10 @@ def doctor(args):
         warnings.append("mutations will be unattributed unless an Agent run ID is supplied")
     database = store_path(home)
     profiles = []
-    cases = []
-    operations = {}
     store_schema = None
     if os.path.isfile(database):
         exported = OperationStore(home, create=False).export()
         profiles = exported["sites"]
-        cases = exported["cases"]
-        operations = {op["operation_id"]: op for op in exported["operations"]}
         connection = sqlite3.connect(database)
         try:
             row = connection.execute(
@@ -312,21 +314,6 @@ def doctor(args):
                 and profile.get("scheduler", {}).get("kind") == "slurm"
                 and not policy.get("default_submit_user")):
             warnings.append("Site %s has no policy.default_submit_user" % profile["site_id"])
-    for case in cases:
-        active = case.get("active_operation")
-        if not active:
-            continue
-        active_id = active.get("operation_id") if isinstance(active, dict) else active
-        operation = operations.get(active_id) or (
-            active if isinstance(active, dict) else {})
-        warnings.append(
-            "Case %s has an active Operation %s (status %s, updated %s); it is "
-            "a leftover of the retired plan/apply protocol and no longer "
-            "blocks the record primitives"
-            % (case.get("case_uid", "?"), active_id,
-               operation.get("status", "unknown"),
-               operation.get("updated_at", "unknown"))
-        )
     installs = []
     for provider, path in installed_bundle_roots():
         identity = bundle_hash(path) if os.path.isdir(path) else {"hash": "", "files": 0}
@@ -647,7 +634,103 @@ def export_store(args):
     return {
         "schema_version": 1, "kind": "entity-router.export", "ok": True,
         "state_mutated": False, "output": absolute(args.output),
-        "cases": len(payload["cases"]), "operations": len(payload["operations"]),
+        "cases": len(payload["cases"]),
+    }
+
+
+def _archive_operations_v1(connection, archive_dir, stamp):
+    """Export a v1 store's operations (with their steps) to a JSON archive so
+    the retired plan/apply protocol history stays readable after migration."""
+    operations = []
+    for row in connection.execute(
+            "SELECT * FROM operations ORDER BY created_at"):
+        operation = dict(row)
+        operation["goal"] = json.loads(operation.pop("goal_json"))
+        operation["plan"] = json.loads(operation.pop("plan_json"))
+        operation["result"] = json.loads(operation.pop("result_json"))
+        operation["actor"] = json.loads(operation.pop("actor_json"))
+        steps = []
+        for step in connection.execute(
+                "SELECT * FROM steps WHERE operation_id=? ORDER BY step_index",
+                (operation["operation_id"],)):
+            item = dict(step)
+            for key in ["spec_json", "effect_json", "evidence_json", "error_json"]:
+                item[key[:-5]] = json.loads(item.pop(key))
+            steps.append(item)
+        operation["steps"] = steps
+        operations.append(operation)
+    archive = os.path.join(archive_dir, "operations-v1-%s.json" % stamp)
+    atomic_write_json(archive, {
+        "schema_version": 1,
+        "kind": "entity-router.operations-archive",
+        "archived_at": now_utc(),
+        "operations": operations,
+    })
+    return archive, len(operations)
+
+
+def _migrate_v1_to_v2(database, home):
+    """Migrate a v1 store to v2: archive operations/steps to JSON, back the
+    original file up, then rebuild the store with the v2 schema and copy
+    sites/cases/projects/identities/events over (cases loses
+    active_operation_id; events keeps its operation_id audit column)."""
+    archive_dir = os.path.join(home, "archive")
+    if not os.path.isdir(archive_dir):
+        os.makedirs(archive_dir)
+    stamp = now_utc().replace(":", "-").replace("Z", "")
+    source = sqlite3.connect(database)
+    source.row_factory = sqlite3.Row
+    try:
+        archive, operation_count = _archive_operations_v1(source, archive_dir, stamp)
+        tables = {}
+        for name, columns in [
+                ("meta", "key,value"),
+                ("sites", "site_id,profile_json,updated_at"),
+                ("cases", "case_uid,case_id,project_root,source_json,current_json,"
+                          "legacy_json,created_at,updated_at"),
+                ("projects", "project_root,case_uid,updated_at"),
+                ("identities", "case_uid,dimension,identity_id,payload_json,"
+                                "is_current,created_at"),
+                ("events", "case_uid,operation_id,event_type,payload_json,"
+                           "actor_json,created_at")]:
+            tables[name] = (
+                columns,
+                [tuple(row) for row in source.execute(
+                    "SELECT %s FROM %s" % (columns, name))],
+            )
+    finally:
+        source.close()
+    backup = os.path.join(archive_dir, "router-v1-%s.db" % stamp)
+    shutil.copy2(database, backup)
+    temporary = database + ".migrate-v2"
+    if os.path.isfile(temporary):
+        os.unlink(temporary)
+    target = sqlite3.connect(temporary)
+    try:
+        target.executescript(STORE_SCHEMA)
+        for name in ["meta", "sites", "cases", "projects", "identities", "events"]:
+            columns, rows = tables[name]
+            placeholders = ",".join(["?"] * len(columns.split(",")))
+            target.executemany(
+                "INSERT INTO %s(%s) VALUES(%s)" % (name, columns, placeholders),
+                rows)
+        target.execute(
+            "INSERT OR REPLACE INTO meta(key,value) VALUES('schema_version',?)",
+            (str(STORE_SCHEMA_VERSION),))
+        target.commit()
+    except Exception:
+        target.close()
+        os.unlink(temporary)
+        raise
+    target.close()
+    os.replace(temporary, database)
+    counts = dict((name, len(rows)) for name, (unused, rows) in tables.items())
+    return {
+        "schema_version": 1, "kind": "entity-router.store.migrate", "ok": True,
+        "state_mutated": True, "store_schema_version": STORE_SCHEMA_VERSION,
+        "message": "migrated store schema 1 -> %s" % STORE_SCHEMA_VERSION,
+        "operations_archive": archive, "operations_archived": operation_count,
+        "database_backup": backup, "rows_copied": counts,
     }
 
 
@@ -677,6 +760,8 @@ def store_migrate(args):
             "store schema %s is newer than this bundle supports (%s); use a "
             "newer bundle" % (current, STORE_SCHEMA_VERSION)
         )
+    if current == 1:
+        return _migrate_v1_to_v2(database, router_home(args.router_home))
     raise EntityCtlError(
         "no migration path from store schema %s to %s is implemented yet"
         % (current, STORE_SCHEMA_VERSION)

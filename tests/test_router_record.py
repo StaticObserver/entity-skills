@@ -121,7 +121,7 @@ class RecordTest(unittest.TestCase):
         self.assertEqual(run_dimension["items"][0]["id"], "run-1")
         self.assertIn("created_at", payload)
         self.assertIn("updated_at", payload)
-        self.assertIn("active_operation", payload)
+        self.assertNotIn("active_operation", payload)
 
     def test_show_requires_existing_case(self):
         code, payload = self.cli("show", "--project-root",

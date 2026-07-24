@@ -149,36 +149,11 @@ def _data_cell(case, current):
             "detail": "%s 个文件" % payload.get("files", "?")}
 
 
-def _intent(store, case):
-    latest = store.latest_operation(case["case_uid"])
-    if not latest:
-        return "未记录", None
-    goal = latest.get("goal", {})
-    kind = goal.get("kind", "?")
-    if kind == "run":
-        summary = "run %s @ %s" % (goal.get("input", "?"), goal.get("site", "?"))
-    elif kind == "build":
-        summary = "build @ %s" % goal.get("site", "?")
-    else:
-        summary = kind
-    return "未显式记录；最近 Goal：%s" % summary, latest
-
-
-def derive_next_steps(board, pending, active_operation, latest_operation, run_id):
+def derive_next_steps(board, pending, run_id):
     """The deriver: map (board, intent facts) to suggested next steps.  These
     rules replace a stored state machine — they are computed on every read and
     can never drift from the recorded facts."""
     steps = []
-    if active_operation and active_operation.get("status") in {"pending", "running"}:
-        steps.append("Operation %s 未完成（旧 plan/apply 协议残留，该协议已退役）；"
-                     "用 record 原语重建事实"
-                     % active_operation["operation_id"])
-    elif latest_operation and latest_operation.get("status") in {"anomaly", "blocked"}:
-        error = (latest_operation.get("result", {}) or {}).get("message", "")
-        steps.append("最近 Operation %s 以 %s 结束（%s）；修复后重新执行失败的 "
-                     "record 命令"
-                     % (latest_operation["operation_id"],
-                        latest_operation["status"], error or "见 operation result"))
     run_state = board["run"]["state"]
     if run_state in {"exited", "completed"} and board["data"]["state"] == "missing":
         steps.append("run %s 已到终态；用 entityctl record data 盘点输出" % run_id)
@@ -229,15 +204,11 @@ def build_dashboard(store, project_root, status=None):
             "status": item.get("status", "unknown"),
             "scheduler": _scheduler_brief(item),
         })
-    intent, latest = _intent(store, case)
+    # 原语时代没有记录 intent 的入口；目标只来自带外事实，统一显示"未记录"
+    intent = "未记录"
     pending = list(alerts)
     if board["pgen"]["state"] in {"unconfirmed", "partial"}:
         pending.append("模拟参数未确认：%s" % board["pgen"]["detail"])
-    active = case.get("active_operation")
-    if latest and latest.get("status") in {"anomaly", "blocked", "needs_decision"} \
-            and not active:
-        pending.append("最近 Operation %s 结束于 %s"
-                       % (latest["operation_id"], latest["status"]))
     return {
         "schema_version": 1, "kind": "entity-router.dashboard",
         "state_mutated": False,
@@ -248,7 +219,7 @@ def build_dashboard(store, project_root, status=None):
         "intent": intent, "board": board, "runs": ledger,
         "pending": pending,
         "next_steps": derive_next_steps(
-            board, pending, active, latest, current.get("run_id", "")),
+            board, pending, current.get("run_id", "")),
         "live": live,
     }
 

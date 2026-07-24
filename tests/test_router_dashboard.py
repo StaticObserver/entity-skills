@@ -16,7 +16,7 @@ ENTITYCTL = os.path.join(SCRIPTS, "entityctl.py")
 if SCRIPTS not in sys.path:
     sys.path.insert(0, SCRIPTS)
 
-from entity_router_dashboard import build_dashboard, derive_next_steps, render_text
+from entity_router_dashboard import build_dashboard, render_text
 from entity_router_store import OperationStore
 
 
@@ -120,18 +120,6 @@ class DashboardTest(unittest.TestCase):
         self.assertEqual(dashboard["remote_calls"], 2)
         self.assertTrue(any("带外变更" in item for item in dashboard["pending"]))
 
-    def test_anomaly_operation_surfaces_recovery_step(self):
-        goal = {"schema_version": 1, "kind": "run", "input": "input.toml",
-                "site": "local"}
-        plan = {"plan_hash": "p1", "operation_id": "op-1", "steps": []}
-        operation = self.store.create_operation(self.case_uid, goal, plan, {})
-        self.store.finish_operation(
-            operation["operation_id"], "anomaly", {"message": "boom"}, {})
-        dashboard = self._dashboard()
-        self.assertIn("run input.toml @ local", dashboard["intent"])
-        self.assertTrue(any("op-1" in item for item in dashboard["pending"]))
-        self.assertTrue(any("record" in step for step in dashboard["next_steps"]))
-
     def test_render_is_compact_and_human_readable(self):
         self._write_toml()
         self.store.add_identity(
@@ -142,15 +130,6 @@ class DashboardTest(unittest.TestCase):
         self.assertLess(len(text.encode("utf-8")), 4096)
         for marker in ["就绪板", "Run 台账", "建议下一步", "source", "pgen"]:
             self.assertIn(marker, text)
-
-    def test_deriver_prefers_anomaly_over_routine(self):
-        board = {name: {"state": "missing", "detail": "—"} for name in
-                 ["source", "pgen", "build", "run", "data", "analysis"]}
-        board["run"] = {"state": "submitted", "detail": "x"}
-        latest = {"operation_id": "op-9", "status": "anomaly",
-                  "result": {"message": "boom"}}
-        steps = derive_next_steps(board, [], None, latest, "run-1")
-        self.assertIn("op-9", steps[0])
 
     def test_cli_status_defaults_to_text_and_json_is_preserved(self):
         process = subprocess.Popen(

@@ -272,8 +272,7 @@ def status_for_project(store, project_root, live=False):
         "schema_version": 1, "kind": "entity-router.status", "ok": True,
         "state_mutated": False, "remote_calls": 0,
         "project_root": case.get("project_root"), "case_uid": case["case_uid"],
-        "active_operation": case.get("active_operation"), "current": current,
-        "run": run_identity, "live": None, "divergences": [],
+        "current": current, "run": run_identity, "live": None, "divergences": [],
     }
     if not live or not run_identity:
         return result

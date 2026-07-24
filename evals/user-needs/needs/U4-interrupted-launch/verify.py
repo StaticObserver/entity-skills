@@ -2,8 +2,9 @@
 """U4 (agent killed mid `record run-launch`, then restarted) verification.
 
 Checks: no duplicate sbatch submissions after the restart (same job name
-submitted once, unless the first attempt verifiably FAILED), no unresolved
-anomaly Operations left over in the router store, and the data was delivered.
+submitted once, unless the first attempt verifiably FAILED), the router
+store's run facts are complete with no half-baked launch state, and the data
+was delivered.
 """
 
 from __future__ import annotations
@@ -39,41 +40,53 @@ def main() -> int:
                 f"job names with >1 submission (name: count): {duplicates}; "
                 "acceptable only if the first attempt verifiably FAILED — review sacct manually"))
 
-    # 2. router store has no unresolved anomaly Operations; the record
-    # primitives never write the operations table, so any anomaly here is a
-    # leftover of the retired plan/apply protocol and must be superseded by a
-    # later completed Operation on the same Case
+    # 2. router store run facts are complete: with store schema v2 the
+    # retired operations table no longer exists, so "no anomaly" now means
+    # every booked run identity is internally consistent — a submitted run
+    # must carry its scheduler handle (job_id/pid), a terminal run must
+    # carry an exit code, and every launched run must have a matching
+    # record.run-launch audit event (a prepared-but-unlaunched run is a
+    # valid pending state, not half-baked)
     export = vc.read_router_export(ctx["router_home"])
     if export is None:
-        checks.append(vc.check("no_anomaly_operations", "unknown",
+        checks.append(vc.check("run_facts_consistent", "unknown",
                                "router store unreadable/missing"))
     else:
-        operations = export.get("operations", [])
-        anomalies = [op for op in operations if op.get("status") == "anomaly"]
-        if not anomalies:
+        launched = {
+            (event.get("payload") or {}).get("run_id")
+            for event in export.get("events", [])
+            if event.get("event_type") == "record.run-launch"
+        }
+        problems = []
+        runs = 0
+        for case in export.get("cases", []):
+            identities = (case.get("identities") or {}).get("run") or {}
+            for item in identities.get("items", []):
+                runs += 1
+                run_id = item.get("id", "?")
+                status = item.get("status", "")
+                scheduler = item.get("scheduler") or {}
+                if status == "submitted" and not (
+                        scheduler.get("job_id") or scheduler.get("pid")):
+                    problems.append(
+                        "run %s is submitted without a scheduler handle" % run_id)
+                if status in {"completed", "failed"} \
+                        and item.get("exit_code") is None:
+                    problems.append(
+                        "run %s is %s without an exit code" % (run_id, status))
+                if status in {"submitted", "completed", "failed"} \
+                        and run_id not in launched:
+                    problems.append(
+                        "run %s is %s without a record.run-launch event"
+                        % (run_id, status))
+        if not problems:
             checks.append(vc.check(
-                "no_anomaly_operations", "pass",
-                f"{len(operations)} operation(s), none in anomaly state"))
+                "run_facts_consistent", "pass",
+                f"{runs} run identitie(s), all consistent with the audit events"))
         else:
-            resolved = []
-            for op in anomalies:
-                later_completed = any(
-                    other.get("status") == "completed"
-                    and other.get("case_uid") == op.get("case_uid")
-                    and other.get("created_at", "") > op.get("created_at", "")
-                    for other in operations)
-                if later_completed:
-                    resolved.append(op.get("operation_id"))
-            if len(resolved) == len(anomalies):
-                checks.append(vc.check(
-                    "no_anomaly_operations", "pass",
-                    f"{len(anomalies)} anomaly operation(s) all superseded by later completed "
-                    "operations; cross-check job uniqueness in no_duplicate_sbatch"))
-            else:
-                checks.append(vc.check(
-                    "no_anomaly_operations", "fail",
-                    f"{len(anomalies) - len(resolved)} anomaly operation(s) without a later "
-                    f"completed operation: {[op.get('operation_id') for op in anomalies]}"))
+            checks.append(vc.check(
+                "run_facts_consistent", "fail",
+                f"half-baked run facts: {problems}"))
 
     # 3. data delivered
     oracle = ctx["oracle_report"]

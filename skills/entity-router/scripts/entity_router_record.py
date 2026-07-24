@@ -8,8 +8,9 @@ the primitive itself: ``record build`` requires a verified env-build
 checkpoint and probes the executable on its Site before anything is written;
 ``record data`` re-runs the site-side inventory and only then projects the
 data identity; ``record run-prepare`` requires the pgen simulation
-confirmation before any state is written; ``record run-launch`` relies on the
-executor receipt for exactly-once submission and probes the scheduler before
+confirmation before any state is written; ``record run-launch`` validates
+the submission with the scheduler (Slurm preflight), relies on the executor
+receipt for exactly-once submission and probes the scheduler before
 adopting an out-of-band job; ``record run-exit`` probes the terminal state
 and only then books it.  This module is standard-library only and Python 3.6
 compatible.
@@ -63,7 +64,6 @@ def show_case(store, project_root):
         "source": case["source"],
         "current": case["current"],
         "identities": case["identities"],
-        "active_operation": case["active_operation"],
         "created_at": case["created_at"],
         "updated_at": case["updated_at"],
     }
@@ -487,6 +487,7 @@ def record_run_prepare(store, project_root, input_value, site_id, gpus,
                     "build_id": derived["build_id"]},
         "input_sha256": derived["input_sha256"],
         "compute": derived["compute"],
+        "executable": derived["executable"],
         "operation_id": paths["operation_id"],
         "plan_hash": derived["plan_hash"],
         "staging_root": paths["staging_root"],
@@ -598,7 +599,11 @@ def _probe_adopt_direct(profile, pid, run_root):
 
 def record_run_launch(store, project_root, run_id, adopt_job, adopt_pid, actor):
     """Submit a prepared run exactly once (executor receipt) or adopt an
-    out-of-band job after probing it, then book the run as submitted."""
+    out-of-band job after probing it, then book the run as submitted.  On
+    Slurm Sites the scheduler first validates the rendered submission
+    (run.preflight.v1 / sbatch --test-only); a rejection fails with the
+    executor's remediation hint before any state is written.  Scheduler-less
+    Sites have no scheduler to consult and skip the preflight."""
     case = _require_case(store, project_root)
     run_id = run_id or case.get("current", {}).get("run_id", "")
     if not run_id:
@@ -645,6 +650,45 @@ def record_run_launch(store, project_root, run_id, adopt_job, adopt_pid, actor):
                     "prepared by record run-prepare — prepare it again")
         submit_script = os.path.join(
             run_root, "run.sbatch" if scheduler_kind == "slurm" else "run.sh")
+        client = ExecutorClient(profile)
+        if scheduler_kind == "slurm":
+            # Gate: let the scheduler validate the rendered submission
+            # (sbatch --test-only) before anything is booked, through the
+            # same synthetic envelope discipline as prepare/launch.  A
+            # rejection (invalid qos/partition, ...) raises with the
+            # executor's remediation hint and leaves the store untouched.
+            executable = identity.get("executable", "")
+            if not executable:
+                raise PlanError(
+                    "run identity lacks the executable record; it was not "
+                    "prepared by record run-prepare — prepare it again")
+            preflight = {
+                "schema_version": 1,
+                "operation_id": identity["operation_id"],
+                "plan_hash": identity["plan_hash"],
+                "step_index": 0,
+                "step_id": "preflight",
+                "kind": "run.preflight.v1",
+                "site_id": site_id,
+                "receipt": os.path.join(
+                    identity["staging_root"], "receipts", "run-preflight.json"),
+                "allowed_roots": [identity["staging_root"]],
+                "request": {
+                    "scheduler": scheduler_kind,
+                    "run_spec": {"executable": executable,
+                                 "compute": identity.get("compute", {}),
+                                 "input_name": "input.toml"},
+                    "job_name": "entity-%s" % identity["operation_id"],
+                    "staging_root": identity["staging_root"],
+                },
+            }
+            try:
+                client.invoke("execute", preflight)
+                verified = client.invoke("verify", preflight)
+                _check_receipt_identity(preflight, verified)
+            except OperationError as exc:
+                raise PlanError("run preflight failed on Site %s: %s"
+                                % (site_id, exc))
         envelope = {
             "schema_version": 1,
             "operation_id": identity["operation_id"],
@@ -664,7 +708,6 @@ def record_run_launch(store, project_root, run_id, adopt_job, adopt_pid, actor):
                 "submit_user": identity.get("compute", {}).get("submit_user", ""),
             },
         }
-        client = ExecutorClient(profile)
         client.invoke("execute", envelope)
         verified = client.invoke("verify", envelope)
         _check_receipt_identity(envelope, verified)

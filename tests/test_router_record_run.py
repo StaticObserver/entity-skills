@@ -53,6 +53,7 @@ class RecordRunTest(unittest.TestCase):
             "FAKE_SLURM_RECORD": self.record,
             "FAKE_SUBMIT_COUNT": self.count,
             "FAKE_SACCT_RECORD": "",
+            "FAKE_SBATCH_REJECT": "",
         })
         self.environment.start()
         self.store = OperationStore(self.home)
@@ -107,6 +108,10 @@ class RecordRunTest(unittest.TestCase):
         self._write_executable("sbatch", """import datetime,json,os,sys
 args=sys.argv[1:]
 if '--test-only' in args:
+    reject=os.environ.get('FAKE_SBATCH_REJECT','')
+    if reject:
+        sys.stderr.write('sbatch: error: %s\\n' % reject)
+        raise SystemExit(1)
     print('accepted')
     raise SystemExit(0)
 def value(flag):
@@ -356,6 +361,47 @@ else:
         self.assertEqual(code, 0, again)
         self.assertEqual(again["scheduler"]["job_id"], "42")
         self.assertEqual(self.submit_count(), 1)
+
+    def test_run_launch_slurm_preflight_rejection_blocks_without_writes(self):
+        prepared = self._prepare("local-slurm", self.executable)
+        os.environ["FAKE_SBATCH_REJECT"] = "Invalid qos specification"
+        try:
+            code, payload = self._launch()
+        finally:
+            os.environ["FAKE_SBATCH_REJECT"] = ""
+        self.assertEqual(code, 2, payload)
+        self.assertFalse(payload["ok"])
+        self.assertFalse(payload["state_mutated"])
+        self.assertIn("invalid qos", payload["error"].lower())
+        # the executor's remediation hint is passed through
+        self.assertIn("entityctl site discover", payload["error"])
+        self.assertEqual(self.submit_count(), 0)
+        identity = self._run_identity()
+        self.assertEqual(identity["status"], "prepared")
+        self.assertNotIn("scheduler", identity)
+        events = [item["event_type"] for item in self.store.export()["events"]]
+        self.assertNotIn("record.run-launch", events)
+        # fixing the scheduler-side problem lets the same run launch
+        code, payload = self._launch()
+        self.assertEqual(code, 0, payload)
+        self.assertEqual(payload["scheduler"]["job_id"], "42")
+        self.assertEqual(self.submit_count(), 1)
+        receipts = os.listdir(os.path.join(
+            self.staging_root, self.store.resolve_project(self.project)["case_uid"],
+            "op-" + prepared["run_id"][4:], "receipts"))
+        self.assertIn("run-preflight.json", receipts)
+
+    def test_run_launch_direct_skips_preflight(self):
+        prepared = self._prepare(
+            "local-direct", self._direct_executable("sleep 30"))
+        code, payload = self._launch()
+        self.assertEqual(code, 0, payload)
+        self.assertEqual(payload["scheduler"]["scheduler"], "direct")
+        self._track_process_group()
+        receipts = os.listdir(os.path.join(
+            self.staging_root, self.store.resolve_project(self.project)["case_uid"],
+            "op-" + prepared["run_id"][4:], "receipts"))
+        self.assertNotIn("run-preflight.json", receipts)
 
     def test_run_launch_requires_a_known_run(self):
         code, payload = self._launch()

@@ -460,7 +460,7 @@ print('|'.join([r['job_id'], r['job_name'], r['user'], r['run_root'],
         version_file = os.path.join(ROOT, "skills", "entity-router", "VERSION")
         with open(version_file, "r") as handle:
             self.assertEqual(payload["runtime_bundle"]["version"], handle.read().strip())
-        self.assertEqual(payload["controller"]["store_schema_version"], 1)
+        self.assertEqual(payload["controller"]["store_schema_version"], 2)
         self.assertEqual(payload["failures"], [])
 
     def test_doctor_fails_on_client_bundle_drift(self):
@@ -475,38 +475,10 @@ print('|'.join([r['job_id'], r['job_name'], r['user'], r['run_root'],
         self.assertFalse(payload["ok"])
         self.assertTrue(any("drifted" in failure for failure in payload["failures"]))
 
-    def test_doctor_warns_on_leaked_active_operation(self):
-        # operations rows can only be leftovers of the retired plan/apply
-        # protocol; doctor must surface them without pointing at commands
-        # that no longer exist
-        actor = {"run_id": "leak-test", "provider": "unittest"}
-        case_uid = "case-leak"
-        self.store.upsert_case(
-            case_uid, "leak", self.project,
-            {"authority": {"site_id": "local-slurm", "path": self.project},
-             "transfer_policy": "snapshot"},
-            {"source_id": "", "build_id": "", "run_id": "", "active_run": None,
-             "data_id": "", "analysis_id": ""},
-        )
-        plan = {"operation_id": "op-leak", "plan_hash": "sha256:" + "0" * 64,
-                "steps": [{"step_id": "s0", "kind": "run.preflight.v1"}]}
-        self.store.create_operation(
-            case_uid, {"schema_version": 1, "kind": "run"}, plan, actor)
-        fake_home = os.path.join(self.temp, "leak-clients")
-        os.makedirs(fake_home)
-        with mock.patch.dict(os.environ, {"HOME": fake_home}):
-            code, payload = self.cli("doctor")
-        self.assertEqual(code, 0, payload)
-        self.assertEqual(payload["failures"], [])
-        leaked = [warning for warning in payload["warnings"]
-                  if "op-leak" in warning]
-        self.assertTrue(leaked, payload["warnings"])
-        self.assertIn("retired plan/apply protocol", leaked[0])
-
     def test_store_migrate_shell_reports_current_schema(self):
         code, payload = self.cli("store", "migrate")
         self.assertEqual(code, 0, payload)
-        self.assertEqual(payload["store_schema_version"], 1)
+        self.assertEqual(payload["store_schema_version"], 2)
         self.assertFalse(payload["state_mutated"])
         empty_home = os.path.join(self.temp, "empty-controller")
         process = __import__("subprocess").Popen(
