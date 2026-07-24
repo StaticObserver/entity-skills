@@ -1,63 +1,63 @@
 # Entity Skill Pack
 
-## 目的
+## Purpose
 
-构建一个面向 Entity 的通用 skill pack：
+Build a general-purpose skill pack for Entity that:
 
-- 帮助用户安全、可复现地运行模拟；
-- 帮助用户分析结果，并明确结论的证据强度；
-- 帮助用户从当前 checkout 出发开发 Entity 功能，而不是依赖过时记忆。
+- helps users run simulations safely and reproducibly;
+- helps users analyze results, with the evidence strength of conclusions made explicit;
+- helps users develop Entity features from the current checkout, rather than relying on stale memory.
 
-这个设计刻意区分“使用 Entity”和“开发 Entity”。这两类工作需要不同的知识深度、风险控制和验证标准。
+This design deliberately distinguishes "using Entity" from "developing Entity". These two kinds of work require different knowledge depth, risk control, and validation standards.
 
-## 导航
+## Navigation
 
-### 架构
+### Architecture
 
-- [[10-Architecture/Entity Skill Pack Architecture|Entity Skill Pack 架构]]
-- [[10-Architecture/Knowledge Model and Version Strategy|知识模型与版本策略]]
-- [[10-Architecture/Agent Collaboration Model|Agent 协作模型]]
+- [[10-Architecture/Entity Skill Pack Architecture|Entity Skill Pack Architecture]]
+- [[10-Architecture/Knowledge Model and Version Strategy|Knowledge Model and Version Strategy]]
+- [[10-Architecture/Agent Collaboration Model|Agent Collaboration Model]]
 
-### Skill 规范
+### Skill Specifications
 
-- [[20-Skills/Router Skill Spec|Router Skill 规范]]
-- [[20-Skills/Env Build Skill Spec|Env Build Skill 规范]]
-- [[20-Skills/Entity Case Skill Spec|Entity Case Skill 规范]]
-- [[20-Skills/Simulation Skill Spec|Simulation Skill 规范]]
-- [[20-Skills/Analysis Skill Spec|Analysis Skill 规范]]
-- [[20-Skills/Development Skill Spec|Development Skill 规范]]
-- [[20-Skills/Debug Skill Spec|Debug Skill 规范]]
-- [[20-Skills/Docs Skill Spec|Docs Skill 规范]]
+- [[20-Skills/Router Skill Spec|Router Skill Spec]]
+- [[20-Skills/Env Build Skill Spec|Env Build Skill Spec]]
+- [[20-Skills/Entity Case Skill Spec|Entity Case Skill Spec]]
+- [[20-Skills/Simulation Skill Spec|Simulation Skill Spec]]
+- [[20-Skills/Analysis Skill Spec|Analysis Skill Spec]]
+- [[20-Skills/Development Skill Spec|Development Skill Spec]]
+- [[20-Skills/Debug Skill Spec|Debug Skill Spec]]
+- [[20-Skills/Docs Skill Spec|Docs Skill Spec]]
 
-### Playbook
+### Playbooks
 
-- [[30-Playbooks/New Simulation Workflow|新模拟工作流]]
-- [[30-Playbooks/Analysis Workflow|分析工作流]]
-- [[30-Playbooks/Entity Development Workflow|Entity 开发工作流]]
-- [[30-Playbooks/Debugging Workflow|排错工作流]]
+- [[30-Playbooks/New Simulation Workflow|New Simulation Workflow]]
+- [[30-Playbooks/Analysis Workflow|Analysis Workflow]]
+- [[30-Playbooks/Entity Development Workflow|Entity Development Workflow]]
+- [[30-Playbooks/Debugging Workflow|Debugging Workflow]]
 
-### 开发
+### Development
 
-- [[40-Development/Development Plan|开发计划]]
+- [[40-Development/Development Plan|Development Plan]]
 - [[40-Development/Backlog|Backlog]]
-- [[40-Development/Acceptance Criteria|验收标准]]
+- [[40-Development/Acceptance Criteria|Acceptance Criteria]]
 
-### 参考
+### References
 
-- [[50-References/Entity Source of Truth|Entity 权威信息源]]
-- [[50-References/Local Context and Overlays|本地上下文与 Overlay]]
+- [[50-References/Entity Source of Truth|Entity Source of Truth]]
+- [[50-References/Local Context and Overlays|Local Context and Overlays]]
 
-### 模板
+### Templates
 
-- [[90-Templates/Run Manifest Template|Run Manifest 模板]]
-- [[90-Templates/Simulation Plan Template|Simulation Plan 模板]]
-- [[90-Templates/Development Design Note Template|Development Design Note 模板]]
-- [[90-Templates/Analysis Report Template|Analysis Report 模板]]
+- [[90-Templates/Run Manifest Template|Run Manifest Template]]
+- [[90-Templates/Simulation Plan Template|Simulation Plan Template]]
+- [[90-Templates/Development Design Note Template|Development Design Note Template]]
+- [[90-Templates/Analysis Report Template|Analysis Report Template]]
 
-## 写作约定
+## Writing Conventions
 
-本 vault 的笔记默认使用中文。必要的英文术语、代码标识符、命令、路径和 YAML 字段名保留英文。
+Notes in this vault were originally written in Chinese; necessary English technical terms, code identifiers, commands, paths, and YAML field names were kept in English.
 
-## 设计原则
+## Design Principles
 
-Skill pack 不应该试图记住 Entity 的全部细节。它应该教 agent 如何在当前 checkout 中找到权威细节，并把这些细节组织成可靠的工作流。
+The skill pack should not try to memorize every detail of Entity. It should teach agents how to find authoritative details in the current checkout and organize those details into reliable workflows.

@@ -66,8 +66,9 @@ class ActivityTaggingTest(unittest.TestCase):
         return {c["name"]: c for c in report["categories"]}
 
     def test_interleaved_pgen_after_build_still_counted(self):
-        # 旧状态机里 build 信号先于 pgen 写作会让 pgen 阶段归零；
-        # 活动标注下两者各自独立计数。
+        # In the old state machine, a build signal arriving before pgen
+        # authoring would zero out the pgen phase; under activity tagging
+        # the two are counted independently.
         records = [
             assistant("2026-07-21T08:00:00Z",
                       [("t1", "Bash", {"command": "ssh siyuan 'cmake --build build -j'"})],
@@ -89,7 +90,8 @@ class ActivityTaggingTest(unittest.TestCase):
         self.assertEqual(cats["pgen-authoring"]["usage"]["output_tokens"], 50)
 
     def test_backtrack_build_after_analysis_counted(self):
-        # analysis 之后回退到 build：无顺序假设，两类都计数。
+        # Backtracking to build after analysis: no ordering assumption,
+        # both categories are counted.
         records = [
             assistant("2026-07-21T08:00:00Z",
                       [("t1", "Bash", {"command": "python3 -c 'import nt2; print(nt2.Data)'"})]),
@@ -104,8 +106,8 @@ class ActivityTaggingTest(unittest.TestCase):
         self.assertEqual(cats["build"]["tool_calls"], 1)
 
     def test_multi_category_record_attributes_to_each(self):
-        # 一条 record 同时写 pgen 并跑 cmake：归因允许重叠，
-        # 两个类别各自获得该 record 的 token。
+        # A single record that writes a pgen and also runs cmake: attribution
+        # allows overlap, so both categories receive that record's tokens.
         records = [
             assistant("2026-07-21T08:00:00Z",
                       [("t1", "Write", {"file_path": "pgen.hpp"}),
@@ -118,7 +120,7 @@ class ActivityTaggingTest(unittest.TestCase):
 
         self.assertEqual(cats["pgen-authoring"]["usage"]["input_tokens"], 10)
         self.assertEqual(cats["build"]["usage"]["input_tokens"], 10)
-        # totals 只计一次
+        # totals are counted only once
         self.assertEqual(report["totals"]["usage"]["input_tokens"], 10)
         self.assertEqual(report["totals"]["tool_calls"], 2)
 
@@ -150,7 +152,7 @@ class ActivityTaggingTest(unittest.TestCase):
         write_transcript(self.transcript, records)
         report = analyze_transcript(self.transcript)
         self.assertEqual(report["unclassified_tool_share"], 0.5)
-        # 无 comparable 硬判定字段
+        # no comparable hard-verdict field
         self.assertNotIn("comparable", report)
 
     def test_custom_rules_override_with_category_key(self):
@@ -212,12 +214,13 @@ class JobLifecycleTest(unittest.TestCase):
         self.assertEqual(ns_sim["submissions"][1]["timestamp"], "2026-07-21T08:05:00Z")
         self.assertIsNone(ns_sim["first_success_attempt"])
 
-        # 无 --job-name 时用脚本 basename
+        # without --job-name, the script basename is used
         self.assertIn("other.sbatch", lifecycle["jobs"])
 
     def test_heredoc_with_cmake_is_build_class(self):
-        # sbatch 提交编译作业：heredoc 内容调 cmake -> build 类，
-        # 且该 tool_use 归入 build 类别而非 job-submit。
+        # sbatch submitting a build job: the heredoc body invokes cmake ->
+        # build class, and this tool_use is attributed to the build category
+        # rather than job-submit.
         command = (
             "ssh siyuan 'sbatch --job-name=entity-build <<\"EOF\"\n"
             "#!/bin/bash\n"
@@ -254,7 +257,8 @@ class JobLifecycleTest(unittest.TestCase):
         self.assertEqual(lifecycle["jobs"]["kk-deps-rebuild"]["job_class"], "build")
 
     def test_sbatch_script_name_strips_ssh_quotes(self):
-        # ssh 包装的命令以引号收尾："sbatch build_job.slurm" —— 引号不得混入作业名。
+        # An ssh-wrapped command ends with a quote: "sbatch build_job.slurm"
+        # — the quote must not leak into the job name.
         records = [
             assistant("2026-07-21T08:00:00Z",
                       [("t1", "Bash", {"command": 'ssh siyuan "cd $HOME/entity-run && sbatch build_job.slurm"'})]),
@@ -266,7 +270,8 @@ class JobLifecycleTest(unittest.TestCase):
         self.assertIn("build_job.slurm", lifecycle["jobs"])
 
     def test_sbatch_text_mention_not_counted(self):
-        # echo 文本里提到 sbatch 不是提交（S1 transcript 真实案例）。
+        # Mentioning sbatch inside echo text is not a submission (real case
+        # from the S1 transcript).
         records = [
             assistant("2026-07-21T08:00:00Z",
                       [("t1", "Bash", {"command": 'echo "=== sbatch ===" && squeue -u $USER'})]),
@@ -287,8 +292,10 @@ class JobLifecycleTest(unittest.TestCase):
         self.assertIn("run_sim.slurm", lifecycle["jobs"])
 
     def test_sbatch_wrap_multiword_payload(self):
-        # --wrap 带引号多词负载 + 尾部重定向：不得把负载词或 2>&1 当脚本名；
-        # 负载里启动 entity.xc（即便同时 module load cmake）应判 sim 类。
+        # --wrap with a quoted multi-word payload plus a trailing redirect:
+        # neither payload words nor 2>&1 may be taken as the script name;
+        # a payload that launches entity.xc (even alongside module load
+        # cmake) must be classified as sim.
         cmd = ('ssh siyuan \'sbatch --partition=debuga100 --qos=debug '
                '--wrap="module load cmake/3.29.4 cuda/12.2.2 && '
                'mpirun -np 2 ~/build/src/entity.xc -input x.toml" 2>&1\'')
@@ -377,8 +384,10 @@ class ActivitiesSkillAdoptionTest(unittest.TestCase):
         self.assertEqual(adoption["skill_call_share"], round(1 / 3, 6))
 
     def test_skill_script_execution_via_installed_path_counted(self):
-        # 通过安装路径执行技能脚本（agent 的真实调用方式）必须计为技能调用，
-        # 不得因路径含 .claude/skills 被误判为"读文档"（U1-S/U4-S 实跑缺陷）。
+        # Executing a skill script via its installed path (the agent's real
+        # invocation style) must count as a skill call; it must not be
+        # misclassified as "reading a doc" because the path contains
+        # .claude/skills (real-run defect in U1-S/U4-S).
         records = [
             assistant("2026-07-21T08:00:00Z",
                       [("t1", "Bash", {"command":
@@ -406,7 +415,8 @@ class ActivitiesSkillAdoptionTest(unittest.TestCase):
         self.assertEqual(report["skill_doc_reads"], 1)
         self.assertEqual(adoption["skill_calls"]["nt2py"], 0)
         self.assertEqual(adoption["skill_calls"]["total"], 0)
-        # 技能文档读取不计入任何类别，也不进 unclassified 占比的分母
+        # Skill doc reads are not counted in any category, nor in the
+        # denominator of the unclassified share
         self.assertEqual(report["unclassified_tool_share"], 0.0)
         for category in report["categories"]:
             self.assertEqual(
@@ -462,7 +472,7 @@ class ActivitiesCommandTest(unittest.TestCase):
             "activities", "--run-dir", str(self.run_dir),
             "--transcript", str(transcript),
         )
-        # 即使存在 unclassified 调用也必须 exit 0
+        # must exit 0 even when unclassified calls exist
         self.assertEqual(proc.returncode, 0, proc.stderr)
         outcome = json.loads(proc.stdout)
         self.assertTrue(outcome["ok"])

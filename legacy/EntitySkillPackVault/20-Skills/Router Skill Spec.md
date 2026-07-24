@@ -1,45 +1,44 @@
-# Router Skill 规范
+# Router Skill Spec
 
-## 角色
+## Role
 
-判断用户请求类型，并加载最小必要的 Entity skill。
+Classify the user request type and load the minimum necessary Entity skill.
 
-Router 应该很薄，不包含详细 Entity API。
+The Router should be thin and contain no detailed Entity API.
 
-## 路由表
+## Routing Table
 
-| 用户意图 | Skill |
+| User Intent | Skill |
 | --- | --- |
-| 配置运行、写 TOML、选择 pgen、提交任务 | [[Simulation Skill Spec|Simulation Skill]] |
-| 读取输出、作图、诊断物理行为 | [[Analysis Skill Spec|Analysis Skill]] |
-| 修改 Entity 源码或增加核心功能 | [[Development Skill Spec|Development Skill]] |
-| 诊断编译、运行、输出或性能失败 | [[Debug Skill Spec|Debug Skill]] |
-| 写运行笔记、设计说明、PR 摘要或报告 | [[Docs Skill Spec|Docs Skill]] |
+| Configure a run, write TOML, choose a pgen, submit a job | [[Simulation Skill Spec|Simulation Skill]] |
+| Read output, plot, diagnose physical behavior | [[Analysis Skill Spec|Analysis Skill]] |
+| Modify Entity source or add core features | [[Development Skill Spec|Development Skill]] |
+| Diagnose build, runtime, output, or performance failures | [[Debug Skill Spec|Debug Skill]] |
+| Write run notes, design notes, PR summaries, or reports | [[Docs Skill Spec|Docs Skill]] |
 
-## 总是加载
+## Always Load
 
-任何任务 skill 之前，都先加载：
+Before any task skill, always load:
 
-- [[10-Architecture/Knowledge Model and Version Strategy|知识模型与版本策略]]
-- [[50-References/Entity Source of Truth|Entity 权威信息源]]
+- [[10-Architecture/Knowledge Model and Version Strategy|Knowledge Model and Version Strategy]]
+- [[50-References/Entity Source of Truth|Entity Source of Truth]]
 
-## 分类示例
+## Classification Examples
 
-“帮我在 A100 上跑 reconnection” -> simulation。
+"Help me run reconnection on an A100" -> simulation.
 
-“画粒子谱并检查能量守恒” -> analysis。
+"Plot the particle spectrum and check energy conservation" -> analysis.
 
-“增加一个新的输出 quantity” -> development，然后可能需要 analysis 验证。
+"Add a new output quantity" -> development, possibly followed by analysis for verification.
 
-“ADIOS2 输出时崩溃” -> debug。
+"Crashes during ADIOS2 output" -> debug.
 
-“把这次运行整理成可复现记录” -> docs 加 simulation。
+"Turn this run into a reproducible record" -> docs plus simulation.
 
-## Router 输出
+## Router Output
 
-Router 应说明：
+The Router should state:
 
-- 选择了哪个 skill；
-- 为什么选择它；
-- 后续是否可能需要另一个 skill。
-
+- which skill was chosen;
+- why it was chosen;
+- whether another skill may be needed later.

@@ -1,18 +1,18 @@
-# 07 — 自定义输出（CustomFieldOutput + CustomStat）
+# 07 — Custom Output (CustomFieldOutput + CustomStat)
 
-> 基于 Entity v1.4.4
+> Based on Entity v1.4.4
 
-## 何时使用
+## When to use
 
-当需要输出标准场量（E、B、J、Rho、T00 等）之外的自定义诊断量时使用。触发关键词：custom field、derived field、scalar diagnostics、CustomFieldOutput、CustomStat、extra output quantities。
+Use this when you need to output custom diagnostic quantities beyond the standard field quantities (E, B, J, Rho, T00, etc.). Trigger keywords: custom field, derived field, scalar diagnostics, CustomFieldOutput, CustomStat, extra output quantities.
 
-**如果标准输出量（`[output.fields] quantities`）已能满足需求，请跳过本篇参考文档。**
+**If the standard output quantities (`[output.fields] quantities`) already meet your needs, skip this reference.**
 
 ---
 
-## CustomFieldOutput（自定义场量）
+## CustomFieldOutput (custom field quantities)
 
-### 函数签名
+### Function signature
 
 ```cpp
 void CustomFieldOutput(
@@ -25,25 +25,25 @@ void CustomFieldOutput(
 );
 ```
 
-### 参数说明
+### Parameter description
 
-| 参数 | 含义 |
+| Parameter | Meaning |
 |-----------|---------|
-| `name` | TOML 中 `[output.fields] custom = ["my_field"]` 定义的名称 |
-| `buffer` | 输出数据缓冲区（一维，按格点展平） |
-| `index` | buffer[index] = 当前格点处的值 |
-| `step` | 当前时间步索引 |
-| `time` | 当前时间（代码单位） |
-| `domain` | 可访问 `domain.fields.em`、`domain.species` 等 |
+| `name` | Name defined in TOML `[output.fields] custom = ["my_field"]` |
+| `buffer` | Output data buffer (one-dimensional, flattened by grid point) |
+| `index` | buffer[index] = value at the current grid point |
+| `step` | Current timestep index |
+| `time` | Current time (code units) |
+| `domain` | Provides access to `domain.fields.em`, `domain.species`, etc. |
 
-### TOML 配置
+### TOML configuration
 
 ```toml
 [output.fields]
   custom = ["my_field_1", "my_field_2"]
 ```
 
-### 代码示例
+### Code example
 
 ```cpp
 void CustomFieldOutput(
@@ -69,13 +69,13 @@ void CustomFieldOutput(
 }
 ```
 
-**重要**：确保返回值以 `double` 类型写入（显式转换）。
+**Important**: make sure the returned value is written as a `double` (explicit cast).
 
 ---
 
-## CustomStat（自定义标量统计量）
+## CustomStat (custom scalar statistics)
 
-### 函数签名
+### Function signature
 
 ```cpp
 auto CustomStat(
@@ -84,15 +84,15 @@ auto CustomStat(
 ) -> real_t;
 ```
 
-### 参数说明
+### Parameter description
 
-| 参数 | 含义 |
+| Parameter | Meaning |
 |-----------|---------|
-| `name` | TOML 中 `[output.stats] custom = ["my_stat"]` 定义的名称 |
-| `domain` | Domain（与 CustomFieldOutput 相同） |
-| 返回值 | 标量值。引擎会自动在 meshblock 之间**求和** |
+| `name` | Name defined in TOML `[output.stats] custom = ["my_stat"]` |
+| `domain` | Domain (same as CustomFieldOutput) |
+| Return value | Scalar value. The engine automatically **sums** it across meshblocks |
 
-### TOML 配置
+### TOML configuration
 
 ```toml
 [output.stats]
@@ -102,7 +102,7 @@ auto CustomStat(
   custom     = ["total_axion_energy"]
 ```
 
-### 代码示例
+### Code example
 
 ```cpp
 auto CustomStat(const std::string& name, Domain<S, M>& domain) -> real_t {
@@ -126,9 +126,9 @@ auto CustomStat(const std::string& name, Domain<S, M>& domain) -> real_t {
 
 ---
 
-## 替代方案：CustomPostStep 预计算
+## Alternative: precompute in CustomPostStep
 
-对于复杂的诊断量，在 CustomPostStep 中预计算到缓冲区，然后在 CustomFieldOutput 中只做深拷贝：
+For complex diagnostic quantities, precompute into a buffer in CustomPostStep, then just do a deep copy in CustomFieldOutput:
 
 ```cpp
 // Maintain an ndfield_t buffer member in PGen
@@ -151,35 +151,35 @@ void CustomFieldOutput(...) {
 }
 ```
 
-这样繁重的计算只在 CustomPostStep 中执行一次，而不会在每个输出时间步重复计算。
+This way the heavy computation runs only once in CustomPostStep, rather than being repeated at every output timestep.
 
 ---
 
-## 必需的 include
+## Required includes
 
 ```cpp
 #include "framework/domain/domain.h"
 ```
 
-不需要额外的 archetype。`Kokkos::parallel_for` 和 `Kokkos::parallel_reduce` 可以直接使用。
+No additional archetypes are needed. `Kokkos::parallel_for` and `Kokkos::parallel_reduce` can be used directly.
 
 ---
 
-## 约束与不兼容性
+## Constraints and incompatibilities
 
-| 约束 | 说明 |
+| Constraint | Description |
 |------------|-------------|
-| CustomStat 返回值会被自动求和 | 自动在 meshblock 之间按求和归约。要得到平均值 → 在 TOML 之外除以 meshblock 数量 |
-| 输出数据为 double | buffer 是 `double*`，但从 `em(i,j,em::ex1)` 读取的 `real_t` 可能是 float。必须显式转换 |
-| TOML 自定义名称必须匹配 | `custom = ["my_field"]` 与代码中的 `name == "my_field"` 必须逐字符完全一致 |
-| CustomStat 输出频率 | 由 `[output.stats] interval` 控制，而不是 `CustomPostStep` 的频率 |
+| CustomStat return values are automatically summed | Automatically reduced by summation across meshblocks. To get an average → divide by the number of meshblocks outside TOML |
+| Output data is double | The buffer is `double*`, but `real_t` read from `em(i,j,em::ex1)` may be float. An explicit cast is required |
+| TOML custom names must match | `custom = ["my_field"]` and the code's `name == "my_field"` must match character for character |
+| CustomStat output frequency | Controlled by `[output.stats] interval`, not by the `CustomPostStep` frequency |
 
 ---
 
-## 常见陷阱
+## Common pitfalls
 
-1. **未在 TOML 中注册** — 在代码中实现了 `CustomFieldOutput`，但未在 TOML 的 `custom = [...]` 中列出 → 方法不会被调用
-2. **double 与 real_t** — `real_t` 可能是 `float`（单精度）。写入 `buffer` 之前必须先转换为 `double`
-3. **误解 CustomStat 的归约语义** — 引擎执行的是**求和**，而不是平均。要输出平均值，需自行除以 meshblock 数量
-4. **在 kernel 之外读取 em** — `domain.fields.em(i,j,comp)` 只能在 Kokkos kernel（parallel_for/parallel_reduce）内部使用。host 端操作需要走另一条路径
-5. **每个输出步都重复繁重的计算** — 如果计算开销大但输出频率低，请使用 CustomPostStep 预计算 + 缓冲区的方案
+1. **Not registered in TOML** — `CustomFieldOutput` implemented in code but not listed in TOML's `custom = [...]` → the method is never called
+2. **double vs real_t** — `real_t` may be `float` (single precision). You must cast to `double` before writing to `buffer`
+3. **Misunderstanding CustomStat reduction semantics** — the engine performs a **sum**, not an average. To output an average, divide by the number of meshblocks yourself
+4. **Reading em outside a kernel** — `domain.fields.em(i,j,comp)` can only be used inside a Kokkos kernel (parallel_for/parallel_reduce). Host-side operations require a different path
+5. **Repeating heavy computation on every output step** — if the computation is expensive but the output frequency is low, use the CustomPostStep precompute + buffer approach

@@ -1,69 +1,69 @@
-# Entity Skill 设计准则
+# Entity Skill Design Principles
 
-## 一个成熟 Harness 的六层结构
+## The Six Layers of a Mature Harness
 
-在一个 Agent 系统里，除了模型本身以外，几乎所有决定它能否稳定交付的东西，都可以算进 Harness。一个成熟的 Harness 大致可以拆成六层。
+In an Agent system, almost everything beyond the model itself that determines whether it can deliver reliably counts as part of the Harness. A mature Harness can roughly be broken down into six layers.
 
-1. 上下文管理
+1. Context management
 
-模型能不能稳定发挥，很多时候不只取决于它是否聪明，还取决于它看到了什么。
+Whether a model performs consistently often depends not only on how smart it is, but also on what it sees.
 
-Harness 的第一职责，是让模型在正确的信息边界内思考。这通常包括三件事：
+The Harness's first responsibility is to let the model think within the right information boundaries. This usually involves three things:
 
-- 定义角色、目标和成功标准；
-- 检索和选择相关信息，而不是堆砌信息；
-- 结构化组织规则、任务、状态和外部证据。
+- defining roles, goals, and success criteria;
+- retrieving and selecting relevant information instead of piling it up;
+- structuring rules, tasks, state, and external evidence.
 
-信息一旦混乱，模型就容易漏重点、忘约束，甚至自我污染。
+Once information becomes chaotic, the model easily misses key points, forgets constraints, and even pollutes itself.
 
-2. 工具系统
+2. Tool system
 
-没有工具时，大模型本质上仍然是文本预测器，会解释、会总结，但接触不到真实世界。连上工具后，模型才真正能做事，比如浏览网页、读文件、写代码、调用 API。
+Without tools, a large model is essentially still a text predictor: it can explain and summarize, but it cannot touch the real world. Once connected to tools, the model can actually do things, such as browsing the web, reading files, writing code, and calling APIs.
 
-但 Harness 不是简单地把工具挂上去，而是要解决三个问题：
+But a Harness is not simply about attaching tools; it has to solve three problems:
 
-- 给模型什么工具；
-- 什么时候该调用工具；
-- 工具结果如何重新喂回模型。
+- which tools to give the model;
+- when tools should be invoked;
+- how tool results are fed back into the model.
 
-工具太少，能力不够；工具太多，模型会乱用。不需要查的时候别乱查，该查证的时候也别硬答。工具返回的几十条结果也不应原封不动塞回去，而应提炼、筛选，并保持与任务相关。
+Too few tools means insufficient capability; too many and the model misuses them. Don't look things up when you don't need to, and don't answer blindly when verification is called for. Nor should dozens of tool results be stuffed back verbatim — they should be distilled, filtered, and kept relevant to the task.
 
-3. 执行编排
+3. Execution orchestration
 
-这一层解决的核心问题是：模型下一步该做什么？
+The core problem this layer solves is: what should the model do next?
 
-很多 Agent 的问题不是某一步不会，而是不会把所有步骤串起来。它会搜索、会总结、会写代码，但整个过程想到哪做到哪，最后交付一堆半成品。
+Many Agent problems are not that a single step fails, but that the Agent cannot string all the steps together. It can search, summarize, and write code, yet the whole process wanders wherever it goes, ending in a pile of half-finished work.
 
-一个完整任务通常需要这样的轨道：理解目标，判断信息是否足够，不够就补充；整理结果并继续分析；生成输出；检查输出；不满足要求就修正或重试。
+A complete task usually needs a track like this: understand the goal; judge whether the information is sufficient and gather more if not; organize results and continue analyzing; produce output; check the output; correct or retry if requirements are not met.
 
-这已经非常接近人在工作。区别是，人靠经验，Agent 靠 Harness 提供的环境。
+This is already very close to how humans work. The difference is that humans rely on experience, while Agents rely on the environment the Harness provides.
 
-4. 记忆和状态
+4. Memory and state
 
-没有状态的 Agent，每一轮都像失忆一样。它不知道自己刚做了什么，也不知道哪些结论已经确认、哪些问题还没解决。
+An Agent without state suffers from amnesia every round. It doesn't know what it just did, which conclusions are confirmed, or which problems remain unsolved.
 
-Harness 必须管理状态，并至少区分三类东西：
+The Harness must manage state and distinguish at least three kinds of things:
 
-- 当前任务状态；
-- 会话中的中间结果；
-- 长期记忆和用户偏好。
+- current task state;
+- intermediate results within the session;
+- long-term memory and user preferences.
 
-这三类如果混在一起，系统会越来越乱。分清之后，Agent 才更像一个稳定的协作者。
+If these three are mixed together, the system becomes increasingly messy. Once they are separated, the Agent behaves more like a stable collaborator.
 
-5. 评估和观测
+5. Evaluation and observability
 
-很多系统不是生成不出来，而是生成完之后不知道自己做得好不好。如果没有独立的评估和观测能力，Agent 会长期停留在“自我感觉良好”的状态。
+Many systems are not incapable of producing output; they just don't know whether what they produced is any good. Without independent evaluation and observability, an Agent will stay indefinitely in a state of "feeling good about itself."
 
-这一层通常包括输出验收、环境验证、自动测试、日志和指标、错误归因等。系统不仅要会做，还要知道自己有没有真的做对。
+This layer typically includes output acceptance, environment verification, automated tests, logs and metrics, error attribution, and so on. The system must not only be able to act, but also know whether it actually did things right.
 
-6. 约束、校验、失败恢复
+6. Constraints, validation, failure recovery
 
-最后一层往往真正决定系统能不能上线。真实环境里，失败不是例外，而是常态。搜索可能不准，API 可能超时，文档格式可能混乱，模型也可能误解任务。
+The last layer often truly determines whether a system can go live. In real environments, failure is not the exception but the norm. Searches may be inaccurate, APIs may time out, document formats may be messy, and the model may misunderstand the task.
 
-如果没有恢复机制，Agent 每次出错都只能从头再来。
+Without recovery mechanisms, an Agent has to start over every time something goes wrong.
 
-一个成熟 Harness 必须包括：
+A mature Harness must include:
 
-- 约束：哪些能做，哪些不能做；
-- 校验：输出前后如何检查；
-- 恢复：失败后如何重试、切换路径，或回滚到稳定状态。
+- constraints: what can be done and what cannot;
+- validation: how outputs are checked before and after;
+- recovery: how to retry after failure, switch paths, or roll back to a stable state.

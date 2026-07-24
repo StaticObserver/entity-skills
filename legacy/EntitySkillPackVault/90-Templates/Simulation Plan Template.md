@@ -1,6 +1,6 @@
-# Simulation Plan 模板
+# Simulation Plan Template
 
-## 目标
+## Goal
 
 ## Entity Checkout
 
@@ -9,7 +9,7 @@
 - commit:
 - version bucket:
 
-## 物理设置
+## Physics Setup
 
 - engine:
 - metric:
@@ -31,17 +31,17 @@
 - checkpoint policy:
 - diagnostics:
 
-## 编译与运行
+## Build and Run
 
 ```bash
 
 ```
 
-## 验证
+## Validation
 
 - config checks:
 - smoke checks:
 - numerical diagnostics:
 - physics validation:
 
-## 风险
+## Risks

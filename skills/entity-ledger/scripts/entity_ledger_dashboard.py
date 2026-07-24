@@ -31,7 +31,7 @@ def _pgen_cell(project_root):
     """PGen readiness from local confirmation records: a TOML input counts as
     confirmed only when its ``.decisions.json`` still matches the file bytes."""
     if not os.path.isdir(project_root):
-        return {"state": "unknown", "detail": "project root 不在本机"}
+        return {"state": "unknown", "detail": "project root not on this machine"}
     confirmed = []
     unconfirmed = []
     for name in sorted(os.listdir(project_root)):
@@ -56,18 +56,18 @@ def _pgen_cell(project_root):
         return {"state": "confirmed", "detail": ", ".join(confirmed)}
     if confirmed:
         return {"state": "partial",
-                "detail": "已确认 %s；未确认 %s" % (", ".join(confirmed),
-                                                   ", ".join(unconfirmed))}
+                "detail": "confirmed %s; unconfirmed %s" % (", ".join(confirmed),
+                                                            ", ".join(unconfirmed))}
     if unconfirmed:
         return {"state": "unconfirmed", "detail": ", ".join(unconfirmed)}
-    return {"state": "unknown", "detail": "项目根下没有 TOML 输入"}
+    return {"state": "unknown", "detail": "no TOML inputs under project root"}
 
 
 def _source_cell(case, project_root, alerts):
     source = case.get("source", {})
     authority = source.get("authority") or {}
     if not authority:
-        return {"state": "missing", "detail": "尚未物化 source"}
+        return {"state": "missing", "detail": "source not materialized yet"}
     revision = source.get("revision") or {}
     label = ""
     if revision.get("kind") == "git":
@@ -79,12 +79,12 @@ def _source_cell(case, project_root, alerts):
         if current.get("kind") == "git":
             if current.get("commit") != revision.get("commit"):
                 alerts.append(
-                    "source 记录为 %s，当前 HEAD 为 %s——build/run 可能 stale"
+                    "source recorded as %s, current HEAD is %s — build/run may be stale"
                     % ((revision.get("commit") or "")[:8],
                        (current.get("commit") or "")[:8]))
-                detail += "（HEAD 已变化）"
+                detail += " (HEAD changed)"
             elif current.get("dirty") and not revision.get("dirty"):
-                detail += "（工作区有未提交修改）"
+                detail += " (uncommitted changes in working tree)"
     return {"state": "established", "detail": detail}
 
 
@@ -120,9 +120,9 @@ def _run_cell(case, current, live):
     brief = _scheduler_brief(payload)
     detail = "%s @ %s" % (run_id, payload.get("site_id", "?"))
     if brief:
-        detail += "（%s）" % brief
+        detail += " (%s)" % brief
     if payload.get("exit_code") is not None:
-        detail += "；exit %s" % payload["exit_code"]
+        detail += "; exit %s" % payload["exit_code"]
     if live:
         live_state = live.get("state", "")
         if live_state == "EXITED":
@@ -130,15 +130,15 @@ def _run_cell(case, current, live):
             # "exited" would make the deriver suggest inventorying the
             # outputs of a failed run.
             state = "failed" if live.get("exit_code") else "exited"
-            detail += "；exit %s" % live.get("exit_code", "?")
+            detail += "; exit %s" % live.get("exit_code", "?")
         elif live_state == "RUNNING":
             state = "running"
         elif live_state == "NOT_FOUND":
             state = "gone"
         elif live_state in {"UNKNOWN", ""} and live.get("warning"):
-            detail += "；实时探测不可用"
+            detail += "; live probe unavailable"
         elif live_state:
-            detail += "；%s" % live_state
+            detail += "; %s" % live_state
     return {"state": state, "detail": detail}
 
 
@@ -149,7 +149,7 @@ def _data_cell(case, current):
     if not data_id or payload is None:
         return {"state": "missing", "detail": "—"}
     return {"state": payload.get("status", "inventoried"),
-            "detail": "%s 个文件" % payload.get("files", "?")}
+            "detail": "%s files" % payload.get("files", "?")}
 
 
 def derive_next_steps(board, run_id):
@@ -159,24 +159,31 @@ def derive_next_steps(board, run_id):
     steps = []
     run_state = board["run"]["state"]
     if run_state in {"exited", "completed"} and board["data"]["state"] == "missing":
-        steps.append("run %s 已到终态；用 entityctl record data 盘点输出" % run_id)
+        steps.append("run %s reached a terminal state; inventory outputs with "
+                     "entityctl record data" % run_id)
     elif run_state == "failed":
-        steps.append("run %s 失败；检查 run_root 日志定位原因，修复后重跑" % run_id)
+        steps.append("run %s failed; check run_root logs to find the cause, "
+                     "fix it and rerun" % run_id)
     elif run_state in {"submitted", "running"}:
-        steps.append("run %s 运行中；用 status --live 或 record run-exit 跟踪终态"
-                     % run_id)
+        steps.append("run %s is running; track the terminal state with "
+                     "status --live or record run-exit" % run_id)
     elif run_state == "prepared":
-        steps.append("run %s 已准备好；用 entityctl record run-launch 提交" % run_id)
+        steps.append("run %s is prepared; submit with entityctl record run-launch"
+                     % run_id)
     elif run_state == "gone":
-        steps.append("run %s 的记录与后端不符（job_gone）；检查带外变更" % run_id)
+        steps.append("run %s record disagrees with the backend (job_gone); "
+                     "check for out-of-band changes" % run_id)
     if board["pgen"]["state"] in {"unconfirmed", "partial"}:
-        steps.append("确认模拟参数：pgen_preflight.py confirm <input> --by <actor>")
+        steps.append("confirm simulation parameters: "
+                     "pgen_preflight.py confirm <input> --by <actor>")
     if board["build"]["state"] == "missing" and board["source"]["state"] != "missing":
-        steps.append("构建：用 entity-env-build 编译后 entityctl record build 登记")
+        steps.append("build: compile with entity-env-build, then register with "
+                     "entityctl record build")
     if board["data"]["state"] == "inventoried":
-        steps.append("数据已盘点；用 entity-nt2py 分析")
+        steps.append("data inventoried; analyze with entity-nt2py")
     if not steps:
-        steps.append("无阻塞项；按研究目标推进（改 PGen、换参数再跑、或分析数据）")
+        steps.append("no blockers; proceed per the research goal (edit the PGen, "
+                     "rerun with new parameters, or analyze the data)")
     return steps[:4]
 
 
@@ -188,8 +195,8 @@ def build_dashboard(store, project_root, status=None):
     live = (status or {}).get("live")
     alerts = []
     for item in (status or {}).get("divergences", []):
-        alerts.append("带外变更 %s：%s" % (item.get("kind", "?"),
-                                          item.get("detail", "")))
+        alerts.append("out-of-band change %s: %s" % (item.get("kind", "?"),
+                                                     item.get("detail", "")))
     board = {
         "source": _source_cell(case, case.get("project_root") or project_root, alerts),
         "pgen": _pgen_cell(case.get("project_root") or project_root),
@@ -207,15 +214,16 @@ def build_dashboard(store, project_root, status=None):
             "status": item.get("status", "unknown"),
             "scheduler": _scheduler_brief(item),
         })
-    # 意图是唯一存下来的指针（不可推导）：由 entityctl record intent 显式
-    # 写入 current["intent"]，未写入时显示"未记录"
+    # The intent is the only stored pointer (not derivable): it is written
+    # explicitly into current["intent"] by entityctl record intent; when it has
+    # not been written the dashboard shows "not recorded"
     intent_record = current.get("intent") or {}
-    intent = intent_record.get("text") or "未记录"
+    intent = intent_record.get("text") or "not recorded"
     if intent_record.get("recorded_at") and intent_record.get("text"):
-        intent += "（记录于 %s）" % intent_record["recorded_at"]
+        intent += " (recorded at %s)" % intent_record["recorded_at"]
     pending = list(alerts)
     if board["pgen"]["state"] in {"unconfirmed", "partial"}:
-        pending.append("模拟参数未确认：%s" % board["pgen"]["detail"])
+        pending.append("simulation parameters unconfirmed: %s" % board["pgen"]["detail"])
     return {
         "schema_version": 1, "kind": "entity-ledger.dashboard",
         "state_mutated": False,
@@ -233,33 +241,33 @@ def build_dashboard(store, project_root, status=None):
 def render_text(dashboard):
     """Compact human-readable rendering; normal output stays well under 4 KiB."""
     lines = [
-        "Case %s（%s）  更新于 %s" % (dashboard["case_id"],
+        "Case %s (%s)  updated %s" % (dashboard["case_id"],
                                       dashboard["case_uid"],
                                       dashboard["updated_at"] or "?"),
-        "项目  %s" % dashboard["project_root"],
-        "目标  %s" % dashboard["intent"],
+        "Project  %s" % dashboard["project_root"],
+        "Goal  %s" % dashboard["intent"],
         "",
-        "就绪板",
+        "Readiness board",
     ]
     for name in BOARD_ORDER:
         cell = dashboard["board"][name]
         lines.append("  %-9s %-12s %s" % (name, cell["state"], cell["detail"]))
     if dashboard["runs"]:
-        lines += ["", "Run 台账"]
+        lines += ["", "Run ledger"]
         for item in dashboard["runs"][-5:]:
             brief = ("  %s" % item["scheduler"]) if item["scheduler"] else ""
             lines.append("  %-22s %-10s %s%s" % (
                 item["run_id"], item["status"], item["site_id"], brief))
     if dashboard["pending"]:
-        lines += ["", "待决"]
+        lines += ["", "Pending"]
         for item in dashboard["pending"]:
             lines.append("  - %s" % item)
-    lines += ["", "建议下一步"]
+    lines += ["", "Suggested next steps"]
     for index, step in enumerate(dashboard["next_steps"], 1):
         lines.append("  %d. %s" % (index, step))
     live = dashboard.get("live")
     if live:
-        lines += ["", "实时探测：%s（%s，%d 次远端调用）" % (
+        lines += ["", "Live probe: %s (%s, %d remote calls)" % (
             live.get("state", "?"), live.get("observed_at", "?"),
             dashboard["remote_calls"])]
     return "\n".join(lines)

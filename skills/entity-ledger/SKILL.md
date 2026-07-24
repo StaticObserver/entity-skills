@@ -1,60 +1,68 @@
 ---
 name: entity-ledger
-description: 为 Entity 等离子体模拟项目维护一份确定性记录：环境、源码版本、构建、run 台账和数据状态都有据可查，任何一轮会话（换机器、换 agent、中途崩溃）都能接着上次继续。用于跨会话或跨机器的模拟工作、run 提交与跟踪、结果盘点。有界的只读问题和独立的 PGen/构建/分析编辑可以直接进入对应的 owner skill。
+description: Maintain a deterministic record for the Entity plasma simulation project: environment, source versions, builds, the run ledger, and data status are all documented, so any session (a different machine, a different agent, a mid-run crash) can pick up where the last one left off. Use for cross-session or cross-machine simulation work, run submission and tracking, and results inventory. Bounded read-only questions and standalone PGen/build/analysis edits can go directly to the corresponding owner skill.
 ---
 
 # Entity Ledger
 
-这个技能帮你用 Entity 做等离子体模拟研究时**不丢状态**：编译环境怎么
-配的、代码用哪个版本、跑过哪些 run、参数是什么、结果在哪——这些确定
-性的事实都记录在案。你自由探索（改 PGen、换参数、分析数据），Ledger
-负责把既成事实登记进 Case 台账，让任何一轮会话都能知道项目在哪、
-下一步是什么。
+This skill keeps you from **losing state** while doing plasma simulation
+research with Entity: how the build environment was configured, which code
+version is in use, which runs have been executed, with what parameters, and
+where the results live — these deterministic facts are all on record. You
+explore freely (edit the PGen, change parameters, analyze data); the Ledger
+records established facts into the Case ledger, so any session can tell where
+the project stands and what the next step is.
 
-公开模型：
+Public model:
 
 ```text
 Project → Case → Identity → Evidence
 ```
 
-Case/identity ID、哈希、Locator 和路径由控制器推导，不要让用户提供
-或管理这些字段。
+Case/identity IDs, hashes, Locators, and paths are derived by the controller;
+do not ask the user to provide or manage these fields.
 
-## 先读项目状态
+## Read project status first
 
-进入一个项目，先跑：
+When entering a project, run first:
 
 ```bash
 python3 scripts/entityctl.py status --project-root <project>
 ```
 
-输出人可读的项目仪表盘：
+The output is a human-readable project dashboard:
 
-- **就绪板**：source / pgen / build / run / data / analysis 六格状态与
-  证据（哪格缺、哪格过期、run 的退出码）；
-- **Run 台账**：跑过哪些 run、在什么机器、什么状态——run 序列就是
-  研究轨迹；
-- **待决**：未确认的参数、带外变更等需要决定的事；
-- **建议下一步**：由当前事实推导（不存储、永不过期）。
+- **Readiness board**: status and evidence for the six cells
+  source / pgen / build / run / data / analysis (which cell is missing, which
+  is stale, run exit codes);
+- **Run ledger**: which runs have been executed, on which machine, in what
+  state — the run sequence is the research trajectory;
+- **Pending decisions**: unconfirmed parameters, out-of-band changes, and
+  other matters requiring a decision;
+- **Suggested next steps**: derived from current facts (not stored, never
+  stale).
 
-`--live` 额外探测 scheduler/进程的当前状态；`--json` 返回机器可读
-合同；`show --project-root <project>` 输出 Case 事实明细。status 和
-show 只读，绝不写状态。
+`--live` additionally probes the current state of the scheduler/processes;
+`--json` returns the machine-readable contract; `show --project-root
+<project>` prints the Case fact details. status and show are read-only and
+never write state.
 
-## 确定性原语
+## Deterministic primitives
 
-CLI 是辅助工具，每个命令只做一件确定性的事；流程顺序由你按用户
-目标编排。写入类原语自带证据探测——先验证、后落账，失败时零写入，
-修复原因后重跑同一条命令即可：
+The CLI is an auxiliary tool; each command does exactly one deterministic
+thing, and you orchestrate the sequence according to the user's goal. Writing
+primitives carry their own evidence probes — verify first, then record; on
+failure nothing is written, and after fixing the cause you simply rerun the
+same command:
 
 ```bash
-# 生成（不写状态）
+# Generate (does not write state)
 python3 scripts/entityctl.py render-run \
   --project-root <project> --toml <input.toml> --site <site> \
   [--gpus N] [--walltime HH:MM:SS] [--precision single|double] [--executable <path>]
 python3 scripts/entityctl.py snapshot-source --project-root <project>
 
-# 记录（先探测证据，后落账）
+# Record (probe evidence first, then write to the ledger)
 python3 scripts/entityctl.py \
   --actor-run-id <run-id> --actor-provider <provider> \
   record run-prepare --project-root <project> --toml <input.toml> --site <site> [...]
@@ -63,48 +71,58 @@ python3 scripts/entityctl.py record run-exit  --project-root <project> [--run-id
 python3 scripts/entityctl.py record build --project-root <project> --site <site> \
   --checkpoint <deps-checkpoint.json> --executable <path>
 python3 scripts/entityctl.py record data --project-root <project> [--run-id <id>]
-python3 scripts/entityctl.py record intent --project-root <project> --text "<当前研究目标>"
+python3 scripts/entityctl.py record intent --project-root <project> --text "<current research goal>"
 ```
 
-关键语义：
+Key semantics:
 
-- `record run-prepare` 要求参数已确认（pgen skill 的
-  `pgen_preflight.py confirm <input> --by <actor>` 写入
-  `<input>.decisions.json`）；TOML 改动后需重新确认。
-- `record run-launch` 的 receipt 保证 exactly-once：重复执行不会
-  重复提交，进程中断后重跑会认领已提交的作业；绕过 Ledger 自己提交
-  的作业用 `--adopt-job` / `--adopt-pid` 认领进台账。
-- run 上了调度器后就是在途事实，不占用项目状态；等待期间你可以去
-  分析上一个 run 或开发下一个 PGen，`status --live` 随时探测进度。
-- `record build` 要求 env-build checkpoint 为 `compatibility: pass`
-  且参数已确认；登记后 run 原语可省略 `--executable`。
-- `record intent` 记录当前研究目标（仪表盘"目标"行）。意图是唯一
-  存下来的"指针"——产物全绿不代表该收工，目标只能显式记录；它引导
-  你探索后不漂移，新目标会替换旧目标（历史留在审计事件里）。
-- 管理命令：`doctor`、`install`、`site add/list/discover`、
-  `store migrate`、`submission create/verify`、`export`。写 site 策略
-  前先用 `site discover` 探测；崩溃后用 `doctor` 检查安装与存储。
+- `record run-prepare` requires the parameters to be confirmed (the pgen
+  skill's `pgen_preflight.py confirm <input> --by <actor>` writes
+  `<input>.decisions.json`); after the TOML changes, re-confirmation is
+  required.
+- The `record run-launch` receipt guarantees exactly-once: repeated
+  execution does not resubmit, and rerunning after a process interruption
+  adopts the already-submitted job; jobs submitted outside the Ledger are
+  adopted into the ledger with `--adopt-job` / `--adopt-pid`.
+- Once a run is on the scheduler it is an in-flight fact and does not occupy
+  project state; while waiting you can analyze the previous run or develop
+  the next PGen, and `status --live` probes progress at any time.
+- `record build` requires the env-build checkpoint to be
+  `compatibility: pass` and the parameters to be confirmed; once recorded,
+  run primitives may omit `--executable`.
+- `record intent` records the current research goal (the dashboard "goal"
+  line). The intent is the only stored "pointer" — all-green artifacts do
+  not mean the work is done; the goal can only be recorded explicitly. It
+  keeps you from drifting as you explore; a new goal replaces the old one
+  (history stays in the audit events).
+- Management commands: `doctor`, `install`, `site add/list/discover`,
+  `store migrate`, `submission create/verify`, `export`. Probe with
+  `site discover` before writing a site profile; after a crash, use
+  `doctor` to check the installation and storage.
 
-内部机制（receipt、executor、scheduler 后端、live 探测细节）只在
-调试时需要，见 `references/ledger-runtime.md`；多站点目录归属见
-`references/workspace-layout.md`。
+Internal mechanisms (receipts, executor, scheduler backends, live probing
+details) are only needed for debugging — see
+`references/ledger-runtime.md`; multi-site directory ownership is covered in
+`references/workspace-layout.md`.
 
 ## Owner skills
 
-`entity-pgen` 负责 PGen/TOML/design，`entity-env-build` 负责依赖与
-构建，`entity-nt2py` 负责数据访问与分析。对它们使用**自由探索、
-严格收束**：给出语义目标、输入 identity、边界和验收标准，让它们
-自行选择内部方法；Ledger 只登记经过重新探测的既成事实，不做它们
-的领域推理。
+`entity-pgen` owns PGen/TOML/design, `entity-env-build` owns dependencies
+and builds, `entity-nt2py` owns data access and analysis. Apply **free
+exploration, strict convergence** to them: give them the semantic goal, the
+input identity, boundaries, and acceptance criteria, and let them choose
+their internal methods; the Ledger only records established facts that have
+been re-probed, and does not perform their domain reasoning.
 
-## 破坏性操作
+## Destructive operations
 
-删除原始数据总是需要明确的用户授权、精确的 manifest、
-受保护的源/构建/依赖 root，以及目标之外的 receipt。
-绝不要从一个宽泛的请求推断删除授权。
+Deleting raw data always requires explicit user authorization, a precise
+manifest, protected source/build/dependency roots, and a receipt outside the
+deletion target. Never infer deletion authorization from a broad request.
 
-## 汇报
+## Reporting
 
-汇报原语执行结果、精确的源/构建/运行 identity、执行 Site、已验证
-的输出/效果、未解决的决策，以及 status 是缓存的还是实时的。内部
-receipt 和存储字段属于诊断细节，不是面向用户的正常工作内容。
+Report primitive execution results, the exact source/build/run identities,
+the execution site, the verified outputs/effects, unresolved decisions, and
+whether status is cached or live. Internal receipts and storage fields are
+diagnostic details, not normal user-facing work content.

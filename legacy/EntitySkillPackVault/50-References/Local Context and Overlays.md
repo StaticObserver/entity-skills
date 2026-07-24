@@ -1,32 +1,31 @@
-# 本地上下文与 Overlays
+# Local Context and Overlays
 
-## 目的
+## Purpose
 
-把用户专属的 Entity 知识和官方上游知识分开。
+Separate user-specific Entity knowledge from official upstream knowledge.
 
-## Local Overlay 类别
+## Local Overlay Categories
 
-- StaticObserver Entity fork；
-- experimental branches；
-- custom pgens；
-- local validation plans；
-- project-specific analysis scripts；
-- unpublished feature work。
+- StaticObserver Entity fork;
+- experimental branches;
+- custom pgens;
+- local validation plans;
+- project-specific analysis scripts;
+- unpublished feature work.
 
-## 规则
+## Rules
 
-不要把 local overlay behavior 写成官方上游 Entity behavior。
+Do not present local overlay behavior as official upstream Entity behavior.
 
-每条 overlay note 应包含：
+Each overlay note should include:
 
-- repository path 或 URL；
-- branch；
-- commit；
-- date observed；
-- files inspected；
-- 与 official upstream 的差异。
+- repository path or URL;
+- branch;
+- commit;
+- date observed;
+- files inspected;
+- differences from the official upstream.
 
-## 初始上下文
+## Initial Context
 
-已有上下文显示，本地 Entity 相关工作可能包含 axion/external current 修改和分支特定 validation plan。在当前 checkout 验证前，把这些都视为 local overlays。
-
+Existing context suggests that local Entity-related work may include axion/external current modifications and branch-specific validation plans. Treat all of these as local overlays until verified against the current checkout.

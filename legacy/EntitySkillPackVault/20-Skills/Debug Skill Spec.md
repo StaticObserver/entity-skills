@@ -1,62 +1,62 @@
-# Debug Skill 规范
+# Debug Skill Spec
 
-## 使命
+## Mission
 
-诊断 Entity 的 build、runtime、output、checkpoint、cluster environment 和 numerical behavior 问题。
+Diagnose Entity build, runtime, output, checkpoint, cluster environment, and numerical behavior problems.
 
-这个 skill 是横切能力，可以被 simulation、analysis 或 development 工作流调用。
+This skill is a cross-cutting capability that can be invoked by simulation, analysis, or development workflows.
 
-## 排错类别
+## Troubleshooting Categories
 
 ### Build
 
-- CMake options；
-- Kokkos backend 和 architecture flags；
-- compiler 与 CUDA/HIP compatibility；
-- ADIOS2 与 HDF5 discovery；
-- MPI 和 GPU-aware MPI。
+- CMake options;
+- Kokkos backend and architecture flags;
+- compiler and CUDA/HIP compatibility;
+- ADIOS2 and HDF5 discovery;
+- MPI and GPU-aware MPI.
 
 ### Runtime
 
-- `.err` 和 `.log` 文件；
-- stdout progress；
-- 粒子数异常增长或损失；
-- `maxnpart` exceeded；
-- NaN 或 timestep 收缩；
-- boundary-condition 问题。
+- `.err` and `.log` files;
+- stdout progress;
+- abnormal particle growth or loss;
+- `maxnpart` exceeded;
+- NaN or timestep shrinkage;
+- boundary-condition problems.
 
-### 输出
+### Output
 
-- fields 或 particle data 缺失；
-- BP5/HDF5 format mismatch；
-- stats CSV 缺失或格式异常；
-- custom output hook 未被检测到；
-- checkpoint write/read 失败。
+- missing fields or particle data;
+- BP5/HDF5 format mismatch;
+- missing or malformed stats CSV;
+- custom output hook not detected;
+- checkpoint write/read failures.
 
 ### Performance
 
-- communication bottleneck；
-- current deposition；
-- field solver；
-- particle pusher；
-- output throughput。
+- communication bottleneck;
+- current deposition;
+- field solver;
+- particle pusher;
+- output throughput.
 
-## 工作流
+## Workflow
 
-1. 保留 failing command 和 environment。
-2. 判断 failure 类型：build、runtime、output、checkpoint、performance 或 numerical。
-3. 先读离错误最近的 artifact。
-4. 最小化问题 case。
-5. 可行时与已知可运行 pgen 比较。
-6. 一次只提出一个改动。
-7. 重新运行最小有用检查。
+1. Preserve the failing command and environment.
+2. Classify the failure: build, runtime, output, checkpoint, performance, or numerical.
+3. Read the artifact closest to the error first.
+4. Minimize the problem case.
+5. Compare with a known-working pgen when feasible.
+6. Propose only one change at a time.
+7. Rerun the smallest useful check.
 
-## 输出
+## Output
 
-说明：
+State:
 
-- suspected cause；
-- evidence；
-- 已尝试或建议的 fix；
-- verification result；
-- remaining uncertainty。
+- suspected cause;
+- evidence;
+- fixes tried or suggested;
+- verification result;
+- remaining uncertainty.

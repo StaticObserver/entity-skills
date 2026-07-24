@@ -1,55 +1,55 @@
-# 依赖策略
+# Dependency Policy
 
-在环境探测（第 2 阶段）期间选择 C++ 依赖来源时，使用本参考。
+Use this reference when selecting C++ dependency sources during environment probing (Phase 2).
 
-## 优先级顺序
+## Priority Order
 
-对于 C++ 编译器与库，按以下顺序搜索：
+For C++ compilers and libraries, search in this order:
 
-1. **系统 modules/软件包** — `module load`、`dnf`/`apt`/`brew` 或系统路径
-2. **Spack** — `spack find`、`spack load`
-3. **源码构建** — 最后手段；用 `entity_generate.py deps` 生成脚本
+1. **System modules/packages** — `module load`, `dnf`/`apt`/`brew`, or system paths
+2. **Spack** — `spack find`, `spack load`
+3. **Source build** — last resort; generate scripts with `entity_generate.py deps`
 
-## Conda 警告
+## Conda Warning
 
-**不要**用 conda 提供 C++ 构建工具。conda 自带的 `libstdc++` 与链接器配置在与系统或 Spack 构建的库混用时会导致隐蔽的 ABI 问题。
+Do **not** use conda to provide C++ build tools. conda's bundled `libstdc++` and linker configuration cause subtle ABI problems when mixed with system- or Spack-built libraries.
 
-## Python 环境
+## Python Environment
 
-对于 Python，conda 是首选且推荐的选择。Python 运行时依赖（例如分析脚本）遵循标准的 conda/pip 工作流程。
+For Python, conda is the preferred and recommended choice. Python runtime dependencies (e.g., analysis scripts) follow the standard conda/pip workflow.
 
-## 核心依赖
+## Core Dependencies
 
-以下始终必需：
+Always required:
 
-- CMake（最低版本见 `entity_schema.py:MIN_CMAKE_VERSION`）
-- 一个 C++ 编译器（GCC、Clang，或 HIP 时用 `hipcc`）
-- Kokkos（版本族由 Entity profile 决定）
+- CMake (minimum version: see `entity_schema.py:MIN_CMAKE_VERSION`)
+- A C++ compiler (GCC, Clang, or `hipcc` for HIP)
+- Kokkos (version family determined by the Entity profile)
 
-## 条件依赖
+## Conditional Dependencies
 
-| 条件 | 必需项 | 备注 |
+| Condition | Required | Notes |
 |-----------|----------|-------|
-| `environment.backend=cuda` | CUDA 工具包、`nvcc`、Kokkos `nvcc_wrapper` | 同时记录 wrapper 路径与 host 编译器 |
-| `environment.backend=hip` | HIP/ROCm 工具包、`hipcc` | 包含 ROCm/DTK 版本偏好 |
-| `environment.mpi=true` | `mpicxx`、`mpirun`、MPI modules | 不要仅因 mpicxx 存在就启用；OpenMPI 必须 >= 5.0.0（见下文） |
-| `environment.output=true` | ADIOS2 + HDF5 | 串行/MPI 上下文与 MPI 需求匹配 |
+| `environment.backend=cuda` | CUDA toolkit, `nvcc`, Kokkos `nvcc_wrapper` | Record both the wrapper path and the host compiler |
+| `environment.backend=hip` | HIP/ROCm toolkit, `hipcc` | Include ROCm/DTK version preference |
+| `environment.mpi=true` | `mpicxx`, `mpirun`, MPI modules | Do not enable merely because mpicxx exists; OpenMPI must be >= 5.0.0 (see below) |
+| `environment.output=true` | ADIOS2 + HDF5 | Serial/MPI context must match the MPI requirement |
 
-## Profile 匹配
+## Profile Matching
 
-Entity `1.4.0` 及更新版本使用一个受支持的依赖 profile：
+Entity `1.4.0` and newer use one supported dependency profile:
 
-| Profile | Entity 版本 | C++ 标准 | Kokkos | ADIOS2 | ADIOS2 Kokkos 支持 |
+| Profile | Entity version | C++ standard | Kokkos | ADIOS2 | ADIOS2 Kokkos support |
 |---------|---------------|--------------|--------|--------|-----------------------|
 | `modern` | >= 1.4.0 | 20 | 5.x | 2.11.x | ON |
 
-`1.4.0` 之前的 Entity 版本不受支持。
-Entity `1.4.0`–`1.4.2` 仅支持 CPU；CUDA 要求 Entity `1.4.3` 或更新。
+Entity versions before `1.4.0` are not supported.
+Entity `1.4.0`–`1.4.2` supports CPU only; CUDA requires Entity `1.4.3` or newer.
 
-## OpenMPI 最低版本
+## OpenMPI Minimum Version
 
-当选定的 MPI 是 OpenMPI 时，版本必须满足
-`entity_schema.py:MIN_OPENMPI_VERSION`（>= 5.0.0）。较旧的 OpenMPI 4.x
-版本在 `srun` 下有已知的 ORTE/PMI 启动失败。兼容性检查
-`mpi.openmpi_min_version` 在低于最低版本时失败；请选择更新的 module
-或源码构建 OpenMPI 5.x，而不是 override。
+When the selected MPI is OpenMPI, the version must satisfy
+`entity_schema.py:MIN_OPENMPI_VERSION` (>= 5.0.0). Older OpenMPI 4.x
+versions have known ORTE/PMI launch failures under `srun`. The compatibility
+check `mpi.openmpi_min_version` fails when the version is below the minimum;
+select a newer module or build OpenMPI 5.x from source instead of overriding.

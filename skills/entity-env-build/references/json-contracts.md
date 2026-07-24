@@ -1,8 +1,8 @@
-# JSON 契约
+# JSON Contracts
 
-`requirements.json` 是用户意图加上构建站点范围。
-`entity-deps.local.json` 是从该确切请求派生的站点本地依赖 checkpoint。
-`env.sh` 与 `entity-build.sh` 是派生产物。
+`requirements.json` is the user intent plus the build site scope.
+`entity-deps.local.json` is the site-local dependency checkpoint derived from
+that exact request. `env.sh` and `entity-build.sh` are derived artifacts.
 
 ## requirements.json schema v2
 
@@ -46,23 +46,23 @@
 }
 ```
 
-校验/构建之前必需：
+Required before validation/build:
 
-- `entity.site_id`、`source_checkout`、不可变的 `source_revision`、
-  `build_root` 与 `deps_root`；
-- 建议提供 `entity.artifacts_root`，省略时默认为
-  `<build_root>/_artifacts`；
-- `compile.pgen` 与 `environment.backend`；
-- 受支持的 Entity 版本/依赖 profile。
+- `entity.site_id`, `source_checkout`, an immutable `source_revision`,
+  `build_root`, and `deps_root`;
+- `entity.artifacts_root` is recommended; when omitted it defaults to
+  `<build_root>/_artifacts`;
+- `compile.pgen` and `environment.backend`;
+- a supported Entity version/dependency profile.
 
-`compile.build_dir` 默认为 `entity.build_root`，并在脚本生成前回写。
-所有路径都是 `entity.site_id` 上的绝对路径；它们不隐含共同的父目录。
-新工作流程必须使用 v2。Schema v1 的 `checkout_root/workdir` 仅为明确的
-旧版兼容而存在。
+`compile.build_dir` defaults to `entity.build_root` and is written back before
+script generation. All paths are absolute paths on `entity.site_id`; they do
+not imply a common parent directory. New workflows must use v2. Schema v1
+`checkout_root/workdir` exists only for explicit legacy compatibility.
 
 ## entity-deps.local.json
 
-checkpoint 与其请求具有相同的 schema 版本，并记录：
+The checkpoint has the same schema version as its request and records:
 
 ```json
 {
@@ -89,13 +89,14 @@ checkpoint 与其请求具有相同的 schema 版本，并记录：
 }
 ```
 
-每个选定的依赖记录 provider、prefix/bin/include/lib/config 路径、版本、
-编译器/MPI 签名、环境添加项、编译配置与验证。只有当内嵌的
-requirements、执行站点、全部五个解析后的路径、版本 profile 与工具链
-选择与当前请求匹配时，checkpoint 才可复用。
+Each selected dependency records the provider, prefix/bin/include/lib/config
+paths, version, compiler/MPI signature, environment additions, compile
+configuration, and verification. The checkpoint is reusable only when the
+embedded requirements, execution site, all five resolved paths, version
+profile, and toolchain choices match the current request.
 
-`decisions.parameters` 记录编译参数确认这一硬性门槛，由
-`entity_checkpoint.py confirm` 写入：
+`decisions.parameters` records the compile-parameter confirmation hard gate,
+written by `entity_checkpoint.py confirm`:
 
 ```json
 {
@@ -113,30 +114,30 @@ requirements、执行站点、全部五个解析后的路径、版本 profile �
 }
 ```
 
-`card` 是确认时从 requirements 派生的参数卡
-（`entity_schema.py:parameter_card`）；`digest` 是它的摘要。当记录
-缺失或摘要不再匹配当前 requirements 时，兼容性检查会使
-`parameters.confirmation` 失败。
+`card` is the parameter card derived from requirements at confirmation time
+(`entity_schema.py:parameter_card`); `digest` is its digest. When the record
+is missing or the digest no longer matches the current requirements, the
+compatibility check fails `parameters.confirmation`.
 
-兼容性状态：
+Compatibility status:
 
-- `pass`：当前请求可用已证明的依赖构建；
-- `warn`：仅剩已接受的、有文档记录的偏差；
-- `fail`：至少存在一个硬性不兼容；
-- `unknown`：检查器尚未验证当前状态。
+- `pass`: the current request can be built with proven dependencies;
+- `warn`: only accepted, documented deviations remain;
+- `fail`: at least one hard incompatibility exists;
+- `unknown`: the checker has not yet verified the current state.
 
-override 记录用户决策，可以把一个已知检查降级为警告。它不能掩盖缺失
-的路径、源码/构建站点不匹配、不受支持的 schema/版本，或缺失的可执行
-文件。
+An override records a user decision and can demote a known check to a
+warning. It cannot mask missing paths, source/build site mismatch, unsupported
+schema/versions, or missing executables.
 
-## 派生产物
+## Derived artifacts
 
-- `env.sh` 从 checkpoint 导出依赖/工具链路径，包括
-  `ENTITY_DEPS_ROOT`；它不定义 `ENTITY_WORKDIR`。
-- `entity-build.sh` 把 `entity.source_checkout` 配置到
-  `entity.build_root`，并将日志写入 `entity.artifacts_root/build-logs`。
-- requirements 中的 `build_result` 记录状态、时间戳、退出码、运行 ID、
-  runner 日志、脚本以及预期可执行文件证据。
+- `env.sh` exports dependency/toolchain paths from the checkpoint, including
+  `ENTITY_DEPS_ROOT`; it does not define `ENTITY_WORKDIR`.
+- `entity-build.sh` configures `entity.source_checkout` into
+  `entity.build_root` and writes logs to `entity.artifacts_root/build-logs`.
+- The `build_result` in requirements records status, timestamps, exit code,
+  run ID, runner log, script, and expected executable evidence.
 
-站点特有的 modules、前置命令与环境覆盖属于 checkpoint/站点笔记。凭据
-绝不进入任何一个 JSON 文件。
+Site-specific modules, preamble commands, and environment overrides belong in
+the checkpoint/site notes. Credentials never enter any JSON file.

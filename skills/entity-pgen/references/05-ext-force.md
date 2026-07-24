@@ -1,27 +1,27 @@
-# 05 — 外力（ext_force + ExternalFields）
+# 05 — External Forces (ext_force + ExternalFields)
 
-> 基于 Entity v1.4.4
+> Based on Entity v1.4.4
 
-## 何时使用
+## When to use
 
-当你需要对粒子施加外力时使用。触发关键词：外部加速度、非电磁力、辐射反作用力、外部 E/B 场、ExternalFields、辐射压。
+Use this when you need to apply external forces to particles. Trigger keywords: external acceleration, non-electromagnetic force, radiation reaction, external E/B fields, ExternalFields, radiation pressure.
 
-**如果粒子只受洛伦兹力，请跳过本参考。**
+**If particles are only subject to the Lorentz force, skip this reference.**
 
 ---
 
-## 两种方案
+## Two approaches
 
-| 方案 | 能力 | 复杂度 | 何时使用 |
+| Approach | Capability | Complexity | When to use |
 |----------|------------|------------|-------------|
-| `ext_force` 实例 | 仅加速度 fx1/fx2/fx3 | 低 | 简单的空间/时间相关外力 |
-| `ExternalFields` 方法 | 加速度 + 外部 E + 外部 B | 高 | 需要提供场分量，或按物种切换 |
+| `ext_force` instance | Acceleration only: fx1/fx2/fx3 | Low | Simple space/time-dependent external forces |
+| `ExternalFields` method | Acceleration + external E + external B | High | Need to provide field components, or switch per species |
 
 ---
 
-## 方案 1：ext_force 实例
+## Approach 1: ext_force instance
 
-### 签名
+### Signature
 
 ```cpp
 struct ExtForce {
@@ -39,15 +39,15 @@ struct ExtForce {
 ExtForce ext_force;
 ```
 
-### 参数说明
+### Parameter description
 
-| 参数 | 含义 | 备注 |
+| Parameter | Meaning | Notes |
 |-----------|---------|-------|
-| `sp` | 物种索引（species 向量中的值） | 0 起始的 C++ 索引 |
-| `time` | 当前模拟时间 | 代码单位 |
-| `coord_t<D> x` | 粒子物理坐标 | 代码单位 |
+| `sp` | Species index (value from the species vector) | 0-based C++ index |
+| `time` | Current simulation time | Code units |
+| `coord_t<D> x` | Particle physical coordinates | Code units |
 
-### 代码示例
+### Code example
 
 ```cpp
 struct ExtForce {
@@ -69,9 +69,9 @@ PGen(...)
 
 ---
 
-## 方案 2：ExternalFields 方法
+## Approach 2: ExternalFields method
 
-### 签名
+### Signature
 
 ```cpp
 // PGen method (not a standalone instance)
@@ -104,23 +104,23 @@ auto ExternalFields(simtime_t time, spidx_t sp,
 }
 ```
 
-### 参数说明
+### Parameter description
 
-| 参数 | 含义 |
+| Parameter | Meaning |
 |-----------|---------|
-| `time` | 当前模拟时间 |
-| `sp` | 物种索引 |
-| `domain` | 当前 Domain（可访问网格与场） |
-| 返回值 `pair<bool, F>` | bool = 是否施加于该物种；F = ExtFields 仿函数 |
+| `time` | Current simulation time |
+| `sp` | Species index |
+| `domain` | Current Domain (provides access to mesh and fields) |
+| Return value `pair<bool, F>` | bool = whether to apply to this species; F = ExtFields functor |
 
-### 关键差异
+### Key differences
 
-- **ExternalFields 每次调用都会构造一个新的 ExtFields 实例**（按值返回）
-- **可访问 domain.mesh.metric** → 支持坐标相关的场计算
-- **bool 返回值控制按物种切换**
-- **同时提供力（fx）+ B（bx）+ E（ex）** → 完全替代 ext_force + 部分 ext_current 功能
+- **ExternalFields constructs a new ExtFields instance on every call** (returned by value)
+- **Can access domain.mesh.metric** → supports coordinate-dependent field computation
+- **The bool return value controls per-species switching**
+- **Provides force (fx) + B (bx) + E (ex) simultaneously** → fully replaces ext_force and part of ext_current functionality
 
-### 代码示例
+### Code example
 
 ```cpp
 template <SimEngine::type S, class M>
@@ -154,7 +154,7 @@ struct PGen {
 
 ---
 
-## 两种方案的取舍
+## Trade-offs between the two approaches
 
 ```cpp
 // ext_force → simple, efficient, suitable for forces that do not depend on domain
@@ -173,30 +173,30 @@ struct PGen {
 
 ---
 
-## 所需头文件
+## Required headers
 
 ```cpp
 #include "framework/domain/domain.h"  // Domain<S,M> type
 ```
 
-ext_force 不需要额外的 archetype 头文件。
+ext_force does not require additional archetype headers.
 
 ---
 
-## 约束与不兼容性
+## Constraints and incompatibilities
 
-| 约束 | 说明 |
+| Constraint | Description |
 |------------|-------------|
-| ext_force 与 ExternalFields 二选一 | ExternalFields 是 ext_force 的超集 |
-| ext_force 的 species 为 0 起始 | 与 InjectUniform 的 1 起始不同！ |
-| fx 返回 tetrad 基下的加速度 | 与 ext_current 的坐标基约定不同 |
-| ExternalFields 的 ExtFields 结构体必须可按值拷贝 | 每次调用都会返回一个新实例 |
+| Choose either ext_force or ExternalFields | ExternalFields is a superset of ext_force |
+| ext_force species are 0-based | Unlike InjectUniform's 1-based indexing! |
+| fx returns acceleration in the tetrad basis | Different from ext_current's coordinate-basis convention |
+| The ExternalFields ExtFields struct must be copyable by value | A new instance is returned on every call |
 
 ---
 
-## 常见陷阱
+## Common pitfalls
 
-1. **物种索引混淆** — ext_force 使用 0 起始（`{0, 1}`），粒子注入使用 1 起始（`{1, 2}`）
-2. **基混淆** — ext_force 的 fx 是 tetrad 基下的加速度，ext_current 的 jx 是坐标基分量
-3. **ExternalFields 缺少 bool 判断** — 对所有物种返回 true 等价于 ext_force
-4. **在 ExtFields 中访问未定义行为** — 只定义 ExtFields 中实际使用的方法；所有其他分量默认为零
+1. **Species index confusion** — ext_force uses 0-based indexing (`{0, 1}`), particle injection uses 1-based indexing (`{1, 2}`)
+2. **Basis confusion** — ext_force's fx is acceleration in the tetrad basis, ext_current's jx is a coordinate-basis component
+3. **ExternalFields missing the bool check** — returning true for all species is equivalent to ext_force
+4. **Accessing undefined behavior in ExtFields** — only define the ExtFields methods that are actually used; all other components default to zero

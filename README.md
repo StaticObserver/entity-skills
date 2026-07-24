@@ -1,22 +1,27 @@
 # Entity Skills Package
 
-一套帮助 Agent 使用 [Entity](https://github.com/entity-toolkit/entity) 完成天体物理模拟的 skills package。
+A skills package that helps agents run astrophysical simulations with
+[Entity](https://github.com/entity-toolkit/entity).
 
-`skills/entity-ledger/SKILL.md` 是模拟项目的确定性记录入口。Ledger 把
-公共模型收敛为 `Project → Case → Identity → Evidence`：Agent 负责与用户对话、
-科学判断和流程编排，Ledger 提供确定性原语——读取（status/show）、生成
-（render-run/snapshot-source）、记录（record build/run-prepare/run-launch/
-run-exit/data/intent）和探测（status --live）。写入类原语自带证据探测，
-先验证、后落账，失败零写入。边界明确的只读或 standalone 领域任务仍可直接
-调用对应 owner skill。
+`skills/entity-ledger/SKILL.md` is the deterministic record entry point for
+simulation projects. The Ledger converges the public model into
+`Project → Case → Identity → Evidence`: the agent handles conversation with
+the user, scientific judgment, and workflow orchestration, while the Ledger
+provides deterministic primitives — read (status/show), generate
+(render-run/snapshot-source), record (record build/run-prepare/run-launch/
+run-exit/data/intent), and probe (status --live). Write primitives carry
+built-in evidence probes: verify first, then commit to the ledger, with zero
+writes on failure. Well-scoped read-only or standalone domain tasks can still
+invoke the corresponding owner skill directly.
 
-- `entity-pgen`：PGen、匹配 TOML 和设计记录；
-- `entity-env-build`：依赖环境与 Entity 编译；
-- `entity-nt2py`：nt2py 数据访问、绘图和导出。
+- `entity-pgen`: PGen, matching TOML, and design records;
+- `entity-env-build`: dependency environment and Entity build;
+- `entity-nt2py`: nt2py data access, plotting, and export.
 
-流程顺序由 Agent 按用户目标自行编排，不单独建立 run skill。SQLite
-`ledger.db`（schema v2）是唯一结构化 controller authority；Local 与
-SSH 使用同一个内容寻址 executor。
+The workflow order is orchestrated by the agent according to the user's goal;
+no separate run skill is established. The SQLite `ledger.db` (schema v2) is
+the only structured controller authority; Local and SSH share the same
+content-addressed executor.
 
 ```text
 entity-skills/
@@ -37,19 +42,23 @@ entity-skills/
 └── legacy/
 ```
 
-当前架构见 `design/router-case-centric-restructure-2026-07-23.md`，迁移计划见
-`design/router-restructure-migration-2026-07-23.md`。`router-v5-*`、
-`architecture-v4.md` 和 `model-efficient-router-flow.md` 是历史设计，不代表当前
-公共入口。skill 执行观测合同见 `design/skill-observability.md`。`design/` 和
-`legacy/` 不属于 Ledger 运行时上下文。
+For the current architecture, see
+`design/router-case-centric-restructure-2026-07-23.md`; for the migration
+plan, see `design/router-restructure-migration-2026-07-23.md`. `router-v5-*`,
+`architecture-v4.md`, and `model-efficient-router-flow.md` are historical
+designs and do not represent the current public entry point. For the skill
+execution observability contract, see `design/skill-observability.md`.
+`design/` and `legacy/` are not part of the Ledger runtime context.
 
-## 公共控制状态
+## Shared Control State
 
-Codex、Claude Code、Kimi Code 和普通 shell 默认共享控制机上的
-`~/.entity-ledger/ledger.db`（schema v2：Site、Case、项目绑定、identity 与
-审计事件；并发为单写文件锁）。identity、事件和 evidence reference 不写入
-客户端私有目录或源码仓库。远端不可用时仍可读取最后一次控制快照，但缓存
-evidence 不代表当前远端事实。
+Codex, Claude Code, Kimi Code, and plain shells share
+`~/.entity-ledger/ledger.db` on the control machine by default (schema v2:
+Site, Case, project bindings, identity, and audit events; concurrency is a
+single-writer file lock). Identity, events, and evidence references are not
+written to client-private directories or source repositories. When the remote
+is unavailable, the last control snapshot can still be read, but cached
+evidence does not represent current remote facts.
 
 ```bash
 python3 skills/entity-ledger/scripts/entityctl.py doctor
@@ -62,19 +71,19 @@ python3 skills/entity-ledger/scripts/entityctl.py \
 python3 skills/entity-ledger/scripts/entityctl.py site list
 python3 skills/entity-ledger/scripts/entityctl.py export --output /absolute/export.json
 
-# 读取项目状态（仪表盘：就绪板 + Run 台账 + 待决 + 建议下一步）
+# Read project status (dashboard: readiness board + Run ledger + pending items + suggested next steps)
 python3 skills/entity-ledger/scripts/entityctl.py status \
   --project-root /absolute/project [--live] [--json]
 python3 skills/entity-ledger/scripts/entityctl.py show --project-root /absolute/project
 
-# 生成（零写入）
+# Generate (zero writes)
 python3 skills/entity-ledger/scripts/entityctl.py render-run \
   --project-root /absolute/project --toml input.toml --site <site> [--gpus N]
 python3 skills/entity-ledger/scripts/entityctl.py \
   --actor-run-id <run-id> --actor-provider <provider> \
   snapshot-source --project-root /absolute/project
 
-# 记录（先探测证据，后落账）
+# Record (probe evidence first, then commit to the ledger)
 python3 skills/entity-ledger/scripts/entityctl.py \
   --actor-run-id <run-id> --actor-provider <provider> \
   record run-prepare --project-root /absolute/project --toml input.toml --site <site>
@@ -84,41 +93,54 @@ python3 skills/entity-ledger/scripts/entityctl.py ... record build --project-roo
   --site <site> --checkpoint deps.local.json --executable /abs/entity.xc
 python3 skills/entity-ledger/scripts/entityctl.py ... record data   --project-root ...
 python3 skills/entity-ledger/scripts/entityctl.py ... record intent --project-root ... \
-  --text "<当前研究目标>"
+  --text "<current research goal>"
 ```
 
-`record run-prepare` 要求模拟参数已确认（`pgen_preflight.py confirm` 写入的
-`<input>.decisions.json` 与 TOML 字节匹配）；`record run-launch` 有 receipt
-保护，重复执行不会重复提交，绕过 Ledger 提交的作业用 `--adopt-job/--adopt-pid`
-认领；`status` 默认只读本地 controller，`--live` 最多执行三次有界 scheduler
-查询。
+`record run-prepare` requires the simulation parameters to be confirmed (the
+`<input>.decisions.json` written by `pgen_preflight.py confirm` must match the
+TOML byte-for-byte); `record run-launch` is receipt-protected, so re-running it
+will not resubmit the job, and jobs submitted bypassing the Ledger can be
+claimed with `--adopt-job/--adopt-pid`; `status` reads only the local
+controller by default, while `--live` performs at most three bounded scheduler
+queries.
 
-`entityctl install` 将一个经过 hash 验证的运行版本发布到
-`~/.entity-skills/bundles/`；Codex、Claude Code 和 Kimi Code 的 discovery 目录只保留
-指向同一 bundle 的符号链接投影，不再分别维护三套文件。
+`entityctl install` publishes a hash-verified runtime version to
+`~/.entity-skills/bundles/`; the discovery directories of Codex, Claude Code,
+and Kimi Code keep only symlink projections pointing to the same bundle,
+instead of maintaining three separate copies of the files.
 
-`entity-pgen` 的直接调用分为只读和 standalone 修改。它在写入前必须运行自身的 preflight；preflight 查询 Ledger store，target 落在注册 Case 的 source/identity/active-run Locator 内即视为受管，受管写入须由 Ledger 的 record 原语登记。Ledger 控制状态位于独立 control root，不依赖源码祖先目录中的 `_case/` 标记。
+Direct invocation of `entity-pgen` falls into read-only and standalone
+modification. It must run its own preflight before writing; the preflight
+queries the Ledger store, and a target that falls within a registered Case's
+source/identity/active-run Locator is treated as managed — managed writes must
+be registered through the Ledger's record primitives. Ledger control state
+lives in an independent control root and does not rely on `_case/` markers in
+source ancestor directories.
 
-## 仓库与发布
+## Repository and Release
 
-四个 skill 由本仓库统一开发、测试和发布。`skills/` 下不使用嵌套 Git 仓库或 submodule；跨 skill 的契约修改应在同一个分支和 pull request 中完成。
+All four skills are developed, tested, and released together in this
+repository. `skills/` does not use nested Git repositories or submodules;
+cross-skill contract changes should land in the same branch and pull request.
 
-- `main` 保存可用的整包状态；
-- 开发使用短期分支，不为单个 skill 维护长期分支；
-- release tag（例如 `v0.1.0`）固定一组经过联合验证的四个 skill；
-- 旧的单 skill 仓库只保留历史，不再作为开发或发布入口。
+- `main` holds the usable whole-package state;
+- development uses short-lived branches; no long-lived branches are kept for individual skills;
+- a release tag (e.g. `v0.1.0`) pins a jointly verified set of the four skills;
+- the old single-skill repositories are kept for history only and are no longer entry points for development or release.
 
-详细协作约定见 `CONTRIBUTING.md`。
+See `CONTRIBUTING.md` for detailed collaboration conventions.
 
-## Skill 运行观测
+## Skill Execution Observability
 
-`tools/skill_observability/skill_observer.py` 提供平台无关的 append-only
-trace。它记录 skill 身份、关键决策、工具调用、artifact 和外部验证，
-不记录隐藏思维链，也不回写 Ledger 或 owner 状态。
+`tools/skill_observability/skill_observer.py` provides a platform-independent
+append-only trace. It records skill identity, key decisions, tool calls,
+artifacts, and external verification; it does not record hidden chains of
+thought, and it does not write back to the Ledger or owner state.
 
-创建 run 时必须传入任务、Agent/tool 配置指纹和实际暴露的 skill。
-Entity source、Ledger Case 和 raw data root 通过 `--protected-root` 显式保护；
-skill source 会自动加入保护列表。
+When creating a run, you must pass the task, the agent/tool configuration
+fingerprints, and the actually exposed skills. The Entity source, Ledger Case,
+and raw data root are explicitly protected via `--protected-root`; skill
+sources are added to the protection list automatically.
 
 ```bash
 python3 tools/skill_observability/skill_observer.py start \
@@ -138,7 +160,8 @@ python3 tools/skill_observability/skill_observer.py start \
   --protected-root /absolute/raw-data
 ```
 
-使用返回的 `<run-dir>` 包装命令，小型 JSON 输出可作为脱敏证据保存：
+Wrap commands with the returned `<run-dir>`; small JSON outputs can be kept as
+sanitized evidence:
 
 ```bash
 python3 tools/skill_observability/skill_observer.py tool \
@@ -161,21 +184,24 @@ python3 tools/skill_observability/skill_observer.py validate \
   --run-dir <run-dir>
 ```
 
-`evidence` 支持历史 `router-action`、`env-build`
-和 `nt2py-inventory` 等校验器。完整协议与证据等级见
-`design/skill-observability.md`。
+`evidence` supports historical validators such as `router-action`, `env-build`,
+and `nt2py-inventory`. For the full protocol and evidence levels, see
+`design/skill-observability.md`.
 
-## 端到端 Skill 对照评测
+## End-to-End Skill Comparison Evaluation
 
-`evals/e2e-neutral-streaming/` 是轻量 A/B 对照：skill/no-skill 两组跑同一个
-模拟任务，对照 trace、token 消耗和完成时间。任务文本、物理参数和启动方式见
-`evals/e2e-neutral-streaming/RUNBOOK.md`。对照 oracle（`oracle/` 下 5 个 gate 与
-`thresholds.json`，由 `tests/test_oracle.py` 覆盖）仍然保留；schema 与 fake Slurm
-脚手架已于 2026-07-21 移除，历史版本见 git 记录。
+`evals/e2e-neutral-streaming/` is a lightweight A/B comparison: skill and
+no-skill groups run the same simulation task, comparing traces, token
+consumption, and completion time. For the task text, physical parameters, and
+launch procedure, see `evals/e2e-neutral-streaming/RUNBOOK.md`. The comparison
+oracle (5 gates under `oracle/` plus `thresholds.json`, covered by
+`tests/test_oracle.py`) is retained; the schema and fake Slurm scaffolding were
+removed on 2026-07-21 — see git history for earlier versions.
 
-已有 Codex、Claude Code 和 Kimi Code 记录均可增量导入。adapter 只保留 tool
-call/output 的 hash、大小、顺序、原生 session/agent ID 和平台原始 usage，显式忽略
-对话文本和 reasoning，并排除 observer 自身调用：
+Existing Codex, Claude Code, and Kimi Code records can all be imported
+incrementally. The adapters keep only the hash, size, order, native
+session/agent IDs, and raw platform usage of tool calls/outputs, explicitly
+ignore conversation text and reasoning, and exclude the observer's own calls:
 
 ```bash
 python3 tools/skill_observability/skill_observer.py import-codex \
@@ -191,7 +217,7 @@ python3 tools/skill_observability/skill_observer.py import-kimi \
   --session /absolute/path/to/kimi-session-directory
 ```
 
-本地验证：
+Local verification:
 
 ```bash
 python3 -m unittest discover -s tests -v

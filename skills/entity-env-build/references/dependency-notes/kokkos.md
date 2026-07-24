@@ -1,16 +1,16 @@
-# Kokkos 构建笔记
+# Kokkos Build Notes
 
-## 版本策略
+## Version Policy
 
-| Profile | Entity 版本 | Kokkos 版本 | C++ 标准 |
+| Profile | Entity version | Kokkos version | C++ standard |
 |---------|---------------|----------------|-------------|
-| modern  | >= 1.4.0      | 5.x（默认 5.0.1） | 20 |
+| modern  | >= 1.4.0      | 5.x (default 5.0.1) | 20 |
 
-`1.4.0` 之前的 Entity 版本不受支持。
+Entity versions before `1.4.0` are not supported.
 
-## CMake 选项
+## CMake Options
 
-基线：
+Baseline:
 ```
 -DCMAKE_CXX_EXTENSIONS=OFF
 -DCMAKE_POSITION_INDEPENDENT_CODE=TRUE
@@ -19,48 +19,48 @@
 -DCMAKE_CXX_STANDARD=<profile_cxx_standard>
 ```
 
-依后端而定：
-| 后端 | 选项 |
+Depending on backend:
+| Backend | Options |
 |---------|---------|
 | cpu     | `-DKokkos_ENABLE_OPENMP=ON` |
 | cuda    | `-DKokkos_ENABLE_CUDA=ON -DKokkos_ARCH_<ARCH>=ON` |
 | hip     | `-DKokkos_ENABLE_HIP=ON -DKokkos_ARCH_<ARCH>=ON` |
 
-## CUDA 后端 — nvcc_wrapper
+## CUDA Backend — nvcc_wrapper
 
-CUDA 构建必须使用 Kokkos `nvcc_wrapper` 作为 CXX。关键设置：
+CUDA builds must use the Kokkos `nvcc_wrapper` as CXX. Key settings:
 
-1. **Host 编译器**：`NVCC_WRAPPER_DEFAULT_COMPILER` 必须指向兼容的 host 编译器
-2. **CUDA 工具包**：运行 cmake 之前 nvcc 必须在 PATH 中
-3. **架构**：显式设置 `Kokkos_ARCH_*`（例如 A100 用 `AMPERE80`，V100 用 `VOLTA70`）
+1. **Host compiler**: `NVCC_WRAPPER_DEFAULT_COMPILER` must point to a compatible host compiler
+2. **CUDA toolkit**: nvcc must be in PATH before running cmake
+3. **Architecture**: set `Kokkos_ARCH_*` explicitly (e.g., `AMPERE80` for A100, `VOLTA70` for V100)
 
-安装前缀包含 `bin/nvcc_wrapper`——这就是 selected.compiler.cxx 必须指向的目标。
+The install prefix contains `bin/nvcc_wrapper` — this is what selected.compiler.cxx must point to.
 
-## 已知问题
+## Known Issues
 
-### GCC 版本对 Kokkos 5.x 太旧
-- 症状：Kokkos configure 期间出现 C++20 特性错误
-- 触发：modern profile 下 GCC < 10.4
-- 修复：使用更新的 GCC（module、spack 或本地安装）。modern profile 最低要求 GCC 10.4。
+### GCC version too old for Kokkos 5.x
+- Symptom: C++20 feature errors during Kokkos configure
+- Trigger: GCC < 10.4 under the modern profile
+- Fix: use a newer GCC (module, spack, or local install). The modern profile requires GCC 10.4 at minimum.
 
-### NVCC 版本对 C++20 太旧
-- 症状：nvcc 无法识别 `-std=c++20`
-- 触发：modern profile 下 NVCC < 12.2
-- 修复：将 CUDA 工具包升级到 12.2+。检查 `nvcc --version`。
+### NVCC version too old for C++20
+- Symptom: nvcc does not recognize `-std=c++20`
+- Trigger: NVCC < 12.2 under the modern profile
+- Fix: upgrade the CUDA toolkit to 12.2+. Check `nvcc --version`.
 
-### nvcc_wrapper host 编译器传递
-- 症状：nvcc_wrapper 使用了错误的 host 编译器（系统默认而非选定的）
-- 触发：PATH 中有多个 GCC 安装
-- 修复：在 cmake configure 之前显式设置 `NVCC_WRAPPER_DEFAULT_COMPILER`。检查生成的 nvcc_wrapper 脚本头部。
+### nvcc_wrapper host compiler propagation
+- Symptom: nvcc_wrapper uses the wrong host compiler (system default instead of the selected one)
+- Trigger: multiple GCC installations in PATH
+- Fix: explicitly set `NVCC_WRAPPER_DEFAULT_COMPILER` before the cmake configure. Check the header of the generated nvcc_wrapper script.
 
-### Kokkos_ENABLE_PIC 警告
-- 症状：CMake 警告 "Manually-specified variables were not used: Kokkos_ENABLE_PIC"
-- 触发：Kokkos 5.x 忽略该标志（PIC 始终开启）
-- 修复：忽略；该标志无害。
+### Kokkos_ENABLE_PIC warning
+- Symptom: CMake warning "Manually-specified variables were not used: Kokkos_ENABLE_PIC"
+- Trigger: Kokkos 5.x ignores the flag (PIC is always on)
+- Fix: ignore it; the flag is harmless.
 
-## 构建后验证
+## Post-Build Verification
 
-预期安装结构：
+Expected install structure:
 ```
 <prefix>/
 ├── bin/nvcc_wrapper          ← Must exist and be executable (CUDA only)
@@ -72,7 +72,7 @@ CUDA 构建必须使用 Kokkos `nvcc_wrapper` 作为 CXX。关键设置：
 │   └── cmake/Kokkos/KokkosConfig.cmake  ← Must exist
 ```
 
-验证：
+Verification:
 ```bash
 <prefix>/bin/nvcc_wrapper --version  # CUDA only
 cmake --find-package -DNAME=Kokkos -DCOMPILER_ID=GNU -DLANGUAGE=CXX -DMODE=EXIST

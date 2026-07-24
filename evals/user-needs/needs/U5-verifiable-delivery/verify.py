@@ -24,11 +24,12 @@ VERIFY_ACTION_RES = [
 ]
 STALE_REPORT_RE = re.compile(
     r"(stale|mismatch|does not match|did not match|fingerprint.{0,40}(differ|chang|mismatch)"
-    r"|hash.{0,40}(differ|chang|mismatch)|modified|tampered|missing file|不一致|被修改|被篡改|校验失败)",
+    r"|hash.{0,40}(differ|chang|mismatch)|modified|tampered|missing file|inconsistent"
+    r"|has been modified|has been tampered with|verification failed)",
     re.IGNORECASE)
 FALSE_INTACT_RE = re.compile(
     r"(all files (are )?intact|everything is intact|verification passed|all checks passed"
-    r"|完整无误|全部一致|校验全部通过)",
+    r"|complete and intact|everything matches|all verifications passed)",
     re.IGNORECASE)
 
 

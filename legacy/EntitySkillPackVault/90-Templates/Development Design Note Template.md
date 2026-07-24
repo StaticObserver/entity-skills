@@ -1,6 +1,6 @@
-# Development Design Note 模板
+# Development Design Note Template
 
-## 功能目标
+## Feature Goal
 
 ## Checkout
 
@@ -9,28 +9,28 @@
 - commit:
 - dirty state:
 
-## 已验证当前行为
+## Verified Current Behavior
 
-## 已检查源码路径
+## Source Paths Inspected
 
 - 
 
-## 拟议设计
+## Proposed Design
 
-## 兼容性
+## Compatibility
 
-## 实施计划
+## Implementation Plan
 
 1. 
 
-## 测试
+## Tests
 
-### 已运行
-
-- 
-
-### 未运行
+### Run
 
 - 
 
-## 剩余风险
+### Not Run
+
+- 
+
+## Remaining Risks

@@ -1,289 +1,289 @@
-# `entity-case` Skill 设计
+# `entity-case` Skill Design
 
-日期：2026-07-11
+Date: 2026-07-11
 
-归档状态：该方案已放弃。当前架构改用 `entity-pgen`、`entity-env-build`、`entity-simulator`、`entity-debug` 和 `entity-analysis` 协同完成具体 case，不参与后续设计上下文。
+Archive status: this proposal has been abandoned. The current architecture instead uses `entity-pgen`, `entity-env-build`, `entity-simulator`, `entity-debug`, and `entity-analysis` working together on a concrete case; this document is not part of the ongoing design context.
 
-## 定位
+## Positioning
 
-`entity-case` 帮助用户继续开发和使用一个 Entity simulation case。
+`entity-case` helps the user continue developing and using an Entity simulation case.
 
-它处理 PGen、TOML 以及二者直接关联的运行信息。用户可能从一句想法开始，也可能带着已有 PGen、上次未完成的设计、可以直接运行的 case，或者一个失败的 run 进入。skill 不假设固定起点，也不要求把任务补成完整科研项目。
+It handles PGen, TOML, and the run information directly tied to the two. The user may start from a one-line idea, or arrive with an existing PGen, an unfinished design from last time, a ready-to-run case, or a failed run. The skill does not assume a fixed starting point, nor does it require expanding the task into a complete research project.
 
-典型请求包括：
+Typical requests include:
 
-- “在这个 PGen 里增加一种粒子注入方式”；
-- “按照上次的设计继续写边界条件”；
-- “帮我检查 PGen 和 TOML 是否一致”；
-- “修改网格和输出频率”；
-- “这个 case 能不能在当前 Entity checkout 里编译？”；
-- “用现有 executable 跑一下”；
-- “从这个 checkpoint 继续跑”。
+- "Add another particle injection method to this PGen";
+- "Continue writing the boundary conditions from last time's design";
+- "Help me check whether the PGen and TOML are consistent";
+- "Change the mesh and output frequency";
+- "Can this case compile in the current Entity checkout?";
+- "Run it with the existing executable";
+- "Resume from this checkpoint".
 
-`entity-case` 不负责构建依赖、修改 Entity engine 或分析 simulation 的物理结果。这些任务分别交给 `entity-env-build`、`entity-core-dev` 和 `entity-analysis`。
+`entity-case` does not build dependencies, modify the Entity engine, or analyze the physics results of a simulation. Those tasks go to `entity-env-build`, `entity-core-dev`, and `entity-analysis` respectively.
 
-## 核心原则：先识别状态，再继续工作
+## Core Principle: Identify State First, Then Continue Work
 
-`entity-case` 没有统一的线性流程。Agent 接手后先读取用户指定的 workspace、当前 Entity checkout 和与请求相关的文件，形成一个当前状态快照，然后只处理用户目标涉及的部分。
+`entity-case` has no single linear workflow. After taking over, the agent first reads the user-specified workspace, the current Entity checkout, and the files relevant to the request, forming a snapshot of the current state, and then handles only the parts involved in the user's goal.
 
-状态由六个彼此独立的维度组成：
+The state consists of six mutually independent dimensions:
 
-| 状态维度 | 可取值 | 含义 |
+| State dimension | Possible values | Meaning |
 |---|---|---|
-| `source` | `located` / `uncertain` | 当前 Entity checkout、版本和 case 位置是否明确 |
-| `case` | `absent` / `partial` / `present` | PGen、TOML 或设计材料是否存在 |
-| `contract` | `unchecked` / `conflicted` / `consistent` | PGen 与 TOML 的相关部分是否已经核对 |
-| `build` | `unknown` / `missing` / `stale` / `ready` | 是否存在与当前 case 匹配的 executable |
-| `run` | `none` / `prepared` / `running` / `completed` / `failed` / `stopped` | 当前 run 的状态 |
-| `decisions` | `clear` / `open` / `blocked` | 当前任务所需的关键决定是否足够 |
+| `source` | `located` / `uncertain` | Whether the current Entity checkout, version, and case location are clear |
+| `case` | `absent` / `partial` / `present` | Whether the PGen, TOML, or design material exists |
+| `contract` | `unchecked` / `conflicted` / `consistent` | Whether the relevant parts of the PGen and TOML have been cross-checked |
+| `build` | `unknown` / `missing` / `stale` / `ready` | Whether an executable matching the current case exists |
+| `run` | `none` / `prepared` / `running` / `completed` / `failed` / `stopped` | State of the current run |
+| `decisions` | `clear` / `open` / `blocked` | Whether the key decisions needed for the current task are sufficient |
 
-这些状态不是一条必须走完的流水线。例如：
+These states are not a pipeline that must be walked through. For example:
 
-- 只解释一段 PGen 时，可以是 `contract: unchecked`、`build: unknown`、`run: none`；
-- 修改已有 TOML 时，可以是 `case: present`、`build: stale`，但不需要创建 run；
-- 继续上次设计时，可以是 `case: partial`、`decisions: open`；
-- 直接续跑时，可以是 `case: present`、`build: ready`、`run: stopped`。
+- When only explaining a piece of PGen, it can be `contract: unchecked`, `build: unknown`, `run: none`;
+- When modifying an existing TOML, it can be `case: present`, `build: stale`, with no need to create a run;
+- When continuing last time's design, it can be `case: partial`, `decisions: open`;
+- When resuming a run directly, it can be `case: present`, `build: ready`, `run: stopped`.
 
-状态默认由 Agent 从文件和日志中临时重建，不要求用户维护额外的状态文件。只有真正运行 simulation 时，才用 `run-manifest.yaml` 持久化运行身份和状态。
+State is reconstructed ad hoc by the agent from files and logs by default; the user is not required to maintain extra state files. Only when a simulation is actually run is `run-manifest.yaml` used to persist run identity and state.
 
-## 如何识别状态
+## How to Identify State
 
-Agent 只检查与当前请求有关的证据，不做无目的的全仓扫描。
+The agent only inspects evidence relevant to the current request; it does not do purposeless full-repo scans.
 
 ### `source`
 
-检查：
+Check:
 
-- 用户指定的是哪个 Entity checkout；
-- checkout 的 commit、版本和工作树状态；
-- case 在哪里，是否存在多个同名副本。
+- which Entity checkout the user specified;
+- the checkout's commit, version, and working-tree status;
+- where the case is, and whether multiple same-named copies exist.
 
-找不到唯一 checkout 或 case 时设为 `uncertain`。在写代码前必须解决会导致修改错目录的歧义。
+Set to `uncertain` when a unique checkout or case cannot be found. Ambiguities that would cause edits in the wrong directory must be resolved before writing code.
 
 ### `case`
 
-检查已有的：
+Check what already exists:
 
-- `pgen.hpp`；
-- TOML；
-- 设计说明、上次会话留下的 TODO 或未提交修改；
-- 用户指出的参考 PGen。
+- `pgen.hpp`;
+- TOML;
+- design notes, TODOs left by the previous session, or uncommitted changes;
+- reference PGens pointed out by the user.
 
-只有部分材料时设为 `partial`。这不是错误，Agent 可以从已有部分继续。
+Set to `partial` when only some material exists. This is not an error; the agent can continue from what exists.
 
 ### `contract`
 
-只核对本次任务影响的契约面：
+Only cross-check the contract surfaces affected by the current task:
 
-- PGen traits 与 TOML 中的 engine、metric、维度；
-- `params.get` 与 `[setup]`；
-- species 数量、顺序、质量、电荷和索引；
-- grid、scales 和 boundaries；
-- source、force、custom output 与相应配置；
-- 特殊算法需要的编译选项。
+- PGen traits vs. engine, metric, and dimension in the TOML;
+- `params.get` vs. `[setup]`;
+- species count, order, mass, charge, and index;
+- grid, scales, and boundaries;
+- source, force, custom output and their corresponding configuration;
+- compile options required by special algorithms.
 
-没有检查过就是 `unchecked`，不能因为文件能解析就记为 `consistent`。修改 PGen 或 TOML 后，受影响的契约面重新变成 `unchecked`；无关部分不需要全部重验。
+If it has not been checked, it is `unchecked`; it must not be recorded as `consistent` just because the files parse. After modifying the PGen or TOML, the affected contract surfaces become `unchecked` again; unrelated parts do not all need to be re-verified.
 
 ### `build`
 
-只有用户要编译、运行或判断可运行性时才检查：
+Only check when the user wants to compile, run, or judge runnability:
 
-- executable 对应的 Entity commit；
-- 是否包含当前 PGen；
-- backend、precision、MPI 和特殊编译选项是否匹配；
-- PGen 或相关源码是否晚于构建产物。
+- the Entity commit the executable corresponds to;
+- whether it contains the current PGen;
+- whether backend, precision, MPI, and special compile options match;
+- whether the PGen or related source is newer than the build artifacts.
 
-无法证明匹配时为 `unknown`，已知不匹配时为 `stale`。需要重新构建就把明确的 build requirements 交给 `entity-env-build`。
+If a match cannot be proven, it is `unknown`; if a mismatch is known, it is `stale`. When a rebuild is needed, hand explicit build requirements to `entity-env-build`.
 
 ### `run`
 
-只有存在运行意图或运行证据时才识别。优先读取 scheduler 状态、进程状态、退出码、stdout、stderr、checkpoint 和输出，不根据聊天描述猜测。
+Only identify when there is run intent or run evidence. Prefer reading scheduler status, process status, exit codes, stdout, stderr, checkpoints, and output; do not guess from chat descriptions.
 
 ### `decisions`
 
-仅判断完成当前请求所必需的信息：
+Judge only the information necessary to complete the current request:
 
-- 信息足够，或可使用无风险默认值：`clear`；
-- 有未决定事项，但 Agent 仍能做草案、调查或其他局部工作：`open`；
-- 缺少的决定会改变实现方向、物理含义或重大计算成本：`blocked`。
+- information is sufficient, or a risk-free default can be used: `clear`;
+- there are undecided items, but the agent can still do drafts, investigation, or other local work: `open`;
+- a missing decision would change the implementation direction, physical meaning, or major computational cost: `blocked`.
 
-不要为了追求完整设计而询问与当前修改无关的科学问题。
+Do not ask scientific questions unrelated to the current modification in pursuit of a complete design.
 
-## 根据用户需求行动
+## Acting on User Needs
 
-Agent 将“用户当前目标”与“状态快照”结合起来，选择最小动作。
+The agent combines "the user's current goal" with the "state snapshot" to choose the minimal action.
 
-| 用户目标 | 需要关注的状态 | 动作 |
+| User goal | States to attend to | Action |
 |---|---|---|
-| 解释现有 PGen/TOML | `source`、`case` | 读取相关实现并解释，不要求补 plan 或验证运行 |
-| 继续上次设计 | `source`、`case`、`decisions` | 找到已有设计和改动，从未完成点继续 |
-| 局部修改 case | `source`、`case`、`decisions` | 修改最小范围，并重验受影响的 contract |
-| 从零创建 PGen | `source`、`case`、`decisions` | 只收集当前实现必需的信息，再生成 PGen/TOML |
-| 检查配置 | `source`、`case`、`contract` | 报告具体冲突和证据，不自动扩展成完整 case 开发 |
-| 编译当前 case | `source`、`case`、`contract`、`build` | 整理 build requirements，交给 `entity-env-build` |
-| 运行 case | `source`、`case`、`contract`、`build`、`run` | 确认输入身份，创建 manifest，再启动或生成命令 |
-| checkpoint 续跑 | `source`、`case`、`build`、`run` | 验证 checkpoint 和输入身份，创建新的 run 记录 |
-| 修复失败 | `run` 加故障证据 | 只处理已归属于 PGen、TOML 或 launch 配置的问题；否则交给 `entity-debug` |
+| Explain existing PGen/TOML | `source`, `case` | Read the relevant implementation and explain; do not require a plan or a verification run |
+| Continue last time's design | `source`, `case`, `decisions` | Find the existing design and changes, continue from the unfinished point |
+| Locally modify a case | `source`, `case`, `decisions` | Modify the minimal scope and re-verify the affected contract |
+| Create a PGen from scratch | `source`, `case`, `decisions` | Collect only the information the current implementation requires, then generate the PGen/TOML |
+| Check configuration | `source`, `case`, `contract` | Report concrete conflicts and evidence; do not automatically expand into full case development |
+| Compile the current case | `source`, `case`, `contract`, `build` | Organize build requirements and hand them to `entity-env-build` |
+| Run a case | `source`, `case`, `contract`, `build`, `run` | Confirm input identity, create a manifest, then launch or generate the command |
+| Checkpoint resume | `source`, `case`, `build`, `run` | Verify the checkpoint and input identity, create a new run record |
+| Fix a failure | `run` plus failure evidence | Only handle problems attributable to PGen, TOML, or launch configuration; otherwise hand to `entity-debug` |
 
-Agent 可以在一次任务中执行多个动作，但不自动把局部请求扩展成完整生命周期。例如用户只要求增加 `CustomStat`，完成代码、TOML 对应项和局部一致性检查即可，不应自动设计资源、编译和运行。
+The agent may perform multiple actions in one task, but does not automatically expand a local request into a full lifecycle. For example, if the user only asks to add a `CustomStat`, completing the code, the corresponding TOML entries, and a local consistency check is enough; resources, compilation, and runs should not be designed automatically.
 
-## 关键决定
+## Key Decisions
 
-Agent 应自行处理机械性和低风险选择，只把真正影响方向的问题交给用户。
+The agent should handle mechanical and low-risk choices itself, and only hand questions that genuinely affect direction to the user.
 
-需要确认的典型情况：
+Typical situations requiring confirmation:
 
-- 两种实现会表达不同的物理模型；
-- normalization、坐标基或单位域无法从当前 case 确定；
-- 修改会破坏已有 run 的可比性；
-- 需要覆盖现有文件、输出或 checkpoint；
-- 要提交昂贵的 GPU、多节点或长时间作业；
-- 当前 Entity checkout 不支持需求，需要修改 engine。
+- two implementations would express different physical models;
+- normalization, coordinate basis, or unit domain cannot be determined from the current case;
+- a modification would break comparability with existing runs;
+- existing files, output, or checkpoints need to be overwritten;
+- an expensive GPU, multi-node, or long-duration job is about to be submitted;
+- the current Entity checkout does not support the requirement and the engine must be modified.
 
-不应阻塞的典型情况：
+Typical situations that should not block:
 
-- 可以从现有 PGen/TOML 明确推断的命名和代码风格；
-- 不影响物理意义的局部组织；
-- 只读检查、草案和静态验证；
-- 用户明确要求的局部改动中无关的未完成设计。
+- naming and code style that can be clearly inferred from the existing PGen/TOML;
+- local organization that does not affect physical meaning;
+- read-only checks, drafts, and static verification;
+- unfinished design unrelated to the local change the user explicitly requested.
 
-## PGen/TOML 是同一个 case contract
+## PGen/TOML Is the Same Case Contract
 
-这是 `entity-case` 最重要的硬边界。修改一侧时，Agent 必须寻找另一侧是否存在对应关系，但只检查受影响部分。
+This is the most important hard boundary of `entity-case`. When modifying one side, the agent must look for whether the other side has a corresponding relationship, but only check the affected parts.
 
-最低检查规则：
+Minimum check rules:
 
-| 修改内容 | 必须检查 |
+| Modified content | Must check |
 |---|---|
-| traits | engine、metric、dimension |
-| `params.get` | `[setup]` 的 key、类型和默认行为 |
-| particle injection | species 顺序、质量、电荷、温度、ppc 和 1-based index |
-| fields 或 source | scales、单位域、坐标基和 engine 限制 |
-| boundary hook | 每个方向的 TOML boundary |
-| custom output/stat | TOML 中是否请求、名称是否一致 |
-| higher-order feature | TOML 算法参数和 build option |
+| traits | engine, metric, dimension |
+| `params.get` | `[setup]` keys, types, and default behavior |
+| particle injection | species order, mass, charge, temperature, ppc, and 1-based index |
+| fields or source | scales, unit domain, coordinate basis, and engine limitations |
+| boundary hook | TOML boundary in every direction |
+| custom output/stat | whether it is requested in the TOML and whether names match |
+| higher-order feature | TOML algorithm parameters and build options |
 
-`consistent` 只表示检查范围内没有发现冲突，不表示物理模型已经被证明正确。
+`consistent` only means no conflict was found within the checked scope; it does not mean the physical model has been proven correct.
 
-## 可选产物
+## Optional Artifacts
 
-产物按任务需要创建，不要求每个 case 都具备完整文件集。
+Artifacts are created as the task requires; not every case must have a complete file set.
 
 ### `simulation-plan.md`
 
-仅在以下情况创建或更新：
+Create or update only when:
 
-- 从较模糊的想法设计新 case；
-- 任务包含多个相互影响的物理或数值决定；
-- 用户希望保存设计以便下次继续；
-- 现有实现缺少足够的设计依据。
+- designing a new case from a fairly vague idea;
+- the task involves multiple interdependent physical or numerical decisions;
+- the user wants to save the design to continue next time;
+- the existing implementation lacks sufficient design rationale.
 
-内容只记录当前有用的信息：已确认决定、当前假设、待办项和成功判断。未知部分可以缺省，不使用大而全的固定问卷。
+The content records only currently useful information: confirmed decisions, current assumptions, to-do items, and success criteria. Unknown parts may be omitted; do not use a large, all-encompassing fixed questionnaire.
 
-### PGen 和 TOML
+### PGen and TOML
 
-这是最常见的直接产物。保持用户现有目录结构；除非用户要求，不迁移到统一模板目录。
+These are the most common direct artifacts. Keep the user's existing directory structure; do not migrate to a unified template directory unless the user asks.
 
-### 局部验证结果
+### Local Verification Results
 
-简单任务直接在回复中报告检查结果。只有检查较多、需要复用或用户要求留档时，才写 `case-validation.md`。第一版不引入专用 validation schema。
+For simple tasks, report check results directly in the reply. Only when there are many checks, the results need reuse, or the user asks for a record, write `case-validation.md`. The first version does not introduce a dedicated validation schema.
 
 ### `run-manifest.yaml`
 
-只有准备或执行实际 run 时才创建。至少记录：
+Create only when preparing or executing an actual run. Record at least:
 
-- Entity checkout、commit 和 executable；
-- PGen、TOML 及 hash；
-- launch command、workdir 和资源；
-- parent run 或 checkpoint；
-- output、stdout、stderr；
-- run 状态、时间、退出码和 scheduler job ID。
+- Entity checkout, commit, and executable;
+- PGen, TOML, and their hashes;
+- launch command, workdir, and resources;
+- parent run or checkpoint;
+- output, stdout, stderr;
+- run status, times, exit code, and scheduler job ID.
 
-每次续跑创建新的 run 记录并引用 parent，不覆盖原 run。
+Each resume creates a new run record referencing its parent; it does not overwrite the original run.
 
-## References 与工具
+## References and Tools
 
-现有 `entity-pgen` references 继续作为 `entity-case` 的主要知识基础，并按功能加载：
+The existing `entity-pgen` references continue to serve as the main knowledge base of `entity-case`, loaded by feature:
 
-- normalization；
-- PGen skeleton；
-- fields；
-- particle injection；
-- current 和 force；
-- boundaries；
-- custom output；
-- timestep hooks；
-- TOML；
-- higher-order methods；
-- 官方 PGen 索引。
+- normalization;
+- PGen skeleton;
+- fields;
+- particle injection;
+- current and force;
+- boundaries;
+- custom output;
+- timestep hooks;
+- TOML;
+- higher-order methods;
+- official PGen index.
 
-Agent 应先读取当前 checkout 中的相关实现，再用 reference 补充稳定规则。reference 与 checkout 冲突时，以 checkout 为准。
+The agent should first read the relevant implementation in the current checkout, then use references to supplement with stable rules. When a reference conflicts with the checkout, the checkout wins.
 
-第一版只考虑两个确定性工具：
+The first version considers only two deterministic tools:
 
-- `check_case_contract.py`：对指定 PGen/TOML 执行可可靠自动化的局部一致性检查；
-- `run_manifest.py`：创建 manifest、计算输入 hash、更新 run 状态。
+- `check_case_contract.py`: performs reliably automatable local consistency checks on a specified PGen/TOML;
+- `run_manifest.py`: creates manifests, computes input hashes, and updates run state.
 
-不应一开始建立完整 schema 系统、通用 workflow engine 或多 scheduler 管理层。
+Do not start by building a complete schema system, a general workflow engine, or a multi-scheduler management layer.
 
-## 与其他 Skill 的边界
+## Boundaries with Other Skills
 
 ### `entity-env-build`
 
-`entity-case` 提供当前 checkout、PGen 和所需 engine/backend/build features；`entity-env-build` 返回 executable 和 build record。`entity-case` 不安装依赖或编写通用构建逻辑。
+`entity-case` provides the current checkout, PGen, and required engine/backend/build features; `entity-env-build` returns the executable and a build record. `entity-case` does not install dependencies or write general build logic.
 
 ### `entity-analysis`
 
-`entity-case` 交付 TOML、PGen、run manifest、输出位置和已有设计目标。`entity-analysis` 负责正式诊断与物理结论，不直接反向修改 case。
+`entity-case` delivers the TOML, PGen, run manifest, output location, and existing design goals. `entity-analysis` is responsible for formal diagnosis and physical conclusions, and does not directly modify the case in return.
 
 ### `entity-debug`
 
-owner 不明确时由 `entity-debug` 首诊。确认问题属于 PGen、TOML、checkpoint 参数或 launch 配置后，再交回 `entity-case`。
+When the owner is unclear, `entity-debug` does the initial diagnosis. After the problem is confirmed to belong to PGen, TOML, checkpoint parameters, or launch configuration, it is handed back to `entity-case`.
 
 ### `entity-core-dev`
 
-只有确认当前 PGen API 无法实现需求时才进入。`entity-case` 应给出缺少的能力和已检查的 extension point，而不是笼统要求修改 Entity。
+Enter only when it is confirmed that the current PGen API cannot fulfill the requirement. `entity-case` should state the missing capability and the extension points already checked, rather than vaguely requesting Entity changes.
 
-## 从 `entity-pgen` 迁移
+## Migrating from `entity-pgen`
 
-迁移的重点不是增加流程，而是给现有 PGen 能力加上状态识别和运行上下文。
+The focus of the migration is not adding process, but adding state recognition and run context to the existing PGen capability.
 
-保留：
+Keep:
 
-- 当前按 feature 组织的 references；
-- normalization、coordinate basis、unit domain 等硬规则；
-- scenario router 和 PGen/TOML self-check；
-- 官方 PGen 检索入口。
+- the current feature-organized references;
+- hard rules such as normalization, coordinate basis, and unit domain;
+- the scenario router and the PGen/TOML self-check;
+- the official PGen retrieval entry point.
 
-调整：
+Adjust:
 
-- `SKILL.md` 开头先识别状态和用户目标；
-- requirements checklist 改为按当前修改缺什么才问什么；
-- `simulation-plan.md` 从强制前置产物改为可选的连续设计记录；
-- deliverables 根据任务选择，不再默认输出完整 case workspace；
-- 增加 build identity、run 和 checkpoint 的最小支持。
+- `SKILL.md` starts by identifying state and user goal;
+- the requirements checklist changes to asking only about what the current modification lacks;
+- `simulation-plan.md` changes from a mandatory upfront artifact to an optional continuous design record;
+- deliverables are chosen per task, no longer defaulting to a complete case workspace;
+- add minimal support for build identity, run, and checkpoint.
 
-暂不做：
+Not for now:
 
-- 强制目录结构；
-- 线性阶段状态机；
-- 固定的七步或五步流程；
-- 完整 validation JSON schema；
-- 通用远程运行平台；
-- 参数扫描和 ensemble orchestration；
-- 站点专属 scheduler 规则。
+- mandatory directory structure;
+- a linear phase state machine;
+- a fixed seven-step or five-step process;
+- a complete validation JSON schema;
+- a general remote run platform;
+- parameter scans and ensemble orchestration;
+- site-specific scheduler rules.
 
-## 第一版完成标准
+## First-Version Completion Criteria
 
-第一版只需要证明以下行为可靠：
+The first version only needs to prove the following behaviors are reliable:
 
-- Agent 能识别“没有 case、部分 case、已有 case、已有 run”等不同起点；
-- Agent 能从上次留下的设计或代码继续，而不是重新问一整套问题；
-- 局部请求只触发局部修改和相关 contract 检查；
-- PGen/TOML 的关键冲突能够被发现；
-- 需要编译时能向 `entity-env-build` 给出明确要求；
-- 准备运行时能确认 executable 与输入身份并写 manifest；
-- 续跑不会覆盖原 run；
-- 不属于 case 层的问题会转给正确的 skill。
+- the agent can recognize different starting points such as "no case, partial case, existing case, existing run";
+- the agent can continue from a design or code left over from last time, rather than re-asking a whole set of questions;
+- a local request triggers only local modification and the relevant contract checks;
+- key PGen/TOML conflicts can be found;
+- when compilation is needed, explicit requirements can be given to `entity-env-build`;
+- when preparing a run, executable and input identity can be confirmed and a manifest written;
+- resuming does not overwrite the original run;
+- problems that do not belong to the case layer are routed to the correct skill.
 
-验证时应覆盖四种真实入口：从一句想法开始、修改已有 PGen、继续未完成设计、运行或续跑现有 case。重点观察 Agent 是否正确识别状态和控制工作范围，而不是它是否走完某套预定流程。
+Verification should cover four real entry points: starting from a one-line idea, modifying an existing PGen, continuing an unfinished design, and running or resuming an existing case. Focus on whether the agent correctly identifies state and controls work scope, not whether it walks through some predetermined process.

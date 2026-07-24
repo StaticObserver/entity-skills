@@ -1,21 +1,23 @@
-# Entity 多端点 Workspace 与 Case v3
+# Entity Multi-Endpoint Workspace and Case v3
 
-日期：2026-07-14
-状态：当前实现基准
+Date: 2026-07-14
+Status: current implementation baseline
 
-## 1. 原则
+## 1. Principles
 
-Case 是逻辑资源图，不是包含源码、依赖、build、run 和 data 的大目录。
-Agent 所在控制端与代码执行端可以不同；每个资源用
-`Locator = {site_id, path}` 标识。JSON 只保存结构化 Locator，CLI 使用
-`site_id:/absolute/path`。
+A Case is a logical resource graph, not one big directory containing source
+code, dependencies, builds, runs, and data. The control endpoint where the Agent
+runs and the endpoint where code executes may differ; each resource is
+identified by `Locator = {site_id, path}`. JSON stores only structured Locators;
+the CLI uses `site_id:/absolute/path`.
 
-Router 状态由控制端单写。源码、build、run、raw data 和 analysis 可以
-分别位于不同 site，目录不要求共同父目录。
+Router state is written solely by the control endpoint. Source code, builds,
+runs, raw data, and analysis may each live on a different site; directories are
+not required to share a common parent.
 
-## 2. 控制端
+## 2. Control Endpoint
 
-默认 `ENTITY_ROUTER_HOME=~/.entity-router`：
+Default `ENTITY_ROUTER_HOME=~/.entity-router`:
 
 ```text
 ~/.entity-router/
@@ -29,18 +31,20 @@ Router 状态由控制端单写。源码、build、run、raw data 和 analysis �
     └── evidence/
 ```
 
-`registry.json` 是可重建索引；`case.json` 是控制快照；owner 文件仍是各
-领域事实源。自定义 control root 可以注册。控制状态不得放入源码 checkout，
-远端 Worker 不得修改控制状态。
+`registry.json` is a rebuildable index; `case.json` is the control snapshot;
+owner files remain the fact sources for their respective domains. Custom control
+roots can be registered. Control state must not be placed inside a source
+checkout, and remote Workers must not modify control state.
 
 ## 3. Site
 
-Site profile 记录稳定 `site_id`、local/SSH transport、SSH alias、scheduler
-kind 和独立 roots：`source_root/build_root/run_root/deps_root/staging_root/
-analysis_root`。凭据不进入 profile。HPC 登录节点、scheduler、计算节点和
-共享文件系统构成一个逻辑 site。
+A Site profile records a stable `site_id`, local/SSH transport, SSH alias,
+scheduler kind, and independent roots: `source_root/build_root/run_root/deps_root/staging_root/
+analysis_root`. Credentials never enter the profile. An HPC login node,
+scheduler, compute nodes, and a shared filesystem together form one logical
+site.
 
-推荐但不强制：
+Recommended but not required:
 
 ```text
 <build_root>/<case_uid>/<build_id>
@@ -48,52 +52,60 @@ analysis_root`。凭据不进入 profile。HPC 登录节点、scheduler、计算
 <staging_root>/<case_uid>/<snapshot_id>
 ```
 
-某 root 只在当前 phase 需要时成为门禁；orient 不因未来 phase 的 root
-尚未配置而阻塞。
+A root becomes a gate only when the current phase needs it; orient does not
+block because a root for a future phase is not yet configured.
 
 ## 4. Source
 
-每个 Case 只有一个可编辑 authority，默认控制端本地，也可为远端。
-PGen/TOML/design 必须位于 authority root 内；replica 默认不可编辑。
+Each Case has exactly one editable authority, local on the control endpoint by
+default, though it may be remote. PGen/TOML/design must be located inside the
+authority root; replicas are not editable by default.
 
-支持：
+Supported modes:
 
-- `git-ref`：精确 commit checkout，正式 build/run 默认；
-- `snapshot`：dirty/untracked 文件进入 manifest，按内容哈希命名并逐文件复核；
-- `shared`：声明共享映射后验证 Git tree/文件 hash；
-- `external`：用户管理副本，只有 revision/hash 一致才接受。
+- `git-ref`: exact commit checkout, the default for formal builds/runs;
+- `snapshot`: dirty/untracked files enter the manifest, are named by content
+  hash, and are reviewed file by file;
+- `shared`: after declaring a shared mapping, verify the Git tree/file hashes;
+- `external`: a user-managed copy, accepted only when revision/hash match.
 
-普通可变 rsync/tar 只是传输实现，不是 source identity。snapshot 目录不可
-覆盖。Authority 切换是 `source.transfer-authority` Action：先证明两端
-clean commit/tree 一致，再原子切换 authority 和 PGen locators；禁止双端
-同时可编辑。
+A plain mutable rsync/tar is only a transport implementation, not a source
+identity. Snapshot directories must not be overwritten. Switching the authority
+is a `source.transfer-authority` Action: first prove both ends have identical
+clean commits/trees, then atomically switch the authority and the PGen locators;
+both ends being editable simultaneously is forbidden.
 
-## 5. Build、run、data、analysis
+## 5. Build, Run, Data, Analysis
 
-Build request schema v2 显式记录 `site_id/source_checkout/build_root/
-deps_root/artifacts_root`，不再使用含混 `entity.workdir`。每个 build ID 引用
-一个 SourceRevision；每个 run ID 引用一个 build ID。参数或 checkpoint 变化
-创建新 run identity，历史路径不覆盖。
+Build request schema v2 explicitly records `site_id/source_checkout/build_root/
+deps_root/artifacts_root`, replacing the ambiguous `entity.workdir`. Each build
+ID references one SourceRevision; each run ID references one build ID. A change
+in parameters or checkpoint creates a new run identity; historical paths are not
+overwritten.
 
-Raw data 在 data site 权威保存。`data.inspect`/`analysis.run` 默认靠近数据
-执行，只拉取 inventory、日志、图像、报告或用户明确选择的数据子集。
+Raw data is held authoritatively on the data site. `data.inspect`/`analysis.run`
+execute close to the data by default, pulling back only the inventory, logs,
+images, reports, or a data subset explicitly selected by the user.
 
-## 6. Evidence 与恢复
+## 6. Evidence and Recovery
 
-Evidence 至少包含 Locator、kind、fingerprint、observed time 和 observer
-site。远端 request 是 staging root 中的不可变副本；Worker 结果只是声明，
-Router 完成 Action 前必须重新 probe 文件、Git、scheduler 或数据。
+Evidence contains at least a Locator, kind, fingerprint, observed time, and
+observer site. A remote request is an immutable copy in the staging root; a
+Worker result is only a claim — before completing an Action, the Router must
+re-probe the files, Git, scheduler, or data.
 
-远端不可达时，旧 observation 不作为当前事实；Action 进入 blocked/suspended，
-恢复后重新 probe。Source 变化使 build/run stale；build 变化使未启动 run
-stale；data 变化使相关 analysis stale。
+When a remote endpoint is unreachable, old observations do not count as current
+facts; the Action enters blocked/suspended and is re-probed after recovery. A
+Source change makes builds/runs stale; a build change makes unstarted runs
+stale; a data change makes the related analyses stale.
 
-## 7. 迁移
+## 7. Migration
 
-`migrate-case --dry-run` 只展示 v2 到 Locator 的映射；`--commit` 创建新的
-v3 control Case，将旧路径映射到 `legacy-local` site，并复制旧控制记录。
-它不移动或删除源码、build、run 或 raw data。新状态验证完成后才 suspend
-旧控制面，并保留 migration backup，防止双控制。
+`migrate-case --dry-run` only shows the v2-to-Locator mapping; `--commit`
+creates a new v3 control Case, maps old paths onto the `legacy-local` site, and
+copies the old control records. It does not move or delete source code, builds,
+runs, or raw data. The old control plane is suspended only after the new state
+is validated, and a migration backup is kept to prevent dual control.
 
-PGen preflight 通过 registry + Locator 判断 managed 状态；不再沿祖先目录
-寻找 `_case/case.json`。
+PGen preflight determines managed status via the registry + Locator; it no
+longer walks ancestor directories looking for `_case/case.json`.

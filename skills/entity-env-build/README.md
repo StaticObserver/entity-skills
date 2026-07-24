@@ -1,7 +1,7 @@
 # entity-env-build
 
-在一个明确的 execution site 上构造 Entity build 环境并编译源码。当前
-schema v2 使用彼此独立的：
+Set up the Entity build environment and compile the source at one explicit
+execution site. The current schema v2 uses mutually independent:
 
 - `entity.site_id`
 - `entity.source_checkout`
@@ -9,8 +9,8 @@ schema v2 使用彼此独立的：
 - `entity.deps_root`
 - `entity.artifacts_root`
 
-不存在统一 workspace 根目录的要求。完整行为协议见 `SKILL.md`，JSON 字段
-见 `references/json-contracts.md`。
+There is no requirement for a unified workspace root. See `SKILL.md` for the
+full behavior protocol and `references/json-contracts.md` for the JSON fields.
 
 ```bash
 REQ=/absolute/artifacts/requirements.json
@@ -27,9 +27,10 @@ python3 scripts/entity_generate.py build "$REQ" \
 python3 scripts/entity_run.py build "$REQ" --script "$BUILD"
 ```
 
-依赖源码构建脚本默认进入 `<deps_root>/scripts/`，安装 prefix 也位于
-`deps_root`。日志、checkpoint 和派生脚本位于 `artifacts_root`，CMake tree
-位于不可变 build identity 的 `build_root`。
+Dependency source-build scripts go to `<deps_root>/scripts/` by default, and
+install prefixes also live under `deps_root`. Logs, checkpoints, and derived
+scripts live under `artifacts_root`; the CMake tree lives at the immutable
+build identity's `build_root`.
 
-Schema v1 `checkout_root/workdir` 仅用于显式 legacy 兼容，新 workflow 不应
-生成 v1。
+Schema v1 `checkout_root/workdir` is for explicit legacy compatibility only;
+new workflows must not generate v1.

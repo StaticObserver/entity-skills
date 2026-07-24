@@ -1,34 +1,34 @@
-# U6 — 存量数据分析（A/B 对照）
+# U6 — Existing-Data Analysis (A/B comparison)
 
-## 场景意图
+## Scenario Intent
 
-用户手上已有一个完成的 run 的数据根，只要分析、不要新模拟：ux 是否漂移、E² 噪声水平，交付报告 + 可重跑脚本，且数据根只读。检验"分析能力"与"数据保护"，与 router 无关（analysis 不是 Goal，属技能边界而非缺陷——见 SUITE.md）。
+The user already has the data root of a completed run and wants analysis only, no new simulation: whether ux drifts, the E² noise level, delivered as a report + a rerunnable script, with the data root kept read-only. Tests "analysis capability" and "data protection"; unrelated to the router (analysis is not a Goal — a skill boundary, not a defect; see SUITE.md).
 
-## 对照组
+## Control Groups
 
-- `skills-v5` 与 `skills-no-router` 同一套 checks（本场景无 router 专属产物）。
+- `skills-v5` and `skills-no-router` share the same checks (this scenario has no router-specific artifacts).
 
-## 前置条件
+## Prerequisites
 
-setup.sh 需要数据根来源，并把它渲染进 prompt（`@DATA_ROOT@` 占位符）：
+setup.sh needs a data root source and renders it into the prompt (the `@DATA_ROOT@` placeholder):
 
 ```bash
 bash evals/user-needs/run_need.sh U6 <variant> <run-name> [model] -- --data-root <remote-path>
-# 或从留存证据取 submission.json 里的 run.data_root：
+# or take run.data_root from the submission.json in retained evidence:
 bash evals/user-needs/run_need.sh U6 <variant> <run-name> [model] -- --evidence <evidence-dir>
 ```
 
-## 核验逻辑（verify.py checks）
+## Verification Logic (verify.py checks)
 
-| check | 含义 |
+| check | Meaning |
 |---|---|
-| `analysis_artifacts_exist` | analysis/report.md 与 analysis/*.py 存在（Gate E 式） |
-| `ux_value_consistent` | 报告中的 ux 数值与 nt2py 独立重算的最后快照 mean ux 偏差 ≤ max(0.02, 10%) |
-| `analyze_rerunnable` | analyze.py 能对数据根重跑成功（尝试位置参数与 --data-root 两种调用） |
-| `data_root_readonly` | 数据根内无分析产物（report/script/图/notebook） |
+| `analysis_artifacts_exist` | analysis/report.md and analysis/*.py exist (Gate E style) |
+| `ux_value_consistent` | the ux value in the report deviates from the nt2py-independent recompute of the last snapshot's mean ux by ≤ max(0.02, 10%) |
+| `analyze_rerunnable` | analyze.py reruns successfully against the data root (both positional-argument and --data-root invocations are tried) |
+| `data_root_readonly` | no analysis artifacts (report/script/plots/notebook) inside the data root |
 
-## 已知边界
+## Known Boundaries
 
-- 报告数值提取是启发式（ux/drift 行上的浮点数），不命中记 unknown 交人工复核。
-- analyze.py 的调用约定未标准化；verify 尝试两种常见形式，都失败才记 fail。
-- 离线模式用 evidence 的 oracle-data 实测重算与重跑。
+- Report value extraction is heuristic (the float on the ux/drift line); a miss is recorded as unknown for human review.
+- analyze.py's invocation convention is not standardized; verify tries two common forms and records fail only if both fail.
+- Offline mode uses the evidence's oracle-data to actually recompute and rerun.

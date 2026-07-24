@@ -1,20 +1,19 @@
-# CLI 与原始读取器
+# CLI and Raw Readers
 
-当需要快速命令行检查，或精确的原始数组读取比高层惰性容器更合适时，
-使用本参考文档。
+Use this reference when you need a quick command-line inspection, or when precise raw-array reads are more appropriate than the high-level lazy containers.
 
-## 目录
+## Contents
 
-- CLI 范围与选取语法
-- 何时使用原始读取器
-- 选择读取器
-- 核心读取器工作流
-- 读取器约束
-- 源码依据
+- CLI scope and selection syntax
+- When to use the raw readers
+- Choosing a reader
+- Core reader workflow
+- Reader constraints
+- Source references
 
-## v1.5.3 中的 CLI 范围
+## CLI scope in v1.5.3
 
-安装后的命令是 `nt2`：
+The installed command is `nt2`:
 
 ```bash
 nt2 version
@@ -22,13 +21,11 @@ nt2 show /path/to/data-root
 nt2 plot /path/to/data-root --what fields --isel "t=0"
 ```
 
-`nt2 show` 构造 `nt2.Data` 并打印其盘点。`nt2 plot` 目前只实现了
-`--what fields`。虽然 `particles` 和 `spectra` 是可接受的选项名，
-但这两条路径在 v1.5.3 中都会抛出 `NotImplementedError`。
+`nt2 show` constructs `nt2.Data` and prints its inventory. `nt2 plot` currently implements only `--what fields`. Although `particles` and `spectra` are accepted option names, both paths raise `NotImplementedError` in v1.5.3.
 
-### 选取语法
+### Selection syntax
 
-用分号分隔多个选择器：
+Separate multiple selectors with semicolons:
 
 ```bash
 nt2 plot /path/to/data-root \
@@ -38,33 +35,27 @@ nt2 plot /path/to/data-root \
   --isel "t=0;z=0"
 ```
 
-CLI 将切片选择器与标量选择器分开处理。它先应用带 `method="nearest"`
-的标量 `.sel`，然后是切片 `.sel`，最后是 `.isel`。`--fields` 条目是
-供 `inspect` 访问器使用的正则表达式。
+The CLI handles slice selectors separately from scalar selectors. It applies scalar `.sel` with `method="nearest"` first, then slice `.sel`, and finally `.isel`. `--fields` entries are regular expressions used by the `inspect` accessor.
 
-如果结果没有 `t` 维度，CLI 保存 `<data-root-basename>.png`。如果时间
-仍然存在，它会以数据根目录的 basename 命名创建一个 inspect 影片。
+If the result has no `t` dimension, the CLI saves `<data-root-basename>.png`. If time is still present, it creates an inspect movie named after the data root's basename.
 
-选取解析器对每个参数值使用 Python `eval()`。只在可信的、手动控制的
-命令行中使用它。绝不要把不可信的用户、文件、scheduler 或网络内容
-插值进 `--sel` 或 `--isel`。
+The selection parser uses Python `eval()` on each argument value. Use it only on trusted, manually controlled command lines. Never interpolate untrusted user, file, scheduler, or network content into `--sel` or `--isel`.
 
-## 何时使用原始读取器
+## When to use the raw readers
 
-常规分析优先使用 `nt2.Data`，因为它提供坐标重映射、跨步检查、
-Dask 支撑的场/能谱，以及粒子选取层。
+Prefer `nt2.Data` for regular analysis, because it provides coordinate remapping, stride checks, Dask-backed fields/spectra, and a particle selection layer.
 
-在以下情况使用原始读取器：
+Use the raw readers when:
 
-- 检查精确的存储变量名或属性；
-- 从一个输出步读取一个已知数组；
-- 诊断高层容器构造失败；
-- 在不构建完整数据集的情况下验证文件形状/布局；
-- 实现一个有严格边界的自定义读取器工作流。
+- inspecting exact storage variable names or attributes;
+- reading one known array from one output step;
+- diagnosing a high-level container construction failure;
+- verifying file shapes/layout without building the full dataset;
+- implementing a strictly bounded custom-reader workflow.
 
-原始读取立即返回 NumPy 数组。它们不提供惰性加载或自动内存保护。
+Raw reads return NumPy arrays immediately. They provide no lazy loading or automatic memory protection.
 
-## 选择读取器
+## Choosing a reader
 
 ```python
 from pathlib import Path
@@ -75,10 +66,9 @@ data_root = Path("/path/to/data-root")
 reader = BP5Reader()  # choose HDF5Reader() for .h5 output
 ```
 
-没有 `h5py` 也允许导入 `HDF5Reader`，但在安装 `nt2py[hdf5]` 之前，
-打开 HDF5 文件会抛出 `ImportError`。
+Importing `HDF5Reader` is allowed without `h5py`, but opening an HDF5 file raises `ImportError` until `nt2py[hdf5]` is installed.
 
-## 核心读取器工作流
+## Core reader workflow
 
 ```python
 steps = reader.GetValidSteps(str(data_root), "fields")
@@ -102,37 +92,35 @@ array = reader.ReadArrayAtTimestep(
 print(step, name, shape, array.shape, attrs.get("Coordinates"))
 ```
 
-主要的公共方法有：
+The main public methods are:
 
-| 方法 | 用途 |
+| Method | Purpose |
 |---|---|
-| `GetValidSteps(path, category)` | 列出可读的步数编号 |
-| `GetValidFiles(path, category)` | 列出可读的类别文件名 |
-| `ReadAttrsAtTimestep(...)` | 读取文件级属性 |
-| `ReadCategoryNamesAtTimestep(...)` | 列出匹配原始前缀的名称 |
-| `ReadArrayAtTimestep(...)` | 立即读取一个数组 |
-| `ReadArrayShapeAtTimestep(...)` | 读取存储的形状元数据 |
-| `ReadFieldCoordsAtTimestep(...)` | 读取原始的 `X1/X2/X3` 中心 |
-| `ReadEdgeCoordsAtTimestep(...)` | 读取原始边坐标 |
-| `ReadFieldLayoutAtTimestep(...)` | 返回 `Layout.L` 或 `Layout.R` |
-| `ReadPerTimestepVariable(...)` | 收集 `Time`、`Step` 或其他标量 |
+| `GetValidSteps(path, category)` | List readable step numbers |
+| `GetValidFiles(path, category)` | List readable category file names |
+| `ReadAttrsAtTimestep(...)` | Read file-level attributes |
+| `ReadCategoryNamesAtTimestep(...)` | List names matching a raw prefix |
+| `ReadArrayAtTimestep(...)` | Read one array immediately |
+| `ReadArrayShapeAtTimestep(...)` | Read the stored shape metadata |
+| `ReadFieldCoordsAtTimestep(...)` | Read the raw `X1/X2/X3` centers |
+| `ReadEdgeCoordsAtTimestep(...)` | Read the raw edge coordinates |
+| `ReadFieldLayoutAtTimestep(...)` | Return `Layout.L` or `Layout.R` |
+| `ReadPerTimestepVariable(...)` | Collect `Time`, `Step`, or other scalars |
 
-类别是字面量字符串：`fields`、`particles` 或 `spectra`。前缀和变量名
-是原始的磁盘上名称，如 `f`、`p`、`s`、`fB3` 或 `pX1_1`；不应用高层
-重映射。
+Categories are literal strings: `fields`, `particles`, or `spectra`. Prefixes and variable names are the raw on-disk names, such as `f`, `p`, `s`, `fB3`, or `pX1_1`; no high-level remapping is applied.
 
-## 读取器约束
+## Reader constraints
 
-- 有效性检查会打开每个候选文件，并跳过抛出 `OSError` 的文件。
-- 文件名仍必须遵循 `<category>.<8-digit-step>.<format>`。
-- `ReadArrayAtTimestep` 读取整个存储的数组；先检查形状。
-- HDF5 数据数组位于 `Step0` 之下；BP5 变量通过 ADIOS2 读取。
-- 场布局在高层容器中可能需要转置；原始读取器返回存储的布局。
-- 读取器 API 使用 PascalCase，因为那是已发布的公共接口。
+- Validity checks open every candidate file and skip files that raise `OSError`.
+- File names must still follow `<category>.<8-digit-step>.<format>`.
+- `ReadArrayAtTimestep` reads the entire stored array; check the shape first.
+- HDF5 data arrays live under `Step0`; BP5 variables are read via ADIOS2.
+- Field layouts may need transposition in the high-level containers; the raw readers return the stored layout.
+- The reader API uses PascalCase because that is the published public interface.
 
-## 源码依据
+## Source references
 
-- CLI：<https://github.com/entity-toolkit/nt2py/blob/v1.5.3/nt2/cli/main.py>
-- 基础读取器：<https://github.com/entity-toolkit/nt2py/blob/v1.5.3/nt2/readers/base.py>
-- BP5 读取器：<https://github.com/entity-toolkit/nt2py/blob/v1.5.3/nt2/readers/adios2.py>
-- HDF5 读取器：<https://github.com/entity-toolkit/nt2py/blob/v1.5.3/nt2/readers/hdf5.py>
+- CLI: <https://github.com/entity-toolkit/nt2py/blob/v1.5.3/nt2/cli/main.py>
+- Base reader: <https://github.com/entity-toolkit/nt2py/blob/v1.5.3/nt2/readers/base.py>
+- BP5 reader: <https://github.com/entity-toolkit/nt2py/blob/v1.5.3/nt2/readers/adios2.py>
+- HDF5 reader: <https://github.com/entity-toolkit/nt2py/blob/v1.5.3/nt2/readers/hdf5.py>

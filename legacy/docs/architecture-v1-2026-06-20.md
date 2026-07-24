@@ -1,89 +1,89 @@
-# Entity Skills 总体架构
+# Entity Skills Overall Architecture
 
-日期：2026-06-20
+Date: 2026-06-20
 
-归档状态：已由 `design/architecture.md` 取代，不参与当前设计或运行时上下文。
+Archive status: superseded by `design/architecture.md`; not part of the current design or runtime context.
 
-## 1. 项目定位
+## 1. Project Positioning
 
-`entity-skills` 暂时设计为一个完整的 skills package。
+`entity-skills` is, for now, designed as a complete skills package.
 
-它不是 Entity 知识库，也不是教程，而是一套面向 agent 的 harness：顶层 `SKILL.md` 负责判断用户请求属于哪类任务，并指导 agent 加载对应的具体 skill。
+It is not an Entity knowledge base, nor a tutorial, but an agent-facing harness: the top-level `SKILL.md` determines which kind of task a user request belongs to, and instructs the agent to load the corresponding concrete skill.
 
-设计原则见 `design/harness-principles.md`。该原则用于指导项目设计，但不是 package 运行时依赖。
+See `design/harness-principles.md` for the design principles. Those principles guide the project design, but are not a runtime dependency of the package.
 
-## 2. 仓库分区
+## 2. Repository Layout
 
 ```text
 entity-skills/
-├── SKILL.md        # 顶层 router
-├── README.md       # package 使用说明
-├── core/           # 所有 skill 共享的基本规则
-├── skills/         # 具体 task skills
-├── playbooks/      # 跨 skill 的组合工作流
-├── templates/      # 交接和状态模板
-├── references/     # 非权威参考材料
-├── design/         # 项目设计工作文件
-└── legacy/         # 旧项目归档
+├── SKILL.md        # top-level router
+├── README.md       # package usage instructions
+├── core/           # base rules shared by all skills
+├── skills/         # concrete task skills
+├── playbooks/      # cross-skill composite workflows
+├── templates/      # handoff and state templates
+├── references/     # non-authoritative reference material
+├── design/         # project design working files
+└── legacy/         # archive of the old project
 ```
 
-边界：
+Boundaries:
 
-- `SKILL.md`、`core/`、`skills/`、`playbooks/`、`templates/`、`references/`、`README.md` 属于 skills package。
-- `design/` 只保存设计文档，不应被运行时自动加载。
-- `legacy/` 只保存旧项目归档，不应被运行时自动加载。
+- `SKILL.md`, `core/`, `skills/`, `playbooks/`, `templates/`, `references/`, and `README.md` belong to the skills package.
+- `design/` only holds design documents and should not be loaded automatically at runtime.
+- `legacy/` only holds the old project archive and should not be loaded automatically at runtime.
 
-## 3. 顶层 Router
+## 3. Top-Level Router
 
-顶层 `SKILL.md` 应该很薄。
+The top-level `SKILL.md` should be thin.
 
-它只做三件事：
+It does only three things:
 
-- 说明这个 package 的目标和非目标；
-- 根据用户请求选择需要加载的 skill；
-- 要求 agent 只加载完成当前任务所需的最小上下文。
+- state the goals and non-goals of this package;
+- select the skill to load based on the user request;
+- require the agent to load only the minimum context needed to complete the current task.
 
-它不应该包含详细 Entity API、TOML 参数表、PGen 细节或分析代码示例。
+It should not contain detailed Entity API references, TOML parameter tables, PGen details, or analysis code examples.
 
-## 4. 核心模块
+## 4. Core Modules
 
-`core/` 保存所有 skill 都需要遵守的基础规则。
+`core/` holds the base rules that every skill must follow.
 
-暂定包含：
+Tentative contents:
 
-- `context.md`：项目角色、非目标、成功标准；
-- `source-of-truth.md`：当前 checkout、上游、wiki、references、local overlay、legacy 的优先级；
-- `checkout-probe.md`：什么时候必须检查目标 Entity checkout；
-- `code-map.md`：Entity 源码中应优先查看的位置；
-- `state-model.md`：当前任务状态、会话发现、长期约定的区分。
+- `context.md`: project roles, non-goals, success criteria;
+- `source-of-truth.md`: precedence among current checkout, upstream, wiki, references, local overlay, and legacy;
+- `checkout-probe.md`: when the target Entity checkout must be inspected;
+- `code-map.md`: the locations to check first in the Entity source;
+- `state-model.md`: the distinction between current task state, session discoveries, and long-term conventions.
 
-这些文件只放稳定规则和索引，不复制大段知识。
+These files hold only stable rules and indexes; they do not copy large blocks of knowledge.
 
 ## 5. Task Skills
 
-`skills/` 是项目主体。每个 skill 负责一种任务边界和一种验证方式。
+`skills/` is the body of the project. Each skill owns one task boundary and one verification method.
 
-暂定六个 skill：
+Six tentative skills:
 
-- `entity-env-build.md`：依赖、编译环境、CMake、MPI、Kokkos、ADIOS2。
-- `entity-case.md`：simulation case，包括 TOML、PGen、run script 和 run manifest。
-- `entity-analysis.md`：输出读取、诊断、作图、证据分级和分析报告。
-- `entity-core-dev.md`：Entity 源码修改、call path、owner boundary 和测试。
-- `entity-debug.md`：build/runtime/output/checkpoint/performance/numerical failure 诊断。
-- `entity-docs.md`：长期交接产物，如 simulation plan、run manifest、analysis report、debug report、dev note。
+- `entity-env-build.md`: dependencies, build environment, CMake, MPI, Kokkos, ADIOS2.
+- `entity-case.md`: simulation case, including TOML, PGen, run script, and run manifest.
+- `entity-analysis.md`: output reading, diagnostics, plotting, evidence grading, and analysis reports.
+- `entity-core-dev.md`: Entity source modifications, call paths, owner boundaries, and tests.
+- `entity-debug.md`: build/runtime/output/checkpoint/performance/numerical failure diagnosis.
+- `entity-docs.md`: long-term handoff artifacts, such as simulation plan, run manifest, analysis report, debug report, dev note.
 
-重要边界：
+Important boundaries:
 
-- 跑模拟和源码开发必须分开。
-- TOML 和 PGen 必须作为同一个 case contract 处理。
-- 不单独设置泛化的 run-ops skill。
-- output/checkpoint 相关内容进入 analysis 或 debug。
+- Running simulations and source development must be kept separate.
+- TOML and PGen must be treated as the same case contract.
+- No standalone, generalized run-ops skill.
+- Output/checkpoint related content goes into analysis or debug.
 
 ## 6. Playbooks
 
-`playbooks/` 用来组合多个 skill，处理跨模块任务。
+`playbooks/` combine multiple skills to handle cross-module tasks.
 
-暂定 playbooks：
+Tentative playbooks:
 
 - `new-simulation.md`
 - `reproduce-run.md`
@@ -91,13 +91,13 @@ entity-skills/
 - `debug-failure.md`
 - `source-change.md`
 
-playbook 只写编排逻辑，不写大量领域知识。
+A playbook contains only orchestration logic, not large amounts of domain knowledge.
 
 ## 7. Templates
 
-`templates/` 是状态和交接机制。
+`templates/` are the state and handoff mechanism.
 
-暂定模板：
+Tentative templates:
 
 - `simulation-plan.md`
 - `run-manifest.yaml`
@@ -105,30 +105,30 @@ playbook 只写编排逻辑，不写大量领域知识。
 - `debug-report.md`
 - `dev-design-note.md`
 
-模板的细节之后单独设计。
+Template details will be designed separately later.
 
 ## 8. References
 
-`references/` 只放非权威 orientation。
+`references/` holds only non-authoritative orientation.
 
-暂定 reference：
+Tentative references:
 
 - `build-orientation.md`
 - `case-orientation.md`
 - `nt2py-orientation.md`
 - `version-buckets.md`
 
-reference 不能覆盖当前 Entity checkout。它们只能帮助 agent 知道该查什么、怎么查。
+References cannot override the current Entity checkout. They only help the agent know what to look up and how.
 
-## 9. 设计顺序
+## 9. Design Order
 
-先设计整体框架，再逐个细化：
+Design the overall framework first, then refine each piece:
 
-1. 顶层 `SKILL.md` router。
-2. `core/` 基础规则。
-3. 六个 `skills/` 的边界和骨架。
-4. `templates/` 的最小字段。
-5. `playbooks/` 的组合逻辑。
-6. `references/` 的取舍和压缩。
+1. Top-level `SKILL.md` router.
+2. `core/` base rules.
+3. Boundaries and skeletons of the six `skills/`.
+4. Minimal fields of the `templates/`.
+5. Composition logic of the `playbooks/`.
+6. Selection and compression of the `references/`.
 
-每一步都先定义边界、输入、输出和验收标准，再决定需要多少知识内容。
+At each step, define the boundary, inputs, outputs, and acceptance criteria first, then decide how much knowledge content is needed.

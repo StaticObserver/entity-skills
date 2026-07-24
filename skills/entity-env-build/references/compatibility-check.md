@@ -1,24 +1,29 @@
-# 兼容性检查
+# Compatibility Check
 
-在 `entity-deps.local.json` 被写入或修复之后、生成 `env.sh` 之前使用本参考。
+Use this reference after `entity-deps.local.json` has been written or
+repaired, and before generating `env.sh`.
 
-该检查回答一个问题：这对确切的 `requirements.json + entity-deps.local.json` 能否安全地为所请求的 Entity 构建生成环境？
+The check answers one question: can this exact pair of
+`requirements.json + entity-deps.local.json` safely generate an environment
+for the requested Entity build?
 
-每个结果都包含 `checker_version` 和 `coverage`。覆盖度取值含义明确：
-`implemented` 表示已做机械检查，`partial` 表示只检查了契约的一部分，
-`not_implemented` 表示 pass 结果绝不能被解读为对该项的证明。
+Every result includes `checker_version` and `coverage`. Coverage values have
+precise meanings: `implemented` means a mechanical check was performed,
+`partial` means only part of the contract was checked, and `not_implemented`
+means a pass result must never be read as proof of that item.
 
-优先使用随附的检查器：
+Prefer the bundled checker:
 
 ```bash
 python3 scripts/entity_compat.py requirements.json --checkpoint entity-deps.local.json
 ```
 
-如果检查器无法评估某个站点特有的条件，请手动把证据补充到相同的结果结构中，而不是绕过检查。
+If the checker cannot evaluate a site-specific condition, manually add the
+evidence into the same result structure instead of bypassing the check.
 
-## 必需的结果结构
+## Required result structure
 
-将结果写入 `entity-deps.local.json.compatibility`：
+Write the result into `entity-deps.local.json.compatibility`:
 
 ```json
 {
@@ -43,189 +48,246 @@ python3 scripts/entity_compat.py requirements.json --checkpoint entity-deps.loca
 }
 ```
 
-只有 `status=pass` 才能继续生成 `env.sh`。
+Only `status=pass` may proceed to `env.sh` generation.
 
-## 1. 请求与 checkpoint 一致性
+## 1. Request and checkpoint consistency
 
-> **实现状态：大部分已实现** — `entity_compat.py` 检查 schema 版本、执行 `site_id` 与独立的源码/构建/依赖/产物路径不匹配、`requirements.path` 存在性，以及可复用内嵌请求在 backend、MPI、output、profile 和编译选项上的漂移。
+> **Implementation status: mostly implemented** — `entity_compat.py` checks
+> schema versions, execution `site_id` and independent
+> source/build/dependency/artifact path mismatches, `requirements.path`
+> existence, and drift of the reusable embedded request on backend, MPI,
+> output, profile, and compile options.
 
-检查：
+Checks:
 
-- `entity-deps.local.json.requirements` 指向或内嵌当前的 `requirements.json`。
-- `requirements.schema_version` 与 checkpoint 的 `schema_version` 是受支持的。
-- 执行站点与所有解析后的 schema-v2 Entity 路径等于当前 requirements；
-- schema-v1 的 `checkout_root/workdir` 比较仅为旧版兼容。
-- 请求的 backend、MPI、output、依赖 profile 与编译选项与 checkpoint 中的选择一致。
-- `decisions.parameters` 持有一条确认记录，其摘要与当前 requirements
-  的参数卡匹配（`parameters.confirmation` 检查）。记录缺失或过期则
-  失败；在生成 `env.sh` 之前用
-  `entity_checkpoint.py confirm <requirements> --checkpoint <checkpoint>
-  --by <actor>` 重新确认。显式的
-  `decisions.parameters_confirmation_override` 会像其他已记录的
-  override 一样把该检查降级为警告。
+- `entity-deps.local.json.requirements` points to or embeds the current
+  `requirements.json`.
+- `requirements.schema_version` and the checkpoint's `schema_version` are
+  supported.
+- The execution site and all resolved schema-v2 Entity paths equal the
+  current requirements; schema-v1 `checkout_root/workdir` comparison is for
+  legacy compatibility only.
+- The requested backend, MPI, output, dependency profile, and compile options
+  match the choices in the checkpoint.
+- `decisions.parameters` holds a confirmation record whose digest matches the
+  parameter card of the current requirements (the `parameters.confirmation`
+  check). A missing or stale record fails; before generating `env.sh`,
+  re-confirm with `entity_checkpoint.py confirm <requirements> --checkpoint
+  <checkpoint> --by <actor>`. An explicit
+  `decisions.parameters_confirmation_override` demotes this check to a
+  warning like any other recorded override.
 
-如果 checkpoint 是为不同的 Entity checkout、workdir、backend、MPI 模式、output 模式或依赖 profile 生成的，则失败。
+Fail if the checkpoint was generated for a different Entity checkout, workdir,
+backend, MPI mode, output mode, or dependency profile.
 
-## 2. Entity 版本 profile
+## 2. Entity version profile
 
-> **实现状态：已实现** — `entity_compat.py` 验证 profile 检测、C++ 标准、Kokkos/ADIOS2 版本族匹配，以及 ADIOS2 的 Kokkos 支持模式。
+> **Implementation status: implemented** — `entity_compat.py` verifies
+> profile detection, C++ standard, Kokkos/ADIOS2 version family matching, and
+> the ADIOS2 Kokkos support mode.
 
-拒绝 `1.4.0` 之前的 Entity 版本。`requirements.entity.dependency_profile` 若存在，必须是 `modern`。
+Reject Entity versions before `1.4.0`. `requirements.entity.dependency_profile`,
+if present, must be `modern`.
 
-检查：
+Checks:
 
-- Entity `1.4.0` 及更新版本使用 `C++20`、Kokkos `5.x`、ADIOS2 `2.11.x`，且 ADIOS2 Kokkos 支持为 `ON`。
-- CUDA 构建要求 Entity `1.4.3` 或更新；Entity `1.4.0`–`1.4.2` 仅支持 CPU。
-- `requirements.compile.cxx_standard` 与 profile 匹配。
-- 选定的 Kokkos 与 ADIOS2 版本与 profile 版本族匹配。
-- ADIOS2 的 `compile_config` 或生成脚本元数据记录了预期的 Kokkos 支持模式。
+- Entity `1.4.0` and newer use `C++20`, Kokkos `5.x`, ADIOS2 `2.11.x`, with
+  ADIOS2 Kokkos support `ON`.
+- CUDA builds require Entity `1.4.3` or newer; Entity `1.4.0`–`1.4.2` support
+  CPU only.
+- `requirements.compile.cxx_standard` matches the profile.
+- The selected Kokkos and ADIOS2 versions match the profile version families.
+- The ADIOS2 `compile_config` or generated script metadata records the
+  expected Kokkos support mode.
 
-不支持的 Entity 版本或依赖族不匹配则失败。
+Fail on unsupported Entity versions or dependency family mismatches.
 
-## 3. 工具链一致性
+## 3. Toolchain consistency
 
-> **实现状态：部分实现** — `entity_compat.py` 验证 `compiler.cxx`/`cc` 路径存在且可执行。跨依赖的签名一致性尚未自动比较。
+> **Implementation status: partially implemented** — `entity_compat.py`
+> verifies that `compiler.cxx`/`cc` paths exist and are executable. Signature
+> consistency across dependencies is not yet compared automatically.
 
-检查：
+Checks:
 
-- 选定的 `cmake`、`compiler.cc`、`compiler.cxx` 存在且可执行。
-- 编译器能报告版本。
-- 编译器支持所需的 C++ 标准。
-- 所有选定的源码构建或前缀依赖记录相同的编译器签名，或记录一个明确接受的兼容 wrapper 关系。
-- 当 `compiler.cxx` 是 Kokkos `nvcc_wrapper` 时，记录 `compiler.host_cxx`。
-- 当选定的 MPI 是 OpenMPI 时，其记录的版本满足
-  `entity_schema.py:MIN_OPENMPI_VERSION`（>= 5.0.0）。
+- The selected `cmake`, `compiler.cc`, and `compiler.cxx` exist and are
+  executable.
+- The compiler can report its version.
+- The compiler supports the required C++ standard.
+- All selected source-built or prefix dependencies record the same compiler
+  signature, or record an explicitly accepted compatible wrapper
+  relationship.
+- When `compiler.cxx` is the Kokkos `nvcc_wrapper`, record
+  `compiler.host_cxx`.
+- When the selected MPI is OpenMPI, its recorded version satisfies
+  `entity_schema.py:MIN_OPENMPI_VERSION` (>= 5.0.0).
 
-证据应包含可执行文件路径、版本输出以及编译器签名字符串。
+Evidence should include executable paths, version output, and the compiler
+signature strings.
 
-## 4. 后端检查
+## 4. Backend checks
 
-> **实现状态：部分实现** — 已检查 CUDA nvcc_wrapper 与 ADIOS2 标志冲突。已检查 HIP 工具包前缀存在性。CPU 后端检查与 GPU 架构验证尚未自动化。
+> **Implementation status: partially implemented** — CUDA nvcc_wrapper and
+> ADIOS2 flag conflicts are checked. HIP toolkit prefix existence is checked.
+> CPU backend checks and GPU architecture validation are not yet automated.
 
-对于 `backend=cpu`：
+For `backend=cpu`:
 
-- CPU 编译器支持所需的 C++ 标准。
-- 选定的 Kokkos 启用了 Serial/OpenMP 之类的 CPU 后端。
+- The CPU compiler supports the required C++ standard.
+- The selected Kokkos enables a CPU backend such as Serial/OpenMP.
 
-对于 `backend=cuda`：
+For `backend=cuda`:
 
-- CUDA 工具包与 `nvcc` 存在。
-- 选定的 C++ 编译器是 Kokkos `nvcc_wrapper`。
-- `NVCC_WRAPPER_DEFAULT_COMPILER` 或 `compiler.host_cxx` 有效。
-- CUDA 编译器与 host 编译器版本互相合理。
-- `requirements.environment.gpu_arch` 已设置，或记录了安全的默认/自动检测决策。
-- 选定的 Kokkos 是以 CUDA 和所请求架构构建的。
+- The CUDA toolkit and `nvcc` exist.
+- The selected C++ compiler is the Kokkos `nvcc_wrapper`.
+- `NVCC_WRAPPER_DEFAULT_COMPILER` or `compiler.host_cxx` is valid.
+- The CUDA compiler and host compiler versions are mutually reasonable.
+- `requirements.environment.gpu_arch` is set, or a safe default/auto-detect
+  decision is recorded.
+- The selected Kokkos was built with CUDA and the requested architecture.
 
-对于 `backend=hip`：
+For `backend=hip`:
 
-- ROCm/HIP 工具存在，例如 `hipcc`。
-- 选定的 Kokkos 启用了 HIP。
-- 记录了所请求的 AMD GPU 架构。
-- ROCm 前缀可通过 `CMAKE_PREFIX_PATH` 或等价环境变量发现。
+- ROCm/HIP tools exist, e.g. `hipcc`.
+- The selected Kokkos has HIP enabled.
+- The requested AMD GPU architecture is recorded.
+- The ROCm prefix is discoverable via `CMAKE_PREFIX_PATH` or an equivalent
+  environment variable.
 
-## 5. MPI 检查
+## 5. MPI checks
 
-> **实现状态：部分实现** — 已检查 MPI 选择的存在性，但 MPI wrapper 输出、编译器族兼容性以及 ADIOS2/HDF5 串行/MPI 一致性尚未验证。
+> **Implementation status: partially implemented** — MPI selection existence
+> is checked, but MPI wrapper output, compiler family compatibility, and
+> ADIOS2/HDF5 serial/MPI consistency are not yet verified.
 
-当 `requirements.environment.mpi=false` 时：
+When `requirements.environment.mpi=false`:
 
-- Entity 构建将使用 `mpi=OFF`。
-- ADIOS2 与 HDF5 选择与串行兼容。
-- 没有意外选中仅 MPI 的 ADIOS2/HDF5 目标。
+- The Entity build will use `mpi=OFF`.
+- The ADIOS2 and HDF5 selections are serial-compatible.
+- No MPI-only ADIOS2/HDF5 targets are accidentally selected.
 
-当 `requirements.environment.mpi=true` 时：
+When `requirements.environment.mpi=true`:
 
-- `mpicxx` 与 `mpirun` 存在且可执行。
-- 记录了 `mpicxx --show` 或等价的 wrapper 输出。
-- MPI wrapper 使用选定的编译器族，或使用用户确认的兼容编译器。
-- ADIOS2 与 HDF5 启用了 MPI。
-- Kokkos/ADIOS2/HDF5/Entity 将在同一个编译器/MPI 上下文中构建。
-- `gpu_aware_mpi=true` 有证据或明确的风险接受。
+- `mpicxx` and `mpirun` exist and are executable.
+- The output of `mpicxx --show` or an equivalent wrapper is recorded.
+- The MPI wrapper uses the selected compiler family, or a user-confirmed
+  compatible compiler.
+- ADIOS2 and HDF5 have MPI enabled.
+- Kokkos/ADIOS2/HDF5/Entity will be built in the same compiler/MPI context.
+- `gpu_aware_mpi=true` has evidence or an explicit risk acceptance.
 
-## 6. 依赖存在性与发现
+## 6. Dependency existence and discovery
 
-> **实现状态：已实现** — `entity_compat.py` 验证 `prefix`、`cmake_config`、`bin` 路径在磁盘上存在。结构完整性（非空字段）单独检查。
+> **Implementation status: implemented** — `entity_compat.py` verifies that
+> `prefix`, `cmake_config`, and `bin` paths exist on disk. Structural
+> completeness (non-empty fields) is checked separately.
 
-对每个必需的依赖，同时检查文件与 CMake 发现。
+For each required dependency, check both files and CMake discovery.
 
-始终必需：
+Always required:
 
-- CMake 可执行文件。
-- 选定的 C/C++ 编译器。
-- Kokkos 前缀或源码构建结果。
-- Kokkos `KokkosConfig.cmake`。
+- The CMake executable.
+- The selected C/C++ compiler.
+- A Kokkos prefix or source build result.
+- The Kokkos `KokkosConfig.cmake`.
 
-当 `output=true` 时必需：
+Required when `output=true`:
 
-- HDF5 前缀或源码构建结果。
-- HDF5 CMake config，通常是 `hdf5-config.cmake` 或 `HDF5Config.cmake`。
-- ADIOS2 前缀或源码构建结果。
-- ADIOS2 `ADIOS2Config.cmake`。
+- An HDF5 prefix or source build result.
+- The HDF5 CMake config, usually `hdf5-config.cmake` or `HDF5Config.cmake`.
+- An ADIOS2 prefix or source build result.
+- The ADIOS2 `ADIOS2Config.cmake`.
 
-可行时运行或模拟一次 CMake 包查找：
+When feasible, run or simulate a CMake package probe:
 
 ```bash
 cmake -S <probe-src> -B <probe-build> -DCMAKE_PREFIX_PATH="<paths>"
 ```
 
-至少验证每个记录的 `cmake_config` 路径存在，且其前缀包含在 `paths.CMAKE_PREFIX_PATH` 中。
+At minimum, verify that each recorded `cmake_config` path exists and that its
+prefix is included in `paths.CMAKE_PREFIX_PATH`.
 
-## 7. ADIOS2、HDF5 与 Kokkos 模式兼容性
+## 7. ADIOS2, HDF5, and Kokkos mode compatibility
 
-> **实现状态：部分实现** — 已检查 ADIOS2 Kokkos 支持模式与 profile 的关系。已检测 ADIOS2_USE_Kokkos + CUDA 冲突。串行/MPI 模式一致性尚未自动化。
+> **Implementation status: partially implemented** — The relationship between
+> the ADIOS2 Kokkos support mode and the profile is checked. The
+> ADIOS2_USE_Kokkos + CUDA conflict is detected. Serial/MPI mode consistency
+> is not yet automated.
 
-检查：
+Checks:
 
-- ADIOS2/HDF5 串行与 MPI 模式匹配 `requirements.environment.mpi`。
-- ADIOS2 Kokkos 支持仅对 `modern` profile 为 `ON`，除非显式 override。
-- ADIOS2 不得同时启用 `ADIOS2_USE_Kokkos=ON` 与 `ADIOS2_USE_CUDA=ON`。
-- 如果 ADIOS2 Kokkos 支持为 `ON`，Kokkos 前缀在 `CMAKE_PREFIX_PATH` 中必须先于 ADIOS2 可发现。
-- ADIOS2 与 HDF5 是以兼容的编译器签名构建的。
-- HDF5 C 与 C++ 库可用性与 ADIOS2 构建匹配。
+- ADIOS2/HDF5 serial and MPI modes match `requirements.environment.mpi`.
+- ADIOS2 Kokkos support is `ON` only for the `modern` profile, unless
+  explicitly overridden.
+- ADIOS2 must not enable both `ADIOS2_USE_Kokkos=ON` and
+  `ADIOS2_USE_CUDA=ON` at the same time.
+- If ADIOS2 Kokkos support is `ON`, the Kokkos prefix must be discoverable in
+  `CMAKE_PREFIX_PATH` ahead of ADIOS2.
+- ADIOS2 and HDF5 were built with compatible compiler signatures.
+- HDF5 C and C++ library availability matches the ADIOS2 build.
 
-## 8. 运行时加载器路径
+## 8. Runtime loader paths
 
-> **实现状态：尚未实现** — 记录在 `paths.*` 中的路径条目尚未验证存在性。
+> **Implementation status: not implemented** — Path entries recorded in
+> `paths.*` are not yet verified for existence.
 
-检查：
+Checks:
 
-- checkpoint 中记录的每个 `PATH`、`CMAKE_PREFIX_PATH`、`LD_LIBRARY_PATH`、`DYLD_LIBRARY_PATH` 条目都存在，除非它在当前 OS 上有意缺失。
-- 使用动态库时，所选依赖的库目录已包含在内。
-- 除非显式记录，否则不需要源码 checkout 的构建目录作为运行时库路径。
+- Every `PATH`, `CMAKE_PREFIX_PATH`, `LD_LIBRARY_PATH`, and
+  `DYLD_LIBRARY_PATH` entry recorded in the checkpoint exists, unless it is
+  intentionally absent on the current OS.
+- When dynamic libraries are used, the library directories of the selected
+  dependencies are included.
+- Unless explicitly recorded, the build directory of the source checkout is
+  not needed as a runtime library path.
 
-在 macOS 上检查 `DYLD_LIBRARY_PATH`；在 Linux 上检查 `LD_LIBRARY_PATH`。
+Check `DYLD_LIBRARY_PATH` on macOS; check `LD_LIBRARY_PATH` on Linux.
 
-## 9. 源码构建脚本就绪性
+## 9. Source build script readiness
 
-> **实现状态：部分实现** — 会标记 `status=generated` 且没有安装证据的源码构建脚本。单个脚本选项验证尚未自动化。
+> **Implementation status: partially implemented** — Source build scripts
+> with `status=generated` and no install evidence are flagged. Individual
+> script option validation is not yet automated.
 
-当选定依赖的 provider 为 `source-build` 时：
+When the provider of a selected dependency is `source-build`:
 
-- 生成的脚本路径存在且可执行。
-- 脚本来源记录在 `build_scripts` 中。
-- 生成的版本 profile 与 C++ 标准匹配 `requirements`。
-- 脚本安装前缀与选定依赖前缀匹配。
-- 执行后构建日志存在，或者状态仍为 `generated` 且兼容性必须保持 `partial`/`fail`。
+- The generated script path exists and is executable.
+- The script provenance is recorded in `build_scripts`.
+- The generated version profile and C++ standard match `requirements`.
+- The script install prefix matches the selected dependency prefix.
+- After execution, build logs exist, or the status is still `generated` and
+  compatibility must remain `partial`/`fail`.
 
-对于只有生成脚本而没有完成安装证据的依赖，不要把兼容性标记为 `pass`。
+Do not mark compatibility as `pass` for dependencies that only have generated
+scripts without completed install evidence.
 
-## 10. Entity 构建就绪性
+## 10. Entity build readiness
 
-> **实现状态：尚未实现** — 由 `generate_entity_build_sh.py` 隐式执行（pgen 要求、CMake 选项推导）。不是 `entity_compat.py` 中的独立检查。
+> **Implementation status: not implemented** — Performed implicitly by
+> `generate_entity_build_sh.py` (pgen requirement, CMake option derivation).
+> Not a standalone check in `entity_compat.py`.
 
-检查：
+Checks:
 
-- `requirements.compile.pgen` 已设置。
-- 选定的依赖路径能够产出 `entity-build.sh` 所需的 CMake 选项。
-- `requirements.compile.cxx_standard`、backend、MPI、output、debug、tests、precision、deposit 与 shape order 内部一致。
-- 预期构建目录等于不可变的 `entity.build_root`，除非用户显式记录了另一个构建身份路径。
+- `requirements.compile.pgen` is set.
+- The selected dependency paths can produce the CMake options required by
+  `entity-build.sh`.
+- `requirements.compile.cxx_standard`, backend, MPI, output, debug, tests,
+  precision, deposit, and shape order are internally consistent.
+- The expected build directory equals the immutable `entity.build_root`,
+  unless the user explicitly recorded another build identity path.
 
-该检查不编译 Entity。它只决定生成 `env.sh` 再生成 `entity-build.sh` 是否安全。
+This check does not compile Entity. It only decides whether it is safe to
+generate `env.sh` and then `entity-build.sh`.
 
-## 状态规则
+## Status rules
 
-当必需依赖、必需路径、版本族、编译器模式、后端模式或 MPI/output 模式不兼容时，使用 `fail`。
+Use `fail` when a required dependency, required path, version family,
+compiler mode, backend mode, or MPI/output mode is incompatible.
 
-仅当缺失项预期接下来会被创建，且在重新检查之前不会启动任何 Entity 构建时，才使用 `partial`；例如已生成但尚未运行的源码构建脚本。
+Use `partial` only when the missing items are expected to be created next and
+no Entity build will start before a re-check; for example, a source build
+script that has been generated but not yet run.
 
-仅当所有必需的选定依赖都已安装/可发现，且每个请求的模式都有证据时，才使用 `pass`。
+Use `pass` only when all required selected dependencies are
+installed/discoverable and every requested mode has evidence.

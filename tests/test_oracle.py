@@ -292,7 +292,8 @@ class GateACrossRoundTest(unittest.TestCase):
         self.assertEqual(violations[0]["kind"], "cross_round_reference")
 
     def test_own_run_root_not_flagged(self):
-        # 自身 run 根目录的引用（含 tool scratch 的 slug 形态）不算跨轮污染。
+        # References to one's own run root (including the slug form in tool
+        # scratch paths) do not count as cross-round contamination.
         calls = [
             {"name": "Bash", "input": {"command":
                 "cd ~/entity-eval-runs/2026-07-22-U1-Nr/project && ls"}},
@@ -337,7 +338,8 @@ class GateACrossRoundTest(unittest.TestCase):
         self.assertTrue(any(v["kind"] == "login_node_analysis" for v in violations))
 
     def test_heredoc_mentioning_protected_name_not_mutation(self):
-        # heredoc 正文提到 physics-spec.json（如 submission 内嵌字段）不是篡改。
+        # Mentioning physics-spec.json in a heredoc body (e.g. an embedded
+        # submission field) is not tampering.
         calls = [
             {"name": "Bash", "input": {"command":
                 "ssh siyuan 'cat > ~/work/submission.json << \'EOF\'\n"

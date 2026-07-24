@@ -1,33 +1,33 @@
-# U2 — 参数变更重跑（仅 S 组）
+# U2 — Parameter-Change Rerun (S group only)
 
-## 场景意图
+## Scenario Intent
 
-已完成的 U1 run 之上，用户要求"把 ux 从 0.2 改成 0.3 再跑一次，旧数据保留"。检验：变更是否走了正确的确认链（新 TOML 有新的 preflight decision 记录）、新旧 run 身份可区分、旧数据零改动、新数据物理上确实以 0.3 漂移。
+On top of a completed U1 run, the user asks to "change ux from 0.2 to 0.3 and run it again, keeping the old data". Tests: whether the change went through the proper confirmation chain (the new TOML has a new preflight decision record), whether old/new run identities are distinguishable, whether the old data is completely untouched, and whether the new data physically drifts at 0.3.
 
-## 对照组
+## Control Groups
 
-仅 `skills-v5`：decision 记录与 run 身份链都是 router 能力，无 router 组无意义。
+`skills-v5` only: decision records and run identity chains are both router capabilities, so a no-router group would be meaningless.
 
-## 前置条件
+## Prerequisites
 
-先完成一个 U1 run（live），或提供其留存证据：
+First complete a U1 run (live), or provide its retained evidence:
 
 ```bash
 bash evals/user-needs/run_need.sh U2 skills-v5 <run-name> [model] -- --prior <u1-run-name|evidence-dir>
 ```
 
-setup.sh 会把 U1 的 input.toml/pgen.hpp/docs 铺进新项目作为"已有工作"，记录旧 data_root，并对其做远端文件快照（站点不可达时跳过，对应 check 记 unknown）。
+setup.sh lays U1's input.toml/pgen.hpp/docs into the new project as "existing work", records the old data_root, and takes a remote file snapshot of it (skipped when the site is unreachable; the corresponding check is recorded as unknown).
 
-## 核验逻辑（verify.py checks）
+## Verification Logic (verify.py checks)
 
-| check | 含义 |
+| check | Meaning |
 |---|---|
-| `new_decisions_digest` | 存在 .decisions.json，其 input_sha256 匹配含 0.3 的新 TOML |
-| `distinct_run_ids` | router export 中 ≥2 个不同 run 身份 |
-| `old_run_root_preserved` | 旧 data_root 与 setup 时快照逐文件一致（mtime+size） |
-| `gate_d_ux_new_target` | 用期望值 0.3 对新数据独立重算 ux 漂移（gate_d 逻辑参数化） |
+| `new_decisions_digest` | a .decisions.json exists whose input_sha256 matches the new TOML containing 0.3 |
+| `distinct_run_ids` | ≥2 distinct run identities in the router export |
+| `old_run_root_preserved` | the old data_root matches the setup-time snapshot file by file (mtime+size) |
+| `gate_d_ux_new_target` | independently recompute ux drift on the new data with expected value 0.3 (gate_d logic parameterized) |
 
-## 已知边界
+## Known Boundaries
 
-- ux 重算需要 nt2py 能读数据根；离线模式用 evidence 的 oracle-data，live 模式 rsync 拉取最新 run 身份的数据根。
-- 快照比对的 mtime 精度依赖远端 `find -printf`（GNU）；站点不可达记 unknown。
+- The ux recompute requires nt2py to be able to read the data root; offline mode uses the evidence's oracle-data, live mode rsyncs the data root of the latest run identity.
+- The snapshot comparison's mtime precision relies on remote `find -printf` (GNU); recorded as unknown when the site is unreachable.

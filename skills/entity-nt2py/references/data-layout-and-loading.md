@@ -1,10 +1,8 @@
-# 数据布局与加载
+# Data Layout and Loading
 
-每当用 nt2py 打开 Entity 输出时使用本参考文档。它描述文件系统契约，
-以及在加载数组之前可以检查的状态。
+Use this reference whenever you open Entity output with nt2py. It describes the filesystem contract and the state you can inspect before loading any arrays.
 
-本参考文档以 **nt2py v1.5.3**（`403437a`）为目标。在依赖版本特定行为
-之前，先核对已安装的版本：
+This reference targets **nt2py v1.5.3** (`403437a`). Before relying on version-specific behavior, check the installed version:
 
 ```python
 import nt2
@@ -12,31 +10,29 @@ import nt2
 print(nt2.__version__)
 ```
 
-## 目录
+## Contents
 
-- 安装
-- 数据根目录契约
-- 分析前先检查
-- 运行时诊断
-- 初始化检查与失败
-- 源码依据
+- Installation
+- Data-root contract
+- Inspect before analyzing
+- Runtime diagnostics
+- Initialization checks and failures
+- Source references
 
-## 安装
+## Installation
 
-nt2py v1.5.3 要求 Python 3.8 或更高版本。BP5 支持默认安装；
-HDF5 支持需要可选的 `h5py` 依赖。
+nt2py v1.5.3 requires Python 3.8 or newer. BP5 support is installed by default; HDF5 support needs the optional `h5py` dependency.
 
 ```bash
 python3 -m pip install "nt2py==1.5.3"
 python3 -m pip install "nt2py[hdf5]==1.5.3"  # when reading HDF5 output
 ```
 
-制作影片额外需要外部 `ffmpeg` 可执行文件。加载数据或绘制静态图
-不需要它。
+Making movies additionally requires an external `ffmpeg` executable. It is not needed for loading data or plotting static figures.
 
-## 数据根目录契约
+## Data-root contract
 
-传入直接包含各类别目录的那个目录，而不是其上层的运行目录：
+Pass the directory that directly contains the category directories, not the run directory above it:
 
 ```text
 <data-root>/
@@ -49,8 +45,7 @@ python3 -m pip install "nt2py[hdf5]==1.5.3"  # when reading HDF5 output
 └── simulation.out          # optional runtime diagnostics
 ```
 
-类别文件必须匹配 `<category>.<8-digit-step>.bp|h5`。某个类别可以缺失，
-但至少需要一个可读的 `fields`、`particles` 或 `spectra` 类别来确定格式。
+Category files must match `<category>.<8-digit-step>.bp|h5`. A category may be missing, but at least one readable `fields`, `particles`, or `spectra` category is required to determine the format.
 
 ```python
 from pathlib import Path
@@ -60,13 +55,11 @@ data_root = Path("/path/to/run/data")
 data = nt2.Data(str(data_root))
 ```
 
-`nt2.Data` 自动检测 BP5 与 HDF5，并读取 `Coordinates` 属性。
-`cart` 对应 Cartesian；`sph` 和 `qsph` 对应 Spherical。其他坐标系
-会被拒绝。
+`nt2.Data` auto-detects BP5 versus HDF5 and reads the `Coordinates` attribute. `cart` maps to Cartesian; `sph` and `qsph` map to Spherical. Other coordinate systems are rejected.
 
-## 分析前先检查
+## Inspect before analyzing
 
-在选取量之前，先使用元数据和容器状态：
+Use the metadata and container state before selecting quantities:
 
 ```python
 print(data.coordinate_system.value)
@@ -77,21 +70,16 @@ print(data.particles_defined)
 print(data.spectra_defined)
 ```
 
-`print(data)` 或 `data.to_str()` 提供有用的完整盘点，但它不是免费的
-元数据操作：报告粒子大小会调用 `.nbytes`，它会在所有有效粒子输出上
-计算 Dask 粒子索引。在大型运行上，先检查上面的显式属性，仅当可以接受
-该扫描时才打印完整对象。在 v1.5.3 中，`to_str()` 计算 `dt` 时还假定
-至少有两个场或能谱输出；对于只有一个步长的已定义 fields/spectra 容器，
-它会抛出 `IndexError`。此类运行请使用显式属性。
+`print(data)` or `data.to_str()` provides a useful full inventory, but it is not a free metadata operation: reporting particle sizes calls `.nbytes`, which computes the Dask particle index across all valid particle outputs. On large runs, check the explicit attributes above first and print the full object only when that scan is acceptable. In v1.5.3, `to_str()` also assumes at least two field or spectra outputs when computing `dt`; for a defined fields/spectra container with only one step it raises `IndexError`. Use the explicit attributes for such runs.
 
-容器状态如下：
+Container state:
 
-- `data.fields`：一个 `xarray.Dataset`；未定义场时为空。
-- `data.particles`：一个 `ParticleDataset`；未定义粒子时为 `None`。
-- `data.spectra`：一个 `xarray.Dataset`；未定义能谱时为空。
-- `data.diagnostics`：从 `.out` 解析的 `pandas.DataFrame`，或 `None`。
+- `data.fields`: an `xarray.Dataset`; empty when no fields are defined.
+- `data.particles`: a `ParticleDataset`; `None` when no particles are defined.
+- `data.spectra`: an `xarray.Dataset`; empty when no spectra are defined.
+- `data.diagnostics`: a `pandas.DataFrame` parsed from the `.out` file, or `None`.
 
-使用容器特有的发现 API，而不要臆测变量名：
+Use the container-specific discovery APIs instead of guessing variable names:
 
 ```python
 if data.fields_defined:
@@ -109,19 +97,15 @@ if data.spectra_defined:
     print(list(data.spectra.data_vars))
 ```
 
-不存在 `data.particles.sp` 坐标。用 `data.particles.species` 列出物种，
-用 `.sel(sp=...)` 选取它们。
+There is no `data.particles.sp` coordinate. Use `data.particles.species` to list species, and `.sel(sp=...)` to select them.
 
-避免把 `data.particles.nbytes` 当作廉价的发现调用：它会为粒子索引计算
-Dask 内存用量。
+Avoid treating `data.particles.nbytes` as a cheap discovery call: it computes Dask memory usage for the particle index.
 
-## 运行时诊断
+## Runtime diagnostics
 
-`data.diagnostics` **不**读取 Entity CSV 统计文件。它扫描数据根目录中的
-`.out` 文件，并解析文件系统返回的第一个文件。解析器提取步数、物理时间、
-子步计时、物种计数，以及可选的物种最小值/最大值。
+`data.diagnostics` does **not** read Entity CSV statistics files. It scans the data root for `.out` files and parses the first file the filesystem returns. The parser extracts step counts, physical time, substep timings, species counts, and optional species min/max values.
 
-将其视为可选的运行时信息：
+Treat it as optional runtime information:
 
 ```python
 diag = data.diagnostics
@@ -130,28 +114,25 @@ if diag is not None:
     print(diag[["Step", "Time"]].head())
 ```
 
-不要用该属性作为能量守恒或其他物理统计的证明。当分析明确需要时，
-用 pandas 单独读取单独生成的 CSV 文件。
+Do not use this attribute as proof of energy conservation or other physics statistics. When an analysis explicitly needs them, read the separately generated CSV files with pandas on their own.
 
-## 初始化检查与失败
+## Initialization checks and failures
 
-初始化不只是打开一个目录。对于场，nt2py 会验证所有可读时间步具有
-相同的变量名、形状和内存布局。它还会读取坐标、边坐标、时间、步数
-和属性。
+Initialization does more than open a directory. For fields, nt2py verifies that all readable timesteps have the same variable names, shapes, and memory layout. It also reads coordinates, edge coordinates, times, steps, and attributes.
 
-直接排查以下常见失败：
+Troubleshoot these common failures directly:
 
-- `Could not determine file format`：数据根目录错误或文件名不符合约定。
-- HDF5 `ImportError`：在当前 Python 环境中安装 `nt2py[hdf5]`。
-- 缺少 `Coordinates`：输出元数据不完整或不兼容。
-- `No valid steps found`：类别存在，但不含可读的输出。
-- 名称/形状/布局不一致：混入了来自不兼容运行的输出。
-- 关于不可读文件的警告：确认部分输出是否可接受。
+- `Could not determine file format`: the data root is wrong or the file names do not follow the convention.
+- HDF5 `ImportError`: install `nt2py[hdf5]` in the current Python environment.
+- Missing `Coordinates`: the output metadata is incomplete or incompatible.
+- `No valid steps found`: the category exists but contains no readable output.
+- Inconsistent names/shapes/layouts: output from incompatible runs was mixed together.
+- Warnings about unreadable files: confirm whether partial output is acceptable.
 
-## 源码依据
+## Source references
 
-- 发布版本：<https://github.com/entity-toolkit/nt2py/releases/tag/v1.5.3>
-- 软件包元数据：<https://github.com/entity-toolkit/nt2py/blob/v1.5.3/pyproject.toml>
-- 数据容器：<https://github.com/entity-toolkit/nt2py/blob/v1.5.3/nt2/containers/data.py>
-- 格式检测：<https://github.com/entity-toolkit/nt2py/blob/v1.5.3/nt2/utils.py>
-- 诊断解析器：<https://github.com/entity-toolkit/nt2py/blob/v1.5.3/nt2/containers/diagnostics.py>
+- Release: <https://github.com/entity-toolkit/nt2py/releases/tag/v1.5.3>
+- Package metadata: <https://github.com/entity-toolkit/nt2py/blob/v1.5.3/pyproject.toml>
+- Data container: <https://github.com/entity-toolkit/nt2py/blob/v1.5.3/nt2/containers/data.py>
+- Format detection: <https://github.com/entity-toolkit/nt2py/blob/v1.5.3/nt2/utils.py>
+- Diagnostics parser: <https://github.com/entity-toolkit/nt2py/blob/v1.5.3/nt2/containers/diagnostics.py>

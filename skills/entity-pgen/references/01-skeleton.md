@@ -1,16 +1,16 @@
-# 01 — PGen 骨架
+# 01 — PGen Skeleton
 
-> 基于 Entity v1.4.4
+> Based on Entity v1.4.4
 
-## 何时使用
+## When to Use
 
-**必读内容**。这是所有 PGen 的起点。定义了 PGen 结构体的结构、编译期兼容性检查、构造函数签名以及参数读取模式。
+**Required reading**. This is the starting point for every PGen. It defines the structure of the PGen struct, compile-time compatibility checks, constructor signatures, and parameter-reading patterns.
 
 ---
 
-## API 签名
+## API Signatures
 
-### PGen 结构体模板
+### PGen Struct Template
 
 ```cpp
 namespace user {
@@ -57,41 +57,41 @@ namespace user {
 
 ---
 
-## 参数说明
+## Parameter Reference
 
-### 模板参数
+### Template Parameters
 
-| 参数 | 含义 | 何时确定 |
+| Parameter | Meaning | When Determined |
 |------|------|---------|
-| `S` | `SimEngine::type` 枚举：`SRPIC` 或 `GRPIC` | 编译时由 CMake 确定 |
-| `M` | 度规类（例如 `Metric<Dim::_2D, Coord::Cartesian>`） | 编译时由 TOML 的 grid.metric 确定 |
+| `S` | `SimEngine::type` enum: `SRPIC` or `GRPIC` | determined by CMake at compile time |
+| `M` | metric class (e.g. `Metric<Dim::_2D, Coord::Cartesian>`) | determined at compile time by the TOML grid.metric |
 
-### Trait 枚举值
+### Trait Enum Values
 
-#### 引擎
-| 枚举值 | 含义 |
+#### Engines
+| Enum Value | Meaning |
 |--------|------|
-| `SimEngine::SRPIC` | 狭义相对论 PIC |
-| `SimEngine::GRPIC` | 广义相对论 PIC |
+| `SimEngine::SRPIC` | special-relativistic PIC |
+| `SimEngine::GRPIC` | general-relativistic PIC |
 
-#### 度规
-| 枚举值 | 含义 | 适用引擎 |
+#### Metrics
+| Enum Value | Meaning | Applicable Engines |
 |--------|------|---------|
-| `Metric::Minkowski` | 平直时空（笛卡尔/球坐标） | SRPIC、GRPIC |
-| `Metric::Spherical` | 球坐标 | SRPIC |
-| `Metric::QSpherical` | 修正球坐标（可调网格间距） | SRPIC |
-| `Metric::Kerr_Schild` | Kerr-Schild 坐标（旋转黑洞） | GRPIC |
-| `Metric::QKerr_Schild` | 修正 Kerr-Schild | GRPIC |
-| `Metric::Kerr_Schild_0` | Kerr-Schild 零自旋极限 | GRPIC |
+| `Metric::Minkowski` | flat spacetime (Cartesian/spherical) | SRPIC, GRPIC |
+| `Metric::Spherical` | spherical coordinates | SRPIC |
+| `Metric::QSpherical` | modified spherical coordinates (adjustable grid spacing) | SRPIC |
+| `Metric::Kerr_Schild` | Kerr-Schild coordinates (rotating black hole) | GRPIC |
+| `Metric::QKerr_Schild` | modified Kerr-Schild | GRPIC |
+| `Metric::Kerr_Schild_0` | Kerr-Schild zero-spin limit | GRPIC |
 
-#### 维度
-| 枚举值 | 含义 |
+#### Dimensions
+| Enum Value | Meaning |
 |--------|------|
 | `Dim::_1D` | 1D |
 | `Dim::_2D` | 2D |
 | `Dim::_3D` | 3D |
 
-### Trait 声明语法
+### Trait Declaration Syntax
 
 ```cpp
 // Declare compatibility with multiple engines:
@@ -110,7 +110,7 @@ static constexpr auto dimensions {
 };
 ```
 
-### 构造函数签名选择
+### Constructor Signature Choices
 
 ```cpp
 // Use const Metadomain — no need to dynamically modify BCs
@@ -121,9 +121,9 @@ PGen(const SimulationParams& p, const Metadomain<S, M>& m);
 PGen(const SimulationParams& p, Metadomain<S, M>& m);
 ```
 
-### 参数读取
+### Parameter Reading
 
-`SimulationParams` 提供模板方法 `get<T>(key, default)`：
+`SimulationParams` provides the template method `get<T>(key, default)`:
 
 ```cpp
 // Read from TOML
@@ -138,11 +138,11 @@ int    freq = params.template get<int>("setup.injection_frequency", 100);
 auto xi_min = params.template get<std::vector<real_t>>("setup.xi_min");
 ```
 
-**重要**：`params.template get<>()` 中的键直接对应 TOML 路径，层级之间用 `.` 分隔。
+**Important**: the keys in `params.template get<>()` correspond directly to TOML paths, with levels separated by `.`.
 
 ---
 
-## 必需的 include
+## Required Includes
 
 ```cpp
 #pragma once
@@ -172,32 +172,32 @@ auto xi_min = params.template get<std::vector<real_t>>("setup.xi_min");
 
 ---
 
-## 最小可运行 PGen
+## Minimal Runnable PGen
 
-Entity 的特性检测通过 `if constexpr` 实现——不存在的方法/成员会被静默跳过。因此，最小 PGen 骨架只需要 trait 声明加一个空构造函数。
+Entity's feature detection is implemented via `if constexpr` — nonexistent methods/members are silently skipped. Therefore, a minimal PGen skeleton only needs trait declarations plus an empty constructor.
 
-### 可选成员/方法概览
+### Overview of Optional Members/Methods
 
-以下成员/方法**全部是可选的**（引擎通过 traits 检测其存在性，若不存在则跳过）：
+The following members/methods are **all optional** (the engine detects their presence via traits and skips them if absent):
 
-| 成员/方法 | 缺失时的行为 |
+| Member/Method | Behavior When Absent |
 |-----------|--------------|
-| `init_flds` | 场保持为零（真空） |
-| `InitPrtls()` | 不注入粒子（纯场模拟） |
-| `CustomPostStep()` | 无时间步钩子 |
-| `MatchFields()` | MATCH 边界不可用 |
-| `FixFieldsConst()` | FIXED 边界不可用 |
-| `AtmFields()` | ATMOSPHERE 边界不可用 |
-| `ext_current` | 无外部电流源 |
-| `ext_force` | 无外力 |
-| `ExternalFields()` | 无外部 E/B/力 |
-| `CustomFieldOutput()` | 无自定义场输出 |
-| `CustomStat()` | 无自定义统计 |
-| `CustomParticleUpdate()` | 无自定义粒子更新 |
+| `init_flds` | fields remain zero (vacuum) |
+| `InitPrtls()` | no particles injected (fields-only simulation) |
+| `CustomPostStep()` | no time-step hook |
+| `MatchFields()` | MATCH boundary unavailable |
+| `FixFieldsConst()` | FIXED boundary unavailable |
+| `AtmFields()` | ATMOSPHERE boundary unavailable |
+| `ext_current` | no external current source |
+| `ext_force` | no external force |
+| `ExternalFields()` | no external E/B/force |
+| `CustomFieldOutput()` | no custom field output |
+| `CustomStat()` | no custom statistics |
+| `CustomParticleUpdate()` | no custom particle update |
 
-编译只要求 `pgens/<name>/pgen.hpp` 存在（CMake 的 `set_problem_generator()` 只检查此文件）。
+Compilation only requires `pgens/<name>/pgen.hpp` to exist (CMake's `set_problem_generator()` only checks this file).
 
-### 代码示例：最简骨架（仅 traits + 空构造函数）
+### Code Example: Simplest Skeleton (traits + empty constructor only)
 
 ```cpp
 #pragma once
@@ -225,7 +225,7 @@ namespace user {
 } // namespace user
 ```
 
-### 代码示例：带 InitFields 的最小 PGen
+### Code Example: Minimal PGen with InitFields
 
 ```cpp
 #pragma once
@@ -270,23 +270,23 @@ namespace user {
 } // namespace user
 ```
 
-这个最小 PGen 只在 2D SRPIC Minkowski 中设置 Bx1=1.0 的均匀 B 场，不含粒子。所有其他 PGen 都从此骨架扩展而来。
+This minimal PGen only sets a uniform B field with Bx1=1.0 in 2D SRPIC Minkowski, with no particles. All other PGens extend from this skeleton.
 
 ---
 
-## 约束与不兼容项
+## Constraints and Incompatibilities
 
-- **init_flds 实例名是强制的**——代码通过 C++20 concepts 检测名为 `init_flds` 的成员
-- **Trait 声明必须与 TOML 匹配**——如果 TOML 中是 `engine = "GRPIC"` 但 traits 只声明了 SRPIC 兼容性，编译会失败
-- **D = M::Dim**——标准缩写约定；后续的 InitFields 和所有方法都使用 D 而不是显式维度
+- **The `init_flds` instance name is mandatory** — the code detects a member named `init_flds` via C++20 concepts
+- **Trait declarations must match the TOML** — if the TOML has `engine = "GRPIC"` but the traits only declare SRPIC compatibility, compilation fails
+- **D = M::Dim** — standard abbreviation convention; subsequent InitFields and all methods use D instead of an explicit dimension
 
 ---
 
-## 常见陷阱
+## Common Pitfalls
 
-1. **忘记 `using namespace ntt`**——ZERO、ONE、SQR、math::cos 等都在 ntt 命名空间中
-2. **为未使用的维度声明 traits**——会导致未测试维度的编译失败；只声明实际支持的维度
-3. **const 与非 const Metadomain 选择错误**——使用了 const 但之后需要 setFldsBC() 会导致编译失败。在 const 就足够时使用非 const 则没有问题（只是约束稍微宽松）
-4. **`get<type>()` 前缺少 `template` 关键字**——因为 PGen 本身是模板类，调用模板方法需要写成 `params.template get<>()`
-5. **`Dim::_2D` 与 `Dim::_3D`**——`_2D` 不是 `2D`（前导下划线是枚举命名约定）；写错会导致编译错误
-6. **球坐标的维度**——2D 球坐标实际上是 (r, theta)，但 Entity 内部仍将其视为维度 2。边界会自动处理 phi 方向的周期性
+1. **Forgetting `using namespace ntt`** — ZERO, ONE, SQR, math::cos, etc. are all in the ntt namespace
+2. **Declaring traits for unused dimensions** — causes compilation failures for untested dimensions; only declare dimensions actually supported
+3. **Wrong choice between const and non-const Metadomain** — using const but later needing setFldsBC() causes a compilation failure. Using non-const when const would suffice is harmless (just a slightly looser constraint)
+4. **Missing `template` keyword before `get<type>()`** — because PGen is itself a template class, calling the template method requires writing `params.template get<>()`
+5. **`Dim::_2D` vs `Dim::_3D`** — `_2D` is not `2D` (the leading underscore is the enum naming convention); getting it wrong causes a compile error
+6. **Dimensions in spherical coordinates** — 2D spherical coordinates are actually (r, theta), but Entity internally still treats this as dimension 2. Boundaries automatically handle periodicity in the phi direction

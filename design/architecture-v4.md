@@ -1,75 +1,66 @@
-# Entity Skills 架构 v4：共享控制状态与模型高效入口
+# Entity Skills Architecture v4: Shared Control State and a Model-Efficient Entry Point
 
-日期：2026-07-18
-状态：已实施并通过本地验收
+Date: 2026-07-18
+Status: implemented and locally accepted
 
-验收快照（2026-07-18）：
+Acceptance snapshot (2026-07-18):
 
-| 项目 | 结果 |
+| Item | Result |
 |---|---|
-| 公共状态 | `bh-reconnection` 由公共 project binding 解析到 controller-local Case；查询前后 Case revision 65、sha256、size、mtime 全部不变 |
-| 三端安装 | Codex、Claude Code、Kimi Code 的 12 个 skill 投影均解析到 bundle `sha256:ea3d59bcac8cb9cfcae46e52d2e809d0ac24cd447cb094e27660142330d301b6` |
-| 单写合同 | 并行 writer 被拒绝；显式 handoff 后新 Agent 可继续；lease 过期不阻塞恢复 |
-| 查询效率 | 真实 project inspect 为 1 次工具往返、0 次远端调用、0 次审批、2,281 B 输出，正确性硬门通过 |
-| 回归 | Router/observability 84 项、PGen 3 项、env-build 18 项全部通过；Python 3.6 grammar、JSON、skill quick validation 和 `git diff --check` 通过 |
+| Shared state | `bh-reconnection` resolved via the shared project binding to a controller-local Case; Case revision 65, sha256, size, and mtime were all unchanged before and after the query |
+| Three-client install | All 12 skill projections for Codex, Claude Code, and Kimi Code resolved to bundle `sha256:ea3d59bcac8cb9cfcae46e52d2e809d0ac24cd447cb094e27660142330d301b6` |
+| Single-writer contract | Parallel writers were rejected; after an explicit handoff the new Agent could continue; lease expiry did not block recovery |
+| Query efficiency | A real project inspect took 1 tool round-trip, 0 remote calls, 0 approvals, 2,281 B of output, and passed the correctness hard gate |
+| Regression | All Router/observability (84), PGen (3), and env-build (18) tests passed; Python 3.6 grammar, JSON, skill quick validation, and `git diff --check` passed |
 
-Claude/Kimi 原生 session 已导入共享 trace，用于定位上下文成本；但两者不是同一任务的
-matched-scenario 对照，因此跨 provider token reduction 仍标记为 `not_assessed`。真实 SSH
-build/run/nt2 staging 与 m87 live canary 属于长期 flow 计划的后续门，不作为本轮公共状态
-架构完成度的替代证据，也未在本轮触发远端计算。
+Native Claude/Kimi sessions have been imported into the shared trace for locating context cost; however, the two are not matched-scenario comparisons of the same task, so cross-provider token reduction remains marked `not_assessed`. Real SSH build/run/nt2 staging and the m87 live canary are later gates in the long-term flow plan; they are not substitute evidence for this round's shared-state architecture completeness, and no remote compute was triggered in this round.
 
-## 1. 问题与目标
+## 1. Problem and Goals
 
-近期 `bh-reconnection` 实践暴露出四个相互耦合的问题：
+Recent `bh-reconnection` practice exposed four coupled problems:
 
-1. Codex、Claude Code 和 Kimi Code 各自安装了完整 skill 副本，版本可以漂移；
-2. 项目源码、客户端私有目录、Router Case、远端 `_tools` 和会话日志之间的
-   权威边界不够直观；
-3. Case 虽然共享，但事件和 Action 缺少 Agent/session/bundle provenance；
-4. Agent 直接驾驶 `show -> start-action -> SSH -> finish-action` 原语，简单查询也会
-   触发大量模型轮次和上下文回灌。
+1. Codex, Claude Code, and Kimi Code each installed a full copy of the skills, and versions could drift;
+2. the authority boundaries among project source, client-private directories, Router Cases, remote `_tools`, and session logs were not intuitive enough;
+3. although Cases were shared, events and Actions lacked Agent/session/bundle provenance;
+4. Agents directly drove the `show -> start-action -> SSH -> finish-action` primitives, so even simple queries triggered many model turns and context re-injection.
 
-v4 的目标不是删除 Router 的安全约束，而是把这些约束下沉到确定性程序中：
+The goal of v4 is not to remove the Router's safety constraints, but to push them down into deterministic programs:
 
-- 所有同机 Agent 从一个公共控制区发现和读取项目状态；
-- 控制事实默认保存在 Agent 所在机器，远端不可用时仍可恢复；
-- 远端只拥有执行产物和原始数据，控制端只保存 Locator、身份和最后验证证据；
-- 每次状态写入都可追溯到 Agent run 和 skill bundle；
-- 普通查询只调用一个紧凑只读入口，不创建 Action、不修改 Case；
-- 项目源码、控制状态、执行证据和运行 trace 各有且只有一个权威位置。
+- all Agents on the same machine discover and read project state from one shared control area;
+- control facts live on the Agent's machine by default, so recovery still works when the remote is unavailable;
+- the remote only owns execution artifacts and raw data, while the control side only stores Locators, identities, and last-verification evidence;
+- every state write is traceable to an Agent run and a skill bundle;
+- ordinary queries call a single compact read-only entry point, creating no Action and modifying no Case;
+- project source, control state, execution evidence, and run traces each have exactly one authoritative location.
 
-## 2. 文件存放与唯一权威
+## 2. File Placement and Single Authority
 
-### 2.1 控制机公共区域
+### 2.1 Shared area on the control machine
 
-默认控制根为 `$ENTITY_ROUTER_HOME` 或 `~/.entity-router`。它位于 Agent 所在机器，
-不属于任何客户端：
+The default control root is `$ENTITY_ROUTER_HOME` or `~/.entity-router`. It lives on the Agent's machine and belongs to no client:
 
 ```text
 ~/.entity-router/
-├── registry.json                 # Case UID -> control root，可重建索引
-├── project-bindings.json         # project root -> Case UID，唯一项目绑定事实
-├── sites/<site_id>.json          # site/transport/root 描述
+├── registry.json                 # Case UID -> control root, rebuildable index
+├── project-bindings.json         # project root -> Case UID, the sole project-binding fact
+├── sites/<site_id>.json          # site/transport/root description
 └── cases/<case_uid>-<label>/
-    ├── case.json                 # 当前控制快照
-    ├── events.jsonl              # append-only 状态事件和 actor provenance
+    ├── case.json                 # current control snapshot
+    ├── events.jsonl              # append-only state events and actor provenance
     ├── actions/<action_id>/
-    │   ├── request.json          # 不可变 Action 请求和发起 actor
-    │   └── result.json           # 验证结果和收口 actor
+    │   ├── request.json          # immutable Action request and initiating actor
+    │   └── result.json           # verification result and closing actor
     ├── history/
     └── evidence/
 ```
 
-同一 OS 用户下的 Codex、Claude Code、Kimi Code 和普通 shell 都读取这一位置。
-客户端私有目录不得保存第二套 Case、project binding 或 readiness 状态。
+Codex, Claude Code, Kimi Code, and ordinary shells under the same OS user all read this location. Client-private directories must not hold a second set of Cases, project bindings, or readiness state.
 
-`project-bindings.json` 只保存规范化绝对项目根和 `case_uid`。它不复制 `case.json`，
-解析时始终通过 `registry.json` 找到当前 control root。Agent 从项目任意子目录启动时，
-按最长祖先匹配发现 Case。
+`project-bindings.json` stores only the normalized absolute project root and `case_uid`. It does not copy `case.json`; resolution always goes through `registry.json` to find the current control root. When an Agent starts from any subdirectory of a project, it discovers the Case by longest-ancestor matching.
 
-### 2.2 项目 Git 仓库
+### 2.2 Project Git repository
 
-项目仓库保存可审查、可合并的科学事实：
+The project repository holds reviewable, mergeable scientific facts:
 
 ```text
 <project>/
@@ -79,47 +70,42 @@ v4 的目标不是删除 Router 的安全约束，而是把这些约束下沉到
     └── docs/design.md
 ```
 
-仓库内不保存 mutable Router state、Agent 私有 memory、客户端 skill 副本或 session
-导出。一个 PGen 只有一个 canonical `docs/design.md`；旧方案进入明确的 archive，
-不能与当前设计并列成两个候选权威。
+The repository does not store mutable Router state, Agent-private memory, client skill copies, or session exports. A PGen has exactly one canonical `docs/design.md`; superseded designs go into an explicit archive and must not sit alongside the current design as two candidate authorities.
 
-项目绑定默认也不写入仓库，因为 Case 是控制机本地资源；若未来需要跨控制机迁移，
-应导出经过签名/校验的 handoff manifest，而不是提交 mutable `case.json`。
+Project bindings are also not written into the repository by default, because a Case is a resource local to the control machine; if cross-control-machine migration is ever needed, export a signed/checksummed handoff manifest instead of committing a mutable `case.json`.
 
-### 2.3 远端执行 site
+### 2.3 Remote execution site
 
-远端拥有：
+The remote owns:
 
-- 内容寻址的 source snapshot/materialization；
-- immutable build/run identity；
-- build log、scheduler receipt、raw data 和 analysis artifact；
-- 内容寻址的 runner cache。
+- content-addressed source snapshots/materializations;
+- immutable build/run identity;
+- build logs, scheduler receipts, raw data, and analysis artifacts;
+- a content-addressed runner cache.
 
-远端 Worker 不写控制状态。控制机不可连接远端时：
+Remote Workers do not write control state. When the control machine cannot reach the remote:
 
-- `case.json`、Action request/result 和历史 evidence 仍可读；
-- 旧 evidence 明确标为最后一次 observation，不升级为当前事实；
-- `entityctl inspect` 返回本地控制快照；
-- 只有显式 live probe 才尝试远端连接，失败只影响动态字段。
+- `case.json`, Action request/result, and historical evidence remain readable;
+- old evidence is explicitly labeled as the last observation and is not promoted to current fact;
+- `entityctl inspect` returns the local control snapshot;
+- only an explicit live probe attempts a remote connection, and failure only affects dynamic fields.
 
-### 2.4 Skill 与 trace
+### 2.4 Skills and traces
 
-共享产品目录和运行 trace 使用 `~/.entity-skills`：
+The shared product directory and run traces use `~/.entity-skills`:
 
 ```text
 ~/.entity-skills/
-├── bundles/<bundle-hash>/         # 只读、版本化的完整 skill bundle
-├── current                         # 当前 bundle 选择器
-└── observability/runs/...          # 跨客户端统一 trace
+├── bundles/<bundle-hash>/         # read-only, versioned complete skill bundle
+├── current                         # current bundle selector
+└── observability/runs/...          # unified cross-client trace
 ```
 
-Codex/Claude/Kimi 的 discovery 目录最终只应包含薄 adapter 或指向同一 bundle 的安装
-投影；不得在这些目录直接开发。trace 只引用 Case/Action/evidence，不成为第二套状态。
+The Codex/Claude/Kimi discovery directories should ultimately contain only thin adapters or install projections pointing at the same bundle; development must not happen directly in those directories. Traces only reference Case/Action/evidence and do not become a second set of state.
 
-## 3. 公共运行接口
+## 3. Shared Runtime Interface
 
-`entity_router_state.py`、`entity_router_site.py` 和 flow runner 继续作为内部安全原语。
-普通 Agent 使用 `scripts/entityctl.py`：
+`entity_router_state.py`, `entity_router_site.py`, and the flow runner remain internal safety primitives. Ordinary Agents use `scripts/entityctl.py`:
 
 ```text
 entityctl doctor
@@ -130,17 +116,17 @@ entityctl inspect [--case <uid> | --project-root <path>]
 entityctl run-status [--case <uid> | --project-root <path>] --job-id/--pid ...
 ```
 
-合同：
+Contract:
 
-- `inspect` 只读本地公共状态，`state_mutated=false`，正常输出不超过 4 KiB；
-- `run-status` 从 Case 推导 exact site/run root，再执行最多一次远端调用；
-- 查询不 resume/suspend Case，不创建或完成 Action；
-- 写操作仍由 state tool 单写并受 revision/envelope/identity 约束；
-- 后续 `change/build/run` 高层事务复用 deterministic flow，不向模型暴露长原语链。
+- `inspect` only reads local shared state, `state_mutated=false`, and normal output stays under 4 KiB;
+- `run-status` derives the exact site/run root from the Case, then performs at most one remote call;
+- queries do not resume/suspend the Case and do not create or complete Actions;
+- writes still go through the state tool as single-writer, subject to revision/envelope/identity constraints;
+- later `change/build/run` high-level transactions reuse the deterministic flow and do not expose long primitive chains to the model.
 
-## 4. Actor provenance
+## 4. Actor Provenance
 
-每个 mutation 和 Action 记录：
+Every mutation and Action records:
 
 ```json
 {
@@ -153,7 +139,7 @@ entityctl run-status [--case <uid> | --project-root <path>] --job-id/--pid ...
 }
 ```
 
-字段来自显式 CLI 参数或以下环境变量：
+Fields come from explicit CLI arguments or the following environment variables:
 
 ```text
 ENTITY_AGENT_RUN_ID
@@ -164,106 +150,99 @@ ENTITY_AGENT_MODEL
 ENTITY_SKILLS_BUNDLE_HASH
 ```
 
-旧客户端未提供身份时记录 `run_id=unattributed`，保持兼容但不得伪造归属。后续可用
-`ENTITY_ROUTER_REQUIRE_ACTOR=1` 在正式多 Agent 环境中拒绝无身份 mutation。
+When an older client provides no identity, `run_id=unattributed` is recorded — kept compatible, but attribution must never be forged. Later, `ENTITY_ROUTER_REQUIRE_ACTOR=1` can reject identity-less mutations in production multi-Agent environments.
 
-provenance 是审计信息，不保存隐藏 reasoning，也不改变科学证据等级。
+Provenance is audit information; it stores no hidden reasoning and does not change the grade of scientific evidence.
 
 ### 4.1 Workflow writer lease
 
-受管写事务可在 `control.writer_lease` 持有 60–3600 秒的短期 lease。lease 记录
-`lease_id`、完整 actor、acquired/expires 时间；它与 Case 一起位于控制机公共区。
+A managed write transaction may hold a short-term lease of 60–3600 seconds in `control.writer_lease`. The lease records `lease_id`, the full actor, and acquired/expires times; it lives with the Case in the control machine's shared area.
 
-- `entityctl writer acquire/status/handoff/release` 是公共入口；
-- active lease 存在时，所有 Case mutation 必须同时匹配 actor run ID 和 lease ID；
-- handoff 在同一个 Case lock/revision 下原子更换 holder，并写 append-only event；
-- `entityctl flow execute/watch` 必须持有 lease；inspect/check/status 永不占 lease；
-- 写事务必须先 acquire lease，再基于 acquire 后的新 revision 冻结 flow request；否则
-  lease acquisition 自身产生的 revision 会使旧 request 按预期被并发门拒绝；
-- lease 过期后不继续阻塞恢复，旧记录仍可审计。
+- `entityctl writer acquire/status/handoff/release` is the public entry point;
+- while an active lease exists, every Case mutation must match both the actor run ID and the lease ID;
+- handoff atomically swaps the holder under the same Case lock/revision and writes an append-only event;
+- `entityctl flow execute/watch` must hold a lease; inspect/check/status never take a lease;
+- a write transaction must acquire the lease first, then freeze the flow request against the new revision obtained after acquisition; otherwise the revision produced by lease acquisition itself would cause the old request to be rejected by the concurrency gate, as intended;
+- after a lease expires it does not keep blocking recovery, and old records remain auditable.
 
-## 5. 模型与程序分工
+## 5. Model/Program Division of Labor
 
-### 模型处理
+### Handled by the model
 
-- 把用户目标变成结构化 target 和验收标准；
-- 决定物理参数、计算资源、数据保留和异常处置；
-- 执行确实需要科学判断的 PGen/analysis 工作；
-- 在 `needs_decision`、新 anomaly 和 terminal 时形成报告。
+- turning user goals into structured targets and acceptance criteria;
+- deciding physics parameters, compute resources, data retention, and anomaly handling;
+- performing PGen/analysis work that genuinely requires scientific judgment;
+- producing reports at `needs_decision`, new anomalies, and terminal states.
 
-### 程序处理
+### Handled by the program
 
-- project -> Case 发现、Case compact summary；
-- revision、allowed action、site/path、identity chain 和 bundle 检查；
-- Action start/stage/dispatch/reprobe/finish；
-- scheduler/PID 轮询、重复状态抑制；
-- actor/trace 关联和结果限长。
+- project -> Case discovery and Case compact summaries;
+- revision, allowed action, site/path, identity chain, and bundle checks;
+- Action start/stage/dispatch/reprobe/finish;
+- scheduler/PID polling and duplicate-state suppression;
+- actor/trace correlation and result truncation.
 
-`Case -> Workflow -> Action -> Worker` 是内部状态模型，不再要求每个 Agent 在上下文中
-逐步复述和手工驾驶。
+`Case -> Workflow -> Action -> Worker` is an internal state model; every Agent is no longer required to restate it step by step and drive it manually in context.
 
-## 6. 本轮优化计划与完成门
+## 6. Optimization Plan and Completion Gates for This Round
 
-### WP1：公共状态和项目发现
+### WP1: Shared state and project discovery
 
-实现 `entity_router_project.py`：
+Implement `entity_router_project.py`:
 
-- 默认写 `~/.entity-router/project-bindings.json`；
-- 支持 bind/resolve/list/unbind；
-- bind 时验证 Case UID 和项目目录；
-- resolve 支持项目子目录的最长祖先匹配；
-- 使用文件锁和原子写，客户端并发不损坏注册表。
+- write `~/.entity-router/project-bindings.json` by default;
+- support bind/resolve/list/unbind;
+- validate the Case UID and project directory on bind;
+- resolve with longest-ancestor matching from project subdirectories;
+- use file locks and atomic writes so concurrent clients cannot corrupt the registry.
 
-完成门：两个不同进程可通过同一 project root 得到同一 Case UID；项目仓库无状态写入。
+Completion gate: two different processes get the same Case UID from the same project root; no state is written into the project repository.
 
-### WP2：Actor provenance
+### WP2: Actor provenance
 
-- state CLI 增加全局 actor 参数和环境变量解析；
-- 所有新事件保存 actor；
-- Action request 保存发起 actor，result 保存收口 actor；
-- 模板和合同测试同步。
+- add global actor arguments and environment-variable parsing to the state CLI;
+- store the actor on all new events;
+- Action requests store the initiating actor, results store the closing actor;
+- sync templates and contract tests.
 
-完成门：测试能从 `events.jsonl` 和 request/result 精确恢复两个不同 Agent run 的归属。
+Completion gate: tests can precisely recover the attribution of two different Agent runs from `events.jsonl` and request/result.
 
-### WP3：高层只读入口
+### WP3: High-level read-only entry points
 
-- `entityctl doctor` 输出公共路径、bundle identity 和 provenance 配置健康度；
-- `entityctl inspect` 输出紧凑 Case summary；
-- `entityctl run-status` 从 Case 推导 run site/root，并复用一次性 status probe；
-- 所有只读命令显式返回 `state_mutated=false`。
+- `entityctl doctor` reports shared paths, bundle identity, and provenance configuration health;
+- `entityctl inspect` outputs a compact Case summary;
+- `entityctl run-status` derives the run site/root from the Case and reuses a one-shot status probe;
+- all read-only commands explicitly return `state_mutated=false`.
 
-完成门：inspect 不写任何文件；run-status 最多一次远端调用；正常摘要小于 4 KiB。
+Completion gate: inspect writes no files; run-status makes at most one remote call; normal summaries stay under 4 KiB.
 
-### WP4：内容寻址发布、文档、合同与验证
+### WP4: Content-addressed publishing, docs, contracts, and validation
 
-- `entityctl bundle install` 从唯一源码发布内容寻址 bundle；
-- `~/.entity-skills/current` 原子选择当前 bundle，三端 skill 目录只保存符号链接投影；
-- 被替换的三端目录进入带时间戳的本机 backup，不静默删除；
-- 更新 SKILL、workspace/runtime reference、README 和 runtime file contract；
-- 新增 project/entityctl/provenance 测试；
-- 运行 Router、PGen、env-build、observability、Python compile 和 quick validation；
-- 验证后同步 Codex、Claude Code、Kimi Code，并核对源码/安装 hash。
+- `entityctl bundle install` publishes a content-addressed bundle from the single source;
+- `~/.entity-skills/current` atomically selects the current bundle, and the three-client skill directories only hold symlink projections;
+- replaced three-client directories go into a timestamped local backup, never silently deleted;
+- update SKILL, workspace/runtime references, README, and the runtime file contract;
+- add project/entityctl/provenance tests;
+- run Router, PGen, env-build, observability, Python compile, and quick validation;
+- after validation, sync Codex, Claude Code, and Kimi Code, and check source/install hashes.
 
-完成门：三端 discovery 解析到同一物理 bundle；现有 v3 Case 仍可 show/verify，旧 Action
-仍可读取，新增字段向后兼容。
+Completion gate: all three clients' discovery resolves to the same physical bundle; existing v3 Cases can still be shown/verified, old Actions remain readable, and new fields are backward compatible.
 
-### WP5：多 Agent 归属、单写协调与效率硬门
+### WP5: Multi-Agent attribution, single-writer coordination, and efficiency hard gates
 
-- 增加 Claude transcript 与 Kimi multi-agent wire adapter；
-- 统一事件保存 `agent_run_id/native_session_id/native_agent_id`，与 Action actor 对齐；
-- deterministic flow 成为 `entityctl flow` 默认事务入口；
-- 增加 60–3600 秒 writer lease、显式 handoff 和公共 CLI；
-- efficiency collector 同时检查正确性 invariant、绝对门、相对 reduction 和原生 token；
-- 增加真实 controller-local query canary 和 provider session baseline。
+- add Claude transcript and Kimi multi-agent wire adapters;
+- store `agent_run_id/native_session_id/native_agent_id` uniformly on events, aligned with Action actors;
+- make the deterministic flow the default transaction entry of `entityctl flow`;
+- add the 60–3600 second writer lease, explicit handoff, and public CLI;
+- make the efficiency collector check correctness invariants, absolute gates, relative reduction, and native tokens together;
+- add a real controller-local query canary and provider session baselines.
 
-完成门：并行 writer 被拒绝、handoff 后新 writer 可继续；简单状态查询一轮完成、无远端
-调用、不改 Case、输出小于 4 KiB；没有平台原始 usage 时 token 保持 `not_assessed`。
+Completion gate: parallel writers are rejected, and a new writer can continue after handoff; a simple state query completes in one turn, with no remote call, no Case change, and output under 4 KiB; tokens stay `not_assessed` when no platform-native usage data exists.
 
-## 7. 后续迁移计划
+## 7. Follow-up Migration Plan
 
-本轮之后按以下顺序继续，不在本轮偷偷扩张状态模型：
+After this round, continue in the following order, without quietly expanding the state model in this round:
 
-1. 用真实任务持续校准效率门：status 1 次工具/1 次远端调用，普通参数查询 1 次工具，
-   完整 build/run 默认不超过 4 次模型唤醒。
+1. Continuously calibrate the efficiency gates with real tasks: 1 tool call / 1 remote call for status, 1 tool call for ordinary parameter queries, and no more than 4 model wake-ups for a full build/run by default.
 
-这些后续能力只能引用本轮确定的公共状态与 provenance，不得再创建新的项目状态文件。
+These follow-up capabilities may only reference the shared state and provenance established in this round; they must not create new project state files.

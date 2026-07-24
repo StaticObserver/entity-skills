@@ -1,18 +1,20 @@
 ---
 name: entity-env-build
-description: 在一个明确的执行站点配置、验证并执行 Entity 依赖与源码构建。适用于 requirements.json、entity-deps.local.json、兼容性检查、env.sh、entity-build.sh、依赖修复与可验证的编译。输入使用相互独立的 site_id、source_checkout、build_root、deps_root 与 artifacts_root 路径；不要假设存在共享的 ENTITY_WORKDIR。
+description: Configure, verify, and execute Entity dependency and source builds at one explicit execution site. Applies to requirements.json, entity-deps.local.json, compatibility checks, env.sh, entity-build.sh, dependency remediation, and verifiable compilation. Inputs use mutually independent site_id, source_checkout, build_root, deps_root, and artifacts_root paths; do not assume a shared ENTITY_WORKDIR exists.
 ---
 
-# Entity 环境构建
+# Entity Environment Build
 
-负责构建站点的环境与 Entity 编译。本技能可以携带精确路径独立运行，也可以
-配合 Ledger 使用：构建验证通过后由 `entityctl record build` 把 checkpoint
-登记进 Case 台账。它不选择 PGen 物理内容、不启动模拟、
-不分析输出，也不修改 Entity 核心代码。
+Responsible for the build site environment and Entity compilation. This skill
+can run standalone with exact paths, or work together with the Ledger: once
+build verification passes, `entityctl record build` registers the checkpoint
+into the Case ledger. It does not choose PGen physics content, does not start
+simulations, does not analyze output, and does not modify Entity core code.
 
-## 必需的构建站点契约
+## Required build site contract
 
-在写入或执行任何内容之前，先为同一个逻辑站点获取以下明确的值：
+Before writing or executing anything, obtain the following explicit values for
+the same logical site:
 
 ```json
 {
@@ -29,67 +31,74 @@ description: 在一个明确的执行站点配置、验证并执行 Entity 依�
 }
 ```
 
-- `source_checkout` 是本构建使用的、经过验证的物化源码版本。
-- `build_root` 是一个不可变构建身份的 CMake 树。
-- `deps_root` 存放可复用的依赖前缀、源码以及生成的依赖脚本。
-- `artifacts_root` 存放 requirements/checkpoint/env/构建脚本/日志。
-- 这些路径不需要共享父目录，也不需要靠近 Ledger 控制路径、源码权威
-  路径、运行路径或数据路径。
-- `site_id` 在路径变化时保持稳定，并为可复用的机器笔记提供键。
+- `source_checkout` is the verified, materialized source revision used by this
+  build.
+- `build_root` is the CMake tree for one immutable build identity.
+- `deps_root` holds reusable dependency prefixes, sources, and generated
+  dependency scripts.
+- `artifacts_root` holds requirements/checkpoint/env/build scripts/logs.
+- These paths do not need to share a parent directory, nor be near the Ledger
+  control paths, source authority paths, run paths, or data paths.
+- `site_id` stays stable across path changes and provides the key for reusable
+  machine notes.
 
-Schema v1 的 `checkout_root/workdir` 仅在明确的旧版迁移时被接受。绝不从
-旧的单体式约定生成新状态。
+Schema v1 `checkout_root/workdir` is accepted only for explicit legacy
+migration. Never generate new state from the old monolithic conventions.
 
-仅在调用方提供的执行 Site 与 Locator 授权路径上执行，绝不写入 Ledger
-控制状态。远程 Worker 返回证据；由控制器提交状态。
+Execute only on the execution site provided by the caller and on
+Locator-authorized paths; never write Ledger control state. Remote workers
+return evidence; the controller commits state.
 
-## 硬性门槛
+## Hard gates
 
-- 确认精确的源码版本/快照与构建 ID。当需要物化版本时，不要从可变的
-  源码权威路径构建。
-- 在环境探测之前，把所有用户构建选择记录到 `requirements.json` 中。
-  不要从已安装的软件推断用户意图。
-- 询问/确认：PGen、后端（`cpu/cuda/hip`）、MPI、GPU-aware MPI、输出、
-  构建意图/优化、精度、deposit、shape order、debug、tests、依赖策略
-  以及 jobs。对于 GPU 构建还要确认架构；对于 HIP 确认 ROCm/DTK 偏好
-  与优化。用 `entity_checkpoint.py confirm <requirements.json>
-  --checkpoint <entity-deps.local.json> --by <actor>` 记录确认；在
-  确认摘要与当前 requirements 匹配之前，兼容性检查会使
-  `parameters.confirmation` 失败，并且该失败时不得继续生成
-  `env.sh` 或编译。
-- 在 `requirements.json` 校验通过、兼容性为 `pass`、且 `env.sh` 是从
-  当前 checkpoint 生成之前，不要编译。
-- 依赖源码构建需要经过审查的计划与明确的许可。
-- 不要静默弱化版本、编译器、CUDA/ROCm、MPI、HDF5、ADIOS2 或 Kokkos
-  兼容性失败。
-- 保留构建日志与结果证据。没有预期的可执行文件/日志证据的 shell
-  退出声明不算成功。
+- Confirm the exact source revision/snapshot and build ID. When a materialized
+  revision is required, do not build from a mutable source authority path.
+- Record all user build choices in `requirements.json` before probing the
+  environment. Do not infer user intent from installed software.
+- Ask/confirm: PGen, backend (`cpu/cuda/hip`), MPI, GPU-aware MPI, output,
+  build intent/optimization, precision, deposit, shape order, debug, tests,
+  dependency policy, and jobs. For GPU builds also confirm the architecture;
+  for HIP confirm ROCm/DTK preference and optimization. Record the
+  confirmation with `entity_checkpoint.py confirm <requirements.json>
+  --checkpoint <entity-deps.local.json> --by <actor>`; until the confirmation
+  digest matches the current requirements, the compatibility check fails
+  `parameters.confirmation`, and on that failure you must not proceed to
+  generate `env.sh` or compile.
+- Do not compile until `requirements.json` validates, compatibility is
+  `pass`, and `env.sh` is generated from the current checkpoint.
+- Dependency source builds require a reviewed plan and explicit permission.
+- Do not silently downgrade version, compiler, CUDA/ROCm, MPI, HDF5, ADIOS2,
+  or Kokkos compatibility failures.
+- Keep build logs and result evidence. A shell exit claim without the expected
+  executable/log evidence does not count as success.
 
-字段细节见 `references/json-contracts.md`；选择依赖前阅读
-`references/dependency-policy.md`；override 前阅读
-`references/compatibility-check.md`；生成 Entity 构建前阅读
-`references/entity-compile-options.md`。
+See `references/json-contracts.md` for field details; read
+`references/dependency-policy.md` before choosing dependencies; read
+`references/compatibility-check.md` before overriding; read
+`references/entity-compile-options.md` before generating an Entity build.
 
-## 工作流程
+## Workflow
 
 ### 1. Requirements
 
-在 `artifacts_root` 下编写 schema-v2 的 `requirements.json`。包含上述
-五个站点/路径字段、由 Ledger 提供的源码版本身份、Entity 版本配置、
-环境选择、编译选择以及期望的产物路径。校验：
+Write a schema-v2 `requirements.json` under `artifacts_root`. Include the five
+site/path fields above, the source revision identity provided by the Ledger,
+the Entity version profile, environment choices, compile choices, and the
+expected artifact paths. Validate:
 
 ```bash
 python3 scripts/entity_checkpoint.py validate /artifacts/requirements.json
 ```
 
-如果结果是 `partial`，解决选择冲突；生产构建不要传
-`--allow-partial`。
+If the result is `partial`, resolve the choice conflicts; do not pass
+`--allow-partial` for production builds.
 
-### 2. 复用或构建依赖 checkpoint
+### 2. Reuse or build the dependency checkpoint
 
-先读取 `~/.entity-env-build/site-notes/<site_id>.md` 下的站点笔记，然后
-检查确切的 `artifacts_root/entity-deps.local.json`（如果存在）。只有当
-其内嵌的 requirements 与所有解析后的站点路径都匹配时才复用它。
+First read the site notes under `~/.entity-env-build/site-notes/<site_id>.md`,
+then check the exact `artifacts_root/entity-deps.local.json` (if it exists).
+Reuse it only when its embedded requirements and all resolved site paths
+match.
 
 ```bash
 python3 scripts/entity_checkpoint.py create /artifacts/requirements.json \
@@ -97,12 +106,13 @@ python3 scripts/entity_checkpoint.py create /artifacts/requirements.json \
   --output /artifacts/entity-deps.local.json
 ```
 
-在提议源码构建之前，先搜索 modules、系统软件包、已有前缀以及用户管理
-的安装。记录选定的编译器/依赖路径、版本、提供方、签名、验证结果以及
-必要的站点前置命令。机器特有的修复属于站点笔记/checkpoint 数据，不
-属于本技能。
+Before proposing a source build, search modules, system packages, existing
+prefixes, and user-managed installs. Record the selected compiler/dependency
+paths, versions, providers, signatures, verification results, and any required
+site preamble commands. Machine-specific fixes belong in the site
+notes/checkpoint data, not in this skill.
 
-如果源码构建已获批准：
+If a source build is approved:
 
 ```bash
 python3 scripts/entity_generate.py deps /artifacts/requirements.json \
@@ -110,11 +120,12 @@ python3 scripts/entity_generate.py deps /artifacts/requirements.json \
 bash /deps/scripts/build-<dependency>.sh
 ```
 
-前缀与源码下载保留在 `deps_root` 下；临时依赖构建与日志保留在
-`artifacts_root` 下。按选定的依赖图确定构建顺序；ADIOS2 等待它所消费
-的 Kokkos/HDF5 前缀。
+Prefixes and source downloads stay under `deps_root`; temporary dependency
+builds and logs stay under `artifacts_root`. Determine build order from the
+selected dependency graph; ADIOS2 waits for the Kokkos/HDF5 prefixes it
+consumes.
 
-### 3. 兼容性与环境
+### 3. Compatibility and environment
 
 ```bash
 python3 scripts/entity_compat.py /artifacts/requirements.json \
@@ -124,11 +135,12 @@ python3 scripts/entity_generate.py env /artifacts/entity-deps.local.json \
   --output /artifacts/env.sh
 ```
 
-兼容性必须是 `pass`。有文档记录且经用户接受的警告可以使用现有的
-override 机制，但 override 不能掩盖缺失的二进制文件、错误的源码版本、
-错误的执行站点路径或 ABI/工具链不匹配。
+Compatibility must be `pass`. Documented, user-accepted warnings may use the
+existing override mechanism, but an override cannot mask missing binaries,
+the wrong source revision, wrong execution site paths, or ABI/toolchain
+mismatches.
 
-### 4. 生成并执行构建
+### 4. Generate and execute the build
 
 ```bash
 python3 scripts/entity_generate.py build /artifacts/requirements.json \
@@ -140,28 +152,32 @@ python3 scripts/entity_run.py build /artifacts/requirements.json \
   --script /artifacts/entity-build.sh
 ```
 
-生成的脚本在使用 `entity.source_checkout` 的同时配置并构建
-`entity.build_root`。它将日志写入 `artifacts_root/build-logs` 下。绝不
-为另一个源码版本或实质不同的编译契约复用同一个 build root；分配新的
-构建 ID。
+The generated script configures and builds `entity.build_root` while using
+`entity.source_checkout`. It writes logs under `artifacts_root/build-logs`.
+Never reuse the same build root for another source revision or a materially
+different compile contract; allocate a new build ID.
 
-在集群上，按站点策略要求的上下文运行 configure/build。通用技能记录
-scheduler 类型，但不编码分区、账户、module 栈或 SSH 凭据。
+On clusters, run configure/build in the context required by site policy. The
+general skill records the scheduler type but does not encode partitions,
+accounts, module stacks, or SSH credentials.
 
-## 失败与交接
+## Failure and handoff
 
-从第一个因果性错误和当前的 JSON/日志证据开始诊断。只修复构建方拥有
-的状态。PGen/TOML 错误交回 `entity-pgen`；源码分歧或物化错误交回
-`entity-ledger`；scheduler/运行错误交回 `entity-ledger`；未知的跨层
-原因作为 `failure.triage` 证据返回。
+Diagnose from the first causal error and the current JSON/log evidence. Fix
+only state owned by the build side. Hand PGen/TOML errors back to
+`entity-pgen`; hand source divergence or materialization errors back to
+`entity-ledger`; hand scheduler/run errors back to `entity-ledger`; return
+unknown cross-layer causes as `failure.triage` evidence.
 
-成功需要：
+Success requires:
 
-- 当前 requirements 与站点路径的兼容性为 `pass`；
-- 生成的 `env.sh` 与 `entity-build.sh` 绑定到当前 checkpoint；
-- 构建命令退出码为零；
-- 预期的可执行文件存在于不可变的 build root 内；
-- 日志与构建结果标明 `site_id`、源码版本、构建 ID 以及相关的
-  哈希/路径。
+- compatibility `pass` for the current requirements and site paths;
+- the generated `env.sh` and `entity-build.sh` bound to the current
+  checkpoint;
+- a zero exit code from the build command;
+- the expected executables present inside the immutable build root;
+- logs and build results identifying the `site_id`, source revision, build
+  ID, and relevant hashes/paths.
 
-返回精确的产物 Locator 与验证信息，而不是复制的原始运行/数据状态。
+Return exact artifact Locators and verification information, not copied raw
+run/data state.

@@ -1,34 +1,33 @@
-# Docs Skill 规范
+# Docs Skill Spec
 
-## 使命
+## Mission
 
-为 Entity 模拟和开发工作创建可长期复用的文档。
+Create long-term reusable documentation for Entity simulation and development work.
 
-这个 skill 让工作可以跨 session、跨 agent 延续。
+This skill lets work continue across sessions and across agents.
 
-## Artifact 类型
+## Artifact Types
 
-- simulation plan；
-- run manifest；
-- analysis report；
-- development design note；
-- PR summary；
-- validation report；
-- troubleshooting note。
+- simulation plan;
+- run manifest;
+- analysis report;
+- development design note;
+- PR summary;
+- validation report;
+- troubleshooting note.
 
-## 规则
+## Rules
 
-- 必要时使用绝对路径记录本地 artifact。
-- 记录 Entity checkout commit。
-- 记录实际运行过的命令。
-- 分离已验证事实和假设。
-- 分离官方上游行为和 local overlay。
-- 保留未解决问题。
+- Record local artifacts with absolute paths when necessary.
+- Record the Entity checkout commit.
+- Record the commands actually run.
+- Separate verified facts from assumptions.
+- Separate official upstream behavior from local overlays.
+- Preserve unresolved questions.
 
-## 模板
+## Templates
 
-- [[90-Templates/Run Manifest Template|Run Manifest 模板]]
-- [[90-Templates/Simulation Plan Template|Simulation Plan 模板]]
-- [[90-Templates/Analysis Report Template|Analysis Report 模板]]
-- [[90-Templates/Development Design Note Template|Development Design Note 模板]]
-
+- [[90-Templates/Run Manifest Template|Run Manifest template]]
+- [[90-Templates/Simulation Plan Template|Simulation Plan template]]
+- [[90-Templates/Analysis Report Template|Analysis Report template]]
+- [[90-Templates/Development Design Note Template|Development Design Note template]]

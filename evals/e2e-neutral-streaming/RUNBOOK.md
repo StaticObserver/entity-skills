@@ -1,75 +1,85 @@
-# E2E 对照测试 Runbook（轻量 A/B）
+# E2E A/B Test Runbook (lightweight A/B)
 
-一个任务、两种条件、每轮三条命令。本文件是唯一设置文档。
+One task, two conditions, three commands per round. This file is the only setup document.
 
-## 任务规定（随任务文本发给被测 agent）
+## Task specification (sent to the agent under test together with the task text)
 
-按 `task.md` 和 `physics-spec.json`（本目录）完成 Entity 模拟全流程：
+Follow `task.md` and `physics-spec.json` (this directory) through the full Entity
+simulation workflow:
 
-1. 确认评测站点环境，生成编译环境脚本；
-2. 产出一致的 `docs/design.md` + `pgen.hpp` + 输入 TOML；
-3. clean build 出 `entity.xc`；
-4. 提交**恰好一个** Slurm 作业并等到终止；
-5. 用 nt2py 读取输出，做场/粒子分析，出图和简短结论。
+1. Confirm the evaluation site environment and produce a build environment script;
+2. Produce a consistent `docs/design.md` + `pgen.hpp` + input TOML;
+3. Clean-build `entity.xc`;
+4. Submit **exactly one** Slurm job and wait for it to terminate;
+5. Read the output with nt2py, do field/particle analysis, and produce figures plus a
+   short conclusion.
 
-站点与约束：
+Site and constraints:
 
-- 服务器：`ssh m87`（个人主机，单 GPU，**无 Slurm、无 MPI**，环境由 agent 自行探索）；
-- 资源上限：1 GPU / walltime ≤ 10 分钟；
-- 数据分析只用 CPU 资源，不占用 GPU；
-- 源码与依赖：agent 自行发现（source-cache 已预置在可发现位置，路径不进任务文本）；
-- 不使用公网；不修改只读依赖和冻结源码；analysis 不写入 raw-data root；
-- 凭据不进入任何源码、脚本、日志或结果文件；
-- 完成标准：作业正常终止、≥2 个时刻的 fields/particles 可读、分析结论与
-  "中性双流近似平稳"的物理预期一致。
+- Server: `ssh m87` (personal workstation, single GPU, **no Slurm, no MPI**, environment
+  explored by the agent itself);
+- Resource ceiling: 1 GPU / walltime ≤ 10 minutes;
+- Data analysis uses CPU resources only, no GPU;
+- Source code and dependencies: discovered by the agent itself (the source-cache is
+  pre-staged at a discoverable location; its path is not in the task text);
+- No public internet; do not modify read-only dependencies or the frozen source;
+  analysis must not write into the raw-data root;
+- Credentials must not enter any source code, script, log, or result file;
+- Completion criteria: the job terminates normally, fields/particles at ≥2 time steps
+  are readable, and the analysis conclusion is consistent with the "neutral two-stream
+  remains approximately steady" physics expectation.
 
-## 两个变体
+## The two variants
 
-| | S：`skills-v5`（完整 bundle） | N：`skills-no-router`（仅无 entity-ledger） |
+| | S: `skills-v5` (full bundle) | N: `skills-no-router` (only entity-ledger removed) |
 |---|---|---|
-| Entity skills | `entityctl install` 发布当前 bundle（commit `6c6e205`） | `~/.claude/skills/` 下 entity-* 投影临时移走 |
-| 模型 / 任务文本 / shell·ssh 工具 | 相同 | 相同 |
-| 会话 | 新会话、空历史 | 新会话、空历史 |
-| 工作区 | 独立项目目录 + 独立 Router home | 独立项目目录（不用 Router） |
+| Entity skills | `entityctl install` publishes the current bundle (commit `6c6e205`) | entity-* projections under `~/.claude/skills/` temporarily moved away |
+| model / task text / shell·ssh tools | identical | identical |
+| session | fresh session, empty history | fresh session, empty history |
+| workspace | separate project directory + separate Router home | separate project directory (no Router) |
 
-## 每轮命令
+## Per-round commands
 
-推荐直接用封装脚本（内部等价于下面的手动步骤）：
+Recommended: use the wrapper scripts directly (internally equivalent to the manual steps
+below):
 
 ```bash
-# 开跑（建目录、注册 trace、启动 agent；启动前校验技能投影状态：
-# S 组要求 entity-ledger 在场，N 组要求仅 entity-ledger 已移走、
-# env-build/pgen/nt2py 三者保留——不满足则拒绝启动）
+# Launch (create directories, register the trace, start the agent; before launch,
+# verify the skill projection state: group S requires entity-ledger present, group N
+# requires that only entity-ledger has been moved away while env-build/pgen/nt2py
+# remain — launch is refused if these are not satisfied)
 evals/e2e-neutral-streaming/run_round.sh skills-v5 2026-07-21-S1 [model]
 evals/e2e-neutral-streaming/run_round.sh skills-no-router 2026-07-22-Snr1 [model]
 
-# 收尾（先快照 project 产物到 traces/<run>/project-snapshot/，再导入
-# transcript、阶段切分、关闭 trace；finish 必须是最后一步；重复执行会
-# 检测到 terminal event 并直接跳过）
+# Wrap-up (first snapshot the project artifacts into traces/<run>/project-snapshot/,
+# then import the transcript, segment phases, close the trace; finish must be the last
+# step; re-running it detects the terminal event and skips directly)
 evals/e2e-neutral-streaming/finish_round.sh 2026-07-21-S1 completed
 
-# 远端清理（先拉 slurm 脚本/日志到 traces/<run>/remote-logs/，默认 dry-run，
-# -f 才真正删除远端 data_root 及其 run 目录，最后 squeue 确认无残留作业）
+# Remote cleanup (first pull slurm scripts/logs into traces/<run>/remote-logs/;
+# dry-run by default, -f actually deletes the remote data_root and its run directories;
+# finally confirm via squeue that no jobs remain)
 evals/e2e-neutral-streaming/clean_remote.sh 2026-07-21-S1 -f
 ```
 
-`run_round.sh` 会一并把 `fixtures/submission.schema.json` 拷进 project
-（submission.json 必须符合它，schema 符合度对所有组公平），开跑前自检
-`~/entity-eval-runs/` 必须为空（非空直接退出），并对 `~/.claude/projects/`
-下早于今天的 entity-eval-runs session 目录打印残留警告。S 组开跑前还会把
-`entityctl doctor` 的 bundle_version/bundle_hash 写入
-`~/entity-eval-traces/<run>/bundle.json`（只读取版本事实，不安装）。
+`run_round.sh` also copies `fixtures/submission.schema.json` into the project
+(submission.json must conform to it, so schema conformance is fair across all groups),
+self-checks before launch that `~/entity-eval-runs/` must be empty (exits immediately if
+non-empty), and prints a residue warning for entity-eval-runs session directories under
+`~/.claude/projects/` older than today. Before an S-group launch it also writes
+`entityctl doctor`'s bundle_version/bundle_hash into
+`~/entity-eval-traces/<run>/bundle.json` (reads version facts only; does not install).
 
-每轮结束后：清理 `~/.claude/projects/` 下本轮 session 目录（slug 形如
-`-Users-…-entity-eval-runs-<run>-project`），再按上面 `clean_remote.sh`
-清理远端。
+After each round: clean this round's session directory under `~/.claude/projects/`
+(slug looks like `-Users-…-entity-eval-runs-<run>-project`), then clean the remote side
+with `clean_remote.sh` as above.
 
-手动步骤：
+Manual steps:
 
 ```bash
 OBS=tools/skill_observability/skill_observer.py
 
-# 1. 开跑前：建 trace（记下此时刻为开始时间）
+# 1. Before launch: create the trace (record this moment as the start time)
 python3 $OBS start \
   --task-id e2e-neutral-streaming-v1 \
   --input-ref evals/e2e-neutral-streaming/task.md \
@@ -81,68 +91,76 @@ python3 $OBS start \
   --skill skills/entity-ledger --skill skills/entity-pgen \
   --skill skills/entity-env-build --skill skills/entity-nt2py \
   --trace-home ~/entity-eval-runs/<run>/traces
-# → 输出 <run-dir>（N 组去掉 --skill 行，--variant skills-no-router）
-# 注：--agent-configuration / --tool-configuration 要求小写 SHA-256 hex，
-#     例如 shasum -a 256 <claude-settings.json> | cut -d' ' -f1
+# → outputs <run-dir> (group N drops the --skill lines, --variant skills-no-router)
+# Note: --agent-configuration / --tool-configuration require lowercase SHA-256 hex,
+#     e.g. shasum -a 256 <claude-settings.json> | cut -d' ' -f1
 
-# 2. 用 Claude Code 新会话发出任务文本（含上面"任务规定"全文）。
-#    监控开关：OBSERVE=off 时直接用普通命令跑，不重定向输出、不注入任何
-#    hook/settings——与裸跑完全一致。OBSERVE=on（默认）时用 headless
-#    stream-json 跑，输出落到本轮目录：
+# 2. Send the task text in a fresh Claude Code session (including the full "Task
+#    specification" above).
+#    Monitoring switch: with OBSERVE=off, just run with plain commands — no output
+#    redirection, no hook/settings injection — exactly like a bare run. With
+#    OBSERVE=on (default), run headless stream-json, output landing in this round's
+#    directory:
 OBSERVE=on claude -p "$(cat evals/e2e-neutral-streaming/task.md)" \
   --output-format stream-json --verbose \
   > ~/entity-eval-runs/<run>/transcript.jsonl
 
-# 3. 结束后（仅 OBSERVE=on）：导入 transcript 拿 token 总量，做阶段切分，收尾
+# 3. After it ends (OBSERVE=on only): import the transcript for token totals, segment
+#    phases, wrap up
 python3 $OBS import-claude --run-dir <run-dir> --transcript <transcript.jsonl>
 python3 $OBS phases --run-dir <run-dir> --transcript <transcript.jsonl>
-# → 写 <run-dir>/phases.json：每阶段 wall time、四类 token（cache 分列）、
-#   工具调用/失败/SSH 数；unclassified token 占比 >10% 时 comparable=false
+# → writes <run-dir>/phases.json: per-phase wall time, four token classes (cache listed
+#   separately), tool call/failure/SSH counts; comparable=false when unclassified
+#   tokens exceed 10%
 python3 $OBS finish --run-dir <run-dir> --status completed \
   --input-tokens <n> --output-tokens <n> --wall-time-ms <ms>
 ```
 
-监控是带外的：切分与统计全部在运行结束后离线进行，agent 的工具调用路径上
-没有任何探针，skills 不知道监控存在。`OBSERVE=off` 时第 3 步整段跳过，
-agent 的运行命令、settings、环境与裸跑逐字节一致。
+Monitoring is out-of-band: segmentation and statistics all happen offline after the run
+ends; there is no probe anywhere in the agent's tool-call path, and the skills do not
+know monitoring exists. With `OBSERVE=off`, step 3 is skipped entirely and the agent's
+run command, settings, and environment are byte-for-byte identical to a bare run.
 
-## 每轮目录约定（仓库外）
+## Per-round directory convention (outside the repo)
 
-每轮一个独立目录，例如 `~/entity-eval-runs/2026-07-22-S1/`：
+One separate directory per round, e.g. `~/entity-eval-runs/2026-07-22-S1/`:
 
 ```text
-├── project/       # Agent 工作区（PGen、TOML、docs、分析脚本）
-└── controller/    # S 组 Router home（export ENTITY_LEDGER_HOME 指到这里；N 组不创建）
+├── project/       # Agent workspace (PGen, TOML, docs, analysis scripts)
+└── controller/    # Group S Router home (point export ENTITY_LEDGER_HOME here; group N does not create it)
 ```
 
-Harness 状态在 agent 不可及的 `~/entity-eval-traces/<run>/`（trace home、
-transcript、`project-snapshot/`、`remote-logs/`、`bundle.json`）。
+Harness state lives in the agent-unreachable `~/entity-eval-traces/<run>/` (trace home,
+transcript, `project-snapshot/`, `remote-logs/`, `bundle.json`).
 
-远端 `m87` 上的 source/build/run/analysis 根由 site profile 的 `roots`
-决定（S 组用 `entityctl site add` 注册时指定，建议每轮换路径，如
-`~/entity-eval/<run-name>/`）；m87 无 Slurm，run 日志由 agent 自行落盘。
+The source/build/run/analysis roots on remote `m87` are determined by the site profile's
+`roots` (specified when group S registers via `entityctl site add`; rotating the path
+per round is recommended, e.g. `~/entity-eval/<run-name>/`); m87 has no Slurm, so run
+logs are written to disk by the agent itself.
 
-## Oracle 独立复核
+## Oracle independent review
 
-`finish_round.sh` 之后运行（不信任 agent 自报，从外部事实重验）：
+Run after `finish_round.sh` (does not trust the agent's self-report; re-verifies from
+external facts):
 
 ```bash
-# 拉取 raw data 并跑全部五道门（A 安全 / B PGen / C 作业数据 / D 物理 / E 分析）
+# Pull the raw data and run all five gates (A safety / B PGen / C job data / D physics / E analysis)
 python3 evals/e2e-neutral-streaming/oracle/oracle.py \
   --project ~/entity-eval-runs/<run>/project \
   --transcript ~/.claude/projects/<project-slug>/<session>.jsonl \
   --fetch ~/entity-eval-traces/<run>/oracle-data
 ```
 
-产出 `<project>/oracle-report.json`，总体 fail > unknown > pass。物理阈值冻结在
-`oracle/thresholds.json`（每条含物理定义、公式和 gold run 观测值），不得根据
-S/N 结果回调。
+Produces `<project>/oracle-report.json`; overall fail > unknown > pass. Physics
+thresholds are frozen in `oracle/thresholds.json` (each entry includes the physics
+definition, formula, and gold run observation) and must not be retroactively adjusted
+based on S/N results.
 
-## 每轮归档
+## Per-round archiving
 
-轮次结束后把 `summary.json` 放进该轮目录：
-- `summary.json`：变体、模型、开始/结束时间、wall-clock、input/output token、
-  Slurm job ID、完成与否、一句话结果；
-- agent 最终自报摘要（原文，可放 `agent-summary.md`）。
+After the round ends, put `summary.json` into that round's directory:
+- `summary.json`: variant, model, start/end time, wall-clock, input/output tokens,
+  Slurm job ID, completed or not, one-sentence result;
+- the agent's final self-reported summary (verbatim, may go into `agent-summary.md`).
 
-Slurm 排队时间单独注明，不计入 agent 执行时间。
+Note Slurm queueing time separately; it does not count toward agent execution time.

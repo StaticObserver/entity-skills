@@ -1,29 +1,31 @@
-# Entity Router v3 控制协议
+# Entity Router v3 Control Protocol
 
-日期：2026-07-14
-状态：当前实现基准
+Date: 2026-07-14
+Status: current implementation baseline
 
-## 控制对象
+## Control Objects
 
 ```text
 Case -> Workflow -> Action -> Worker
 ```
 
-Case 用不可变 `case_uid` 标识，`case_id/name` 只是标签。控制端每个 Case
-同时最多一个 active mutating Action。Worker 绑定 `(case_uid,
-execution_domain)`，runtime Agent ID 不持久化。
+A Case is identified by an immutable `case_uid`; `case_id/name` are merely labels. On the
+controller side, each Case has at most one active mutating Action at a time. Workers are
+bound to `(case_uid, execution_domain)`; runtime Agent IDs are not persisted.
 
 ## Action Contract v2
 
-Request 包含 Case revision/UID、owner/domain、`execution_site_id`、Locator
-inputs/read roots/write roots/protected paths、约束、预期输出和验收检查。
-owner envelope 同时校验 site 与 path，并永远保护 controller Case root。
+A Request contains Case revision/UID, owner/domain, `execution_site_id`, Locator
+inputs/read roots/write roots/protected paths, constraints, expected outputs, and
+acceptance checks. The owner envelope validates both site and path, and always protects
+the controller Case root.
 
-远端 Worker 只读 staging root 中的不可变 request；不能写 controller。
-Result 记录 terminal status、输出 Evidence、verification、blocker、diagnosis
-和 suggested owner。Router 重新 probe 后才写 result 并推进 state revision。
+A remote Worker only reads the immutable request in the staging root; it cannot write to
+the controller. A Result records terminal status, output Evidence, verification, blocker,
+diagnosis, and suggested owner. The Router re-probes before writing the result and
+advancing the state revision.
 
-固定路由：
+Fixed routing:
 
 | Prefix | Owner | Domain |
 |---|---|---|
@@ -35,32 +37,33 @@ Result 记录 terminal status、输出 Evidence、verification、blocker、diagn
 | `analysis` | `playbook-analysis` | `playbook-analysis` |
 | `failure` | `failure-triage` | `failure-triage` |
 
-## 标准循环
+## Standard Loop
 
-1. Orient：精确选择 Case/source authority/sites/当前 phase roots；
-2. Recover：读取 Case 并重新 probe 外部事实；
-3. Decide：只从 allowed actions 选择；
-4. Start：原子写 controller request，必要时 stage 到远端；
-5. Dispatch：Worker 只加载 owner skill/playbook 和 request；
-6. Verify：检查输出 Locator、hash、Git、scheduler/data evidence；
-7. Commit：写 result/event/state，传播 stale；
-8. Continue/suspend/complete。
+1. Orient: precisely select Case/source authority/sites/current phase roots;
+2. Recover: read the Case and re-probe external facts;
+3. Decide: choose only from allowed actions;
+4. Start: atomically write the controller request, staging to the remote side when needed;
+5. Dispatch: the Worker loads only the owner skill/playbook and the request;
+6. Verify: check output Locators, hashes, Git, scheduler/data evidence;
+7. Commit: write result/event/state, propagate stale;
+8. Continue/suspend/complete.
 
-Action 启动后不可改变 owner、site、输入或 envelope；改变时关闭旧 Action
-并创建新 Action。Revision 冲突必须重读，不得盲重试。
+Once an Action has started, its owner, site, inputs, or envelope cannot be changed; to
+change them, close the old Action and create a new one. Revision conflicts must be
+re-read, never blindly retried.
 
-## 行为限制
+## Behavioral Restrictions
 
-- bounded read-only 或真正 standalone owner edit 可以直接调用 task skill；
-- registered source 写入必须有匹配的 active Action；
-- PGen 只在 source authority site 修改 PGen/TOML/design；
-- build 只写 build site envelope，run 只写 run identity；
-- source authority transfer 必须独立 Action；
-- 不猜“最新” checkout/build/run；
-- 不把 Worker 总结当证据；
-- 不复制完整 raw data 作为默认分析流程；
-- offline site 的缓存 observation 不推进状态。
+- bounded read-only or genuinely standalone owner edits may call the task skill directly;
+- writes to registered source require a matching active Action;
+- PGen modifies PGen/TOML/design only on the source authority site;
+- build writes only the build site envelope; run writes only run identity;
+- source authority transfer must be a separate Action;
+- never guess the "latest" checkout/build/run;
+- never treat a Worker summary as evidence;
+- never copy full raw data as the default analysis flow;
+- cached observations from an offline site do not advance state.
 
-状态工具 `entity_router_state.py` 管 Case/Action/revision/migration；
-`entity_router_site.py` 管 site/profile/probe/materialization。通用核心不保存
-SSH 凭据、partition/account/module 修复等 site-specific 内容。
+The state tool `entity_router_state.py` manages Case/Action/revision/migration;
+`entity_router_site.py` manages site/profile/probe/materialization. The generic core does
+not store SSH credentials, partition/account/module fixes, or other site-specific content.

@@ -1,37 +1,37 @@
-# 03 — 粒子注入（InitPrtls + Replenish）
+# 03 — Particle Injection (InitPrtls + Replenish)
 
-> 基于 Entity v1.4.4
+> Based on Entity v1.4.4
 
-## 何时使用
+## When to Use
 
-当模拟需要包含粒子时使用。触发关键词：等离子体、粒子初始化、电子/离子注入、Maxwellian 分布、空间分布、补充注入、粒子补充、对等离子体。
+Use this when the simulation needs to contain particles. Trigger keywords: plasma, particle initialization, electron/ion injection, Maxwellian distribution, spatial distribution, replenishment injection, particle replenishment, pair plasma.
 
-**如果这是真空模拟（无粒子），请跳过本参考文档。**
+**If this is a vacuum simulation (no particles), skip this reference document.**
 
 ---
 
-## 注入阶段
+## Injection Stages
 
-粒子注入分为两个阶段，代码入口点不同：
+Particle injection has two stages, with different code entry points:
 
-| 阶段 | 入口方法 | 使用的单位 | 时机 |
+| Stage | Entry Method | Units Used | Timing |
 |------|---------|---------|------|
-| 初始注入 | `InitPrtls(Domain<S,M>&)` | **物理单位** | 在模拟开始时调用一次 |
-| 补充注入 | `CustomPostStep(...)` | **代码单位** | 每个时间步调用 |
+| Initial injection | `InitPrtls(Domain<S,M>&)` | **physical units** | called once at simulation start |
+| Replenishment injection | `CustomPostStep(...)` | **code units** | called every time step |
 
 ---
 
-## 初始注入（在 InitPrtls 中）
+## Initial Injection (in InitPrtls)
 
-### 函数签名
+### Function Signature
 
 ```cpp
 void InitPrtls(Domain<S, M>& domain);
 ```
 
-### InjectUniformMaxwellians（最常用）
+### InjectUniformMaxwellians (Most Common)
 
-成对粒子种类（例如 e-/e+）均匀注入 + Maxwellian 分布：
+Uniform injection of paired particle species (e.g. e-/e+) + Maxwellian distribution:
 
 ```cpp
 void InitPrtls(Domain<S, M>& domain) {
@@ -55,7 +55,7 @@ void InitPrtls(Domain<S, M>& domain) {
 }
 ```
 
-### InjectUniformMaxwellian（单一温度）
+### InjectUniformMaxwellian (Single Temperature)
 
 ```cpp
 arch::InjectUniformMaxwellian<S, M>(
@@ -67,7 +67,7 @@ arch::InjectUniformMaxwellian<S, M>(
 );
 ```
 
-### InjectUniform（自定义能量分布）
+### InjectUniform (Custom Energy Distribution)
 
 ```cpp
 auto edist1 = arch::energy_dist::Maxwellian<D, Coord::Cartesian>(
@@ -83,7 +83,7 @@ arch::InjectUniform<S, M>(
 );
 ```
 
-### InjectNonUniform（自定义空间分布）
+### InjectNonUniform (Custom Spatial Distribution)
 
 ```cpp
 auto sdist = MySpatialDistribution<D>(params);
@@ -98,9 +98,9 @@ arch::InjectNonUniform<S, M>(
 );
 ```
 
-### InjectGlobally（预先计算的粒子数据）
+### InjectGlobally (Precomputed Particle Data)
 
-从 TOML 中的数组数据注入单个粒子：
+Inject individual particles from array data in the TOML:
 
 ```cpp
 void InitPrtls(Domain<S, M>& domain) {
@@ -121,15 +121,15 @@ void InitPrtls(Domain<S, M>& domain) {
 }
 ```
 
-支持的数据映射键：`"x1"`、`"x2"`、`"x3"`、`"ux1"`、`"ux2"`、`"ux3"`
+Supported data map keys: `"x1"`, `"x2"`, `"x3"`, `"ux1"`, `"ux2"`, `"ux3"`
 
 ---
 
-## 补充注入（在 CustomPostStep 中）
+## Replenishment Injection (in CustomPostStep)
 
-### Replenish 模式（最常用）
+### Replenish Pattern (Most Common)
 
-首先计算当前密度，仅在密度不足处注入：
+First compute the current density, then inject only where density is insufficient:
 
 ```cpp
 void CustomPostStep(timestep_t step, simtime_t time, Domain<S, M>& domain) {
@@ -155,12 +155,12 @@ void CustomPostStep(timestep_t step, simtime_t time, Domain<S, M>& domain) {
 }
 ```
 
-**ReplenishUniform 原理**：
-- 将当前密度与目标密度进行比较
-- `(0.9 * target > current)` → 注入 `(target - current) / target_max`
-- 否则返回 0（无需注入）
+**How ReplenishUniform works**:
+- Compares the current density with the target density
+- `(0.9 * target > current)` → inject `(target - current) / target_max`
+- Otherwise returns 0 (no injection needed)
 
-### 非均匀目标补充
+### Non-Uniform Target Replenishment
 
 ```cpp
 // Custom target density profile
@@ -177,16 +177,16 @@ arch::spatial_dist::Replenish<M, 3, TargetProfile> sdist(
 
 ---
 
-## 能量分布 Archetype
+## Energy Distribution Archetypes
 
-| Archetype | 构造方式 | 描述 |
+| Archetype | Construction | Description |
 |-----------|------|------|
-| `Maxwellian<D, C>(pool, T, drift)` | (random_pool, 温度, 漂移四速度) | 带漂移的 Maxwellian，最常用 |
+| `Maxwellian<D, C>(pool, T, drift)` | (random_pool, temperature, drift four-velocity) | Maxwellian with drift, most common |
 | `Cold<D>` | () | v = 0 |
-| `Powerlaw<D>(pool, gmin, gmax, index)` | (random_pool, gamma_min, gamma_max, 幂律指数) | 相对论性幂律 |
-| `JuttnerSynge(v, T, pool)` | 自由函数，不是 archetype | 相对论性 Juttner-Synge 分布 |
+| `Powerlaw<D>(pool, gmin, gmax, index)` | (random_pool, gamma_min, gamma_max, power-law index) | relativistic power law |
+| `JuttnerSynge(v, T, pool)` | free function, not an archetype | relativistic Juttner-Synge distribution |
 
-### 自定义能量分布接口
+### Custom Energy Distribution Interface
 
 ```cpp
 template <Dimension D>
@@ -207,9 +207,9 @@ struct MyEnergyDist {
 
 ---
 
-## 空间分布接口
+## Spatial Distribution Interface
 
-### 用于 InjectNonUniform 的空间分布
+### Spatial Distribution for InjectNonUniform
 
 ```cpp
 template <Dimension D>
@@ -223,9 +223,9 @@ struct MySpatialDist {
 };
 ```
 
-### PointDistribution 模式（访问电磁场）
+### PointDistribution Pattern (Accessing Electromagnetic Fields)
 
-某些 PGen（例如吸积）需要在空间分布中读取当前电磁场：
+Some PGens (e.g. accretion) need to read the current electromagnetic fields in the spatial distribution:
 
 ```cpp
 template <class M>
@@ -246,11 +246,11 @@ struct PointDistribution {
 };
 ```
 
-**关键**：PointDistribution 在 `InitPrtls` 中构造（在 Host 端），字段读取发生在构造时（而非 kernel 内部），`operator()` 仅执行查找。
+**Key point**: PointDistribution is constructed in `InitPrtls` (on the Host side); field reads happen at construction time (not inside the kernel), and `operator()` only performs lookups.
 
 ---
 
-## 注入区域（box）定义
+## Injection Region (box) Definition
 
 ```cpp
 // Full-domain injection
@@ -278,7 +278,7 @@ if constexpr (M::Dim == Dim::_2D) {
 
 ---
 
-## 所需的头文件
+## Required Headers
 
 ```cpp
 #include "archetypes/particle_injector.h"  // InjectUniform*, InjectNonUniform, InjectGlobally
@@ -289,24 +289,24 @@ if constexpr (M::Dim == Dim::_2D) {
 
 ---
 
-## 约束与不兼容性
+## Constraints and Incompatibilities
 
-| 约束 | 描述 |
+| Constraint | Description |
 |------|------|
-| 1-based 粒子种类索引 | `arch::InjectUniform` 等使用 `{1, 2}` 而非 `{0, 1}`，对应 TOML 中第 1 和第 2 个粒子种类 |
-| use_weights | 在 PGen 中注入时传 `false`；在 TOML 中单独设置 `use_weights = true` |
-| ppc0 与密度的关系 | 总粒子数 ≈ ppc0 × 密度 × N_cells。ppc0 不足 → NaN |
-| Replenish 缓冲区维度 | `ComputeMomentWithSpecies` 的模板参数 N 是缓冲区最后一维的大小 |
-| Cold 分布 + 漂移 | 无法直接设置漂移。需要自定义 EnergyDistribution，或使用低温的 Maxwellian |
+| 1-based particle species indices | `arch::InjectUniform` etc. use `{1, 2}` rather than `{0, 1}`, corresponding to the 1st and 2nd particle species in the TOML |
+| use_weights | pass `false` when injecting in the PGen; set `use_weights = true` separately in the TOML |
+| Relationship between ppc0 and density | total particle count ≈ ppc0 × density × N_cells. Insufficient ppc0 → NaN |
+| Replenish buffer dimension | the template parameter N of `ComputeMomentWithSpecies` is the size of the buffer's last dimension |
+| Cold distribution + drift | drift cannot be set directly. A custom EnergyDistribution is needed, or use a low-temperature Maxwellian |
 
 ---
 
-## 常见陷阱
+## Common Pitfalls
 
-1. **0-based 与 1-based 粒子种类索引** — `arch::InjectUniform` 等使用 1-based 索引（TOML 粒子种类顺序），而非 C++ 的 0-based
-2. **ppc0 不足** — 粒子太少 → 统计噪声 → NaN 传播。建议 ppc0 >= 16，高精度场景使用 128+
-3. **超出 maxnpart** — 增大多粒子种类的 maxnpart，或降低 ppc0/密度
-4. **在 Replenish 中忘记 step % N 控制** — 每个时间步都补充会显著降低性能
-5. **死亡粒子未清理** — `clear_interval` 控制清理频率。死亡粒子过多 → 浪费内存，但不会破坏物理
-6. **移除死亡粒子破坏电荷守恒** — 移除带电粒子后，需要重置 E 场或通过注入进行补偿
-7. **InjectGlobally 中的数据键错误** — 键必须是 `"x1"`、`"ux1"` 等全小写带下标格式
+1. **0-based vs 1-based particle species indices** — `arch::InjectUniform` etc. use 1-based indices (the TOML particle species order), not C++'s 0-based indexing
+2. **Insufficient ppc0** — too few particles → statistical noise → NaN propagation. Recommended ppc0 >= 16; use 128+ for high-accuracy scenarios
+3. **Exceeding maxnpart** — increase maxnpart for many-species cases, or reduce ppc0/density
+4. **Forgetting the step % N control in Replenish** — replenishing every time step significantly degrades performance
+5. **Dead particles not cleaned up** — `clear_interval` controls the cleanup frequency. Too many dead particles → wasted memory, but physics is not broken
+6. **Removing dead particles breaks charge conservation** — after removing charged particles, the E field must be reset or compensated via injection
+7. **Wrong data keys in InjectGlobally** — keys must be all-lowercase with subscripts, e.g. `"x1"`, `"ux1"`

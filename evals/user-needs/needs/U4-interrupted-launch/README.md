@@ -1,28 +1,28 @@
-# U4 — 中断恢复（仅 S 组）
+# U4 — Interrupted-Launch Recovery (S group only)
 
-## 场景意图
+## Scenario Intent
 
-agent 在 `entityctl record run-launch` 执行中途被杀（模拟终端崩溃/掉线），重启后用户只说"接着干"。检验：不产生重复 sbatch、router store 里没有悬而未决的异常状态、最终数据照常交付。
+The agent is killed midway through an `entityctl record run-launch` execution (simulating a terminal crash/disconnect), and after restart the user only says "keep going". Tests: no duplicate sbatch, no dangling anomaly state in the router store, and data delivered as usual in the end.
 
-## 对照组
+## Control Groups
 
-仅 `skills-v5`（场景前提就是 router 的 record/恢复语义）。
+`skills-v5` only (the scenario premise is exactly the router's record/recovery semantics).
 
-## 操作步骤（两段式）
+## Procedure (two-stage)
 
 1. `bash run_need.sh U4 skills-v5 <run-name> [model]`
-2. 盯 transcript（`tail -f ~/entity-eval-traces/<run-name>/transcript.jsonl`），出现 `entityctl ... record run-launch` 调用后杀掉 agent 进程（Ctrl-C 或 `kill <pid>`）。
-3. `bash run_need.sh --followup U4 skills-v5 <run-name> [model]`（"请继续"）。
-4. `bash grade_need.sh U4 <run-name>`。
+2. Watch the transcript (`tail -f ~/entity-eval-traces/<run-name>/transcript.jsonl`); once an `entityctl ... record run-launch` call appears, kill the agent process (Ctrl-C or `kill <pid>`).
+3. `bash run_need.sh --followup U4 skills-v5 <run-name> [model]` ("please continue").
+4. `bash grade_need.sh U4 <run-name>`.
 
-## 核验逻辑（verify.py checks）
+## Verification Logic (verify.py checks)
 
-| check | 含义 |
+| check | Meaning |
 |---|---|
-| `no_duplicate_sbatch` | activities job_lifecycle 中每个 job-name 恰好提交 1 次（>1 进 fail，detail 提示人工核对首次是否 FAILED） |
-| `no_anomaly_operations` | router export 中无 anomaly Operation；record 原语不再写 operations 表，旧 plan/apply 遗留的 anomaly 需被同 case 后续 completed Operation 取代才算消解 |
-| `data_delivered` | oracle Gate D 通过 |
+| `no_duplicate_sbatch` | each job-name is submitted exactly once in activities job_lifecycle (>1 is a fail; detail prompts a human check of whether the first one FAILED) |
+| `no_anomaly_operations` | no anomaly Operation in the router export; the record primitive no longer writes to the operations table, and an anomaly left over from old plan/apply counts as resolved only if superseded by a later completed Operation on the same case |
+| `data_delivered` | oracle Gate D passes |
 
-## 已知边界
+## Known Boundaries
 
-- "首次 FAILED 后可重交"的豁免需要 sacct 人工确认，verify 只给提示（fail + detail），避免自动豁免掩盖真重复。
+- The exemption "resubmission is allowed after the first one FAILED" requires human sacct confirmation; verify only gives a hint (fail + detail), to avoid an automatic exemption masking a real duplicate.

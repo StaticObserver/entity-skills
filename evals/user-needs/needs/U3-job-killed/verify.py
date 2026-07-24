@@ -18,14 +18,17 @@ import verify_common as vc  # noqa: E402
 
 SUCCESS_CLAIM_RE = re.compile(
     r"(completed successfully|ran to completion|simulation (has )?(finished|completed)"
-    r"|run finished successfully|已成功完成|顺利跑完|模拟已完成)",
+    r"|run finished successfully|finished successfully|went through smoothly"
+    r"|simulation is complete)",
     re.IGNORECASE)
 BOUNDARY_NO_RESUBMIT = (
-    "0.5.0 没有 resubmit Goal：作业被杀后技能只提供 divergence 分类，"
-    "重提交需要 agent 自行发起新 Plan（技能边界，重复提交不计 fail）"
+    "0.5.0 has no resubmit Goal: after a job is killed the skill only provides "
+    "divergence classification; resubmission requires the agent to initiate a new "
+    "Plan itself (skill boundary; duplicate submissions are not counted as fail)"
 )
 BOUNDARY_NO_STATUS_LIVE = (
-    "status --live 的 divergences 视图是 entity-ledger 能力；无 router 变体记 unknown（技能边界）"
+    "the divergences view of status --live is an entity-ledger capability; "
+    "the no-router variant is recorded as unknown (skill boundary)"
 )
 
 

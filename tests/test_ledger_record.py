@@ -312,7 +312,7 @@ class RecordTest(unittest.TestCase):
         self.assertEqual(board["build"]["state"], "verified")
         self.assertIn("entity.xc @ local", board["build"]["detail"])
         self.assertEqual(board["data"]["state"], "inventoried")
-        self.assertEqual(board["data"]["detail"], "3 个文件")
+        self.assertEqual(board["data"]["detail"], "3 files")
 
 
 if __name__ == "__main__":

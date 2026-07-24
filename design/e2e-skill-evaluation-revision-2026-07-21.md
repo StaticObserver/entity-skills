@@ -1,70 +1,62 @@
-# E2E 评测修订：资源自发现任务契约与运行过程监控
+# E2E Evaluation Revision: Resource Self-Discovery Task Contract and Run-Process Monitoring
 
-日期：2026-07-21
-状态：task/fixtures/source-cache/collector 已实现（2026-07-21）；待 probe gate 与 pilot
-前序：`design/e2e-skill-evaluation-project-2026-07-19.md`（项目总则不变，本文修订任务契约与过程监控两部分）
+Date: 2026-07-21
+Status: task/fixtures/source-cache/collector implemented (2026-07-21); probe gate and pilot pending
+Predecessor: `design/e2e-skill-evaluation-project-2026-07-19.md` (project principles unchanged; this document revises the task contract and process monitoring parts)
 
-## 1. 新任务契约
+## 1. New task contract
 
-### 1.1 评测只提供两样东西
+### 1.1 The evaluation provides only two things
 
-- `task.md`：任务目标、交付物契约、站点边界、资源上限、安全约束；
-- `physics-spec.json`：冻结的物理语义（与 07-19 文档 §3.2 一致，不改动）。
+- `task.md`: the task goal, deliverable contract, site boundaries, resource ceilings, and safety constraints;
+- `physics-spec.json`: the frozen physics semantics (identical to §3.2 of the 07-19 document, unchanged).
 
-源码路径、依赖缓存路径、可写根、作业命名等一律不出现在任务输入中。
+Source paths, dependency cache paths, writable roots, job naming, and the like never appear in the task input.
 
-### 1.2 task.md 必须包含的内容
+### 1.2 What task.md must contain
 
-task.md 需要把任务描述清楚，并明确以下**站点使用边界**（这些是约束，不是资源位置）：
+task.md needs to describe the task clearly and state the following **site usage boundaries** (these are constraints, not resource locations):
 
-1. 计算必须发生在 **siyuan 集群**，不得使用其他站点（siyuan 与 pi2 是两个不同的
-   集群，不得混用）；
-2. **禁止在登录节点编译**；编译必须发生在计算资源上（交互或作业方式由 agent 自决）；
-3. 作业提交目标为 **debuga100 分区**（GPU 资源），受资源上限约束；
-4. **数据分析使用 CPU 资源**，不得占用 GPU 节点做分析；
-5. 资源上限：1 node / **2 GPU（MPI，2 tasks）** / 10 min walltime；
-6. 安全约束不变：禁止公网、凭据不得入产物、不修改共享只读内容、缺关键决策时停下
-   来报告而非自行假设。
+1. Computation must happen on the **siyuan cluster**; no other site may be used (siyuan and pi2 are two different clusters and must not be mixed);
+2. **Compiling on login nodes is forbidden**; compilation must happen on compute resources (interactive or job-based, at the agent's discretion);
+3. Jobs are submitted to the **debuga100 partition** (GPU resources), subject to the resource ceiling;
+4. **Data analysis uses CPU resources**; GPU nodes must not be occupied for analysis;
+5. Resource ceiling: 1 node / **2 GPUs (MPI, 2 tasks)** / 10 min walltime;
+6. Safety constraints unchanged: no public network, no credentials in artifacts, no modification of shared read-only content, and when a key decision is missing, stop and report rather than assume.
 
-task.md **不得包含**：Entity 源码位置、依赖缓存位置、具体可写路径、站点内部用户名、
-任何"已由评测运行时提供"的字样。agent 需要通过环境探测（ssh 配置、集群上可读的公共
-缓存、已有软件栈）自行定位这些资源。
+task.md **must not contain**: the Entity source location, dependency cache location, concrete writable paths, internal site usernames, or any wording like "already provided by the evaluation runtime". The agent must locate these resources itself through environment probing (ssh configuration, publicly readable caches on the cluster, existing software stacks).
 
-### 1.3 本地源码缓存（维护者预置）
+### 1.3 Local source cache (pre-provisioned by the maintainer)
 
-评测运行前由维护者在 siyuan 上准备一个**只读源码缓存**，包含：
+Before the evaluation run, the maintainer prepares a **read-only source cache** on siyuan containing:
 
-| 组件 | 版本 | 说明 |
+| Component | Version | Notes |
 |---|---|---|
-| Entity | v1.4.4（tag） | 冻结版本，与 physics-spec 一致 |
-| Kokkos | 5.0.1 | modern profile 默认（entity-env-build 版本策略） |
+| Entity | v1.4.4 (tag) | Frozen version, consistent with physics-spec |
+| Kokkos | 5.0.1 | modern profile default (entity-env-build version policy) |
 | ADIOS2 | 2.11.x | modern profile |
-| OpenMPI | 4.1.6 | MPI=ON 所需；agent 也可选用站点既有 MPI |
-| HDF5 | 1.14.6（tag `hdf5_1.14.6`） | ADIOS2 依赖 |
+| OpenMPI | 4.1.6 | Required for MPI=ON; the agent may also choose the site's existing MPI |
+| HDF5 | 1.14.6 (tag `hdf5_1.14.6`) | ADIOS2 dependency |
 
-约束：
+Constraints:
 
-- 缓存内容与版本指纹（sha256）记录在评测 manifest 中，可提交仓库；
-- 缓存放置在 agent 可合理发现的只读位置，但**路径不出现在 task.md**（§1.5 probe
-  gate 验证可发现性）；
-- 提供源码不等于强制源码构建：agent 仍可选用站点已有的等价依赖，但必须通过兼容性
-  收束并在 submission 中给出身份与指纹。
+- cache contents and version fingerprints (sha256) are recorded in the evaluation manifest and may be committed to the repository;
+- the cache is placed at a read-only location the agent can reasonably discover, but **the path does not appear in task.md** (the §1.5 probe gate verifies discoverability);
+- providing sources does not force a source build: the agent may still choose equivalent dependencies already on the site, but must pass compatibility convergence and give the identity and fingerprint in the submission.
 
-### 1.4 交付物契约不变
+### 1.4 Deliverable contract unchanged
 
-`submission.json` schema 沿用现有版本。它是裁判接口，不是资源提示；no-skill 组同样适
-用，不要求模仿 Router 内部对象。
+The `submission.json` schema follows the existing version. It is the judging interface, not a resource hint; it applies to the no-skill group equally and does not require mimicking Router internal objects.
 
-### 1.5 可发现性前提（probe gate）
+### 1.5 Discoverability precondition (probe gate)
 
-"可发现但未声明"必须被验证，否则测的是环境布置而不是 agent 能力。正式开跑前由维护者
-执行一次 probe：
+"Discoverable but undeclared" must be verified; otherwise what is measured is environment setup rather than agent capability. Before the formal run, the maintainer executes one probe:
 
-- 确认 siyuan 集群上存在 agent 可合理发现的源码缓存（§1.3）与站点软件栈；
-- 确认发现路径不依赖本评测仓库的私有知识；
-- probe 结论写入试验 manifest。probe 失败则先修环境，不开跑。
+- confirm that the source cache (§1.3) and the site software stack exist on the siyuan cluster in a way the agent can reasonably discover;
+- confirm that the discovery path does not depend on private knowledge of this evaluation repository;
+- the probe conclusion is written into the experiment manifest. If the probe fails, fix the environment first; do not start the run.
 
-### 1.6 新 task.md 草案
+### 1.6 New task.md draft
 
 ```markdown
 # End-to-end Entity simulation task
@@ -103,118 +95,93 @@ precisely and stop before creating external effects. Do not silently change
 the physics specification or resource ceiling.
 ```
 
-## 2. 运行过程监控（observability v2）
+## 2. Run-process monitoring (observability v2)
 
-### 2.1 独立性与可开关（硬要求）
+### 2.1 Independence and switchability (hard requirements)
 
-监控是被测系统之外的独立层，满足三条：
+Monitoring is an independent layer outside the system under test, satisfying three conditions:
 
-1. **零侵入**：不修改任何 skill 的 SKILL.md、脚本或 Router 代码；不在被测 workspace
-   的 skill 目录内安装 hook 或探针。skills 本身不知道监控是否存在。
-2. **可整体开关**：由评测 harness 的一个开关控制（如 `OBSERVE=on|off` 或
-   `--observe` 标志）。关闭时 agent 的运行方式与不监控完全一致——同一命令行、同一
-   settings、同一环境。
-3. **开销在带外**：采集与解析发生在被测进程之外或结束之后，不在 agent 的工具调用
-   路径上增加任何同步等待，不占用 agent 的上下文窗口。token 与耗时读数反映的是
-   agent 原生行为，不含监控自身成本。
+1. **Zero intrusion**: no modification of any skill's SKILL.md, scripts, or Router code; no hooks or probes installed inside the skill directories of the workspace under test. The skills themselves do not know whether monitoring exists.
+2. **Fully switchable**: controlled by one switch of the evaluation harness (such as `OBSERVE=on|off` or an `--observe` flag). When off, the agent runs exactly as it would without monitoring — same command line, same settings, same environment.
+3. **Overhead out of band**: collection and parsing happen outside the process under test or after it finishes; no synchronous wait is added to the agent's tool-call path, and the agent's context window is not consumed. Token and duration readings reflect the agent's native behavior, excluding the monitoring's own cost.
 
-### 2.2 证据分级
+### 2.2 Evidence grading
 
-沿用 declared / observed / verified 三分：agent 报告是 declared，采集流是 observed，
-oracle 独立复核是 verified。监控只增加 observed 证据，不改变 oracle 判定逻辑。
+The declared / observed / verified three-way split is kept: the agent's report is declared, the collection stream is observed, and independent oracle re-checking is verified. Monitoring only adds observed evidence; it does not change oracle judgment logic.
 
-### 2.3 三条采集通道
+### 2.3 Three collection channels
 
-**通道 1：结构化事件流（主 trace）**
-被测 Claude Code 以 headless 方式运行，harness 包装命令行：
+**Channel 1: structured event stream (main trace)**
+The Claude Code under test runs headless, with the harness wrapping the command line:
 
 ```bash
 claude -p "$(cat task.md)" --output-format stream-json --verbose ...
 ```
 
-开关关闭时就是不带输出重定向的同一命令。JSONL 事件包含每条 assistant message 的
-`usage`（input / output / cache_read / cache_creation tokens）、每个 tool_use /
-tool_result、以及最终 result（总耗时、总 token）。token 逐条从 usage 累计。解析全部
-在运行结束后离线进行。
+With the switch off it is the same command without output redirection. JSONL events contain each assistant message's `usage` (input / output / cache_read / cache_creation tokens), every tool_use / tool_result, and the final result (total duration, total tokens). Tokens are accumulated per message from usage. All parsing happens offline after the run ends.
 
-**通道 2：Hooks 侧信道（独立动作时间线）**
-评测 harness 注入一份独立 settings（与被测 agent 自身配置分离），配置
-`PreToolUse` / `PostToolUse` hook，异步追加写 JSONL：时间戳、tool 名、命令指纹（脱
-敏）、退出状态。开关关闭时不注入该 settings。hook 脚本只做追加写，不阻塞、不返回
-决策，对工具调用路径的影响可忽略；该流独立于 transcript，即使主 trace 损坏也保留带
-精确时间戳的重要动作日志，并作为 ssh / sbatch 等外部副作用的审计依据。
+**Channel 2: hooks side channel (independent action timeline)**
+The evaluation harness injects an independent settings file (separate from the agent's own configuration), configuring `PreToolUse` / `PostToolUse` hooks that asynchronously append JSONL: timestamp, tool name, command fingerprint (redacted), exit status. With the switch off, this settings file is not injected. The hook script only appends; it does not block and returns no decisions, so its effect on the tool-call path is negligible. This stream is independent of the transcript: even if the main trace is corrupted, an important action log with precise timestamps survives, and it serves as the audit basis for external side effects such as ssh / sbatch.
 
-**通道 3：外部事实（已有）**
-scheduler snapshot、receipt、产物 hash —— 现有 oracle 体系不变，本就不在被测路径上。
+**Channel 3: external facts (existing)**
+Scheduler snapshots, receipts, artifact hashes — the existing oracle system is unchanged and was never on the path under test.
 
-### 2.4 确定性阶段切分
+### 2.4 Deterministic phase segmentation
 
-不要求 agent 打阶段标记。后处理按工具调用模式把 trace 切成有序 phase：
+The agent is not asked to emit phase markers. Post-processing cuts the trace into ordered phases by tool-call patterns:
 
-| phase | 切分信号（首个命中的工具调用模式） |
+| phase | Segmentation signal (first matching tool-call pattern) |
 |---|---|
-| discover | 探索性 ssh / ls / find / 环境探测，直到站点与源码确定 |
-| pgen | 写 `pgen.hpp` / `design.md`、PGen preflight |
-| env-build | cmake / make / entity-build 相关调用 |
-| run | `entityctl plan/apply` 或 `sbatch` |
-| analysis | `import nt2` / 分析脚本执行 |
-| submission | 写 `submission.json`（trace 终止信号） |
+| discover | exploratory ssh / ls / find / environment probing, until site and source are determined |
+| pgen | writing `pgen.hpp` / `design.md`, PGen preflight |
+| env-build | cmake / make / entity-build related calls |
+| run | `entityctl plan/apply` or `sbatch` |
+| analysis | `import nt2` / analysis script execution |
+| submission | writing `submission.json` (trace termination signal) |
 
-切分规则放在 collector 配置里，可按 phase 信号表迭代，但不按单次结果回调。
+The segmentation rules live in the collector configuration and can be iterated against the phase signal table, but are not adjusted based on individual results.
 
-### 2.5 输出：`phases.json`
+### 2.5 Output: `phases.json`
 
-每条 assistant message 按时间戳归入所在段，累计每段：
+Each assistant message is assigned to its segment by timestamp, accumulating per segment:
 
-- wall time（起止时间戳；Slurm 排队等待单独标注，不计入 agent 效率，同 07-19 §5.3）；
-- token：input / output / cache_read / cache_creation **分列**（cache 两项必须单列，
-  用于回答"skills 上下文成本是否值得"）；
-- 工具调用数、失败调用数、SSH 往返数。
+- wall time (start/end timestamps; Slurm queueing waits are marked separately and not counted toward agent efficiency, same as 07-19 §5.3);
+- tokens: input / output / cache_read / cache_creation **listed separately** (the two cache items must be separate, to answer "whether the skills' context cost is worth it");
+- tool call count, failed call count, SSH round trip count.
 
-归不了段的计入 `unclassified`；其 token 占比过高（阈值暂定 10%）说明切分规则失效，
-本轮 trace 标注为不可比较，先修规则再开跑。
+What cannot be assigned goes into `unclassified`; if its token share is too high (threshold tentatively 10%), the segmentation rules have failed — mark this round's trace as non-comparable, fix the rules before running.
 
-### 2.6 落地位置
+### 2.6 Where it lands
 
-扩展现有 `tools/skill_observability`：
+Extend the existing `tools/skill_observability`:
 
-1. 新增 CC stream-json transcript parser（离线）；
-2. 新增 phase segmenter（规则表驱动，离线）；
-3. trace schema 增加 `phases[]`；
-4. harness 增加监控开关，控制输出重定向与 hook settings 注入；
-5. 汇总报告直接读 `phases.json` 填 07-19 文档 §8 的"执行成本"维度。
+1. add a CC stream-json transcript parser (offline);
+2. add a phase segmenter (rule-table driven, offline);
+3. add `phases[]` to the trace schema;
+4. add a monitoring switch to the harness, controlling output redirection and hook settings injection;
+5. the summary report reads `phases.json` directly to fill the "execution cost" dimension of §8 in the 07-19 document.
 
-## 3. 公平性影响
+## 3. Fairness impact
 
-- S/N 两组收到完全相同的新 task.md，发现阶段对两组同样受测，对照公平性不变；
-- 发现阶段的耗时与 token 计入比较，但排队时间仍单独报告；
-- 若某组在 discover 阶段失败，按"完成阶段数"计入自主完成度（07-19 §8 第 2 项），
-  不以效率补偿。
+- Both S/N groups receive exactly the same new task.md; the discovery phase is tested equally for both, so comparison fairness is unchanged;
+- discovery-phase time and tokens count toward the comparison, but queueing time is still reported separately;
+- if a group fails in the discover phase, it counts toward autonomous completion as "number of phases completed" (07-19 §8 item 2), with no efficiency compensation.
 
-### 3.1 无 skill 组（N）如何观测
+### 3.1 How the no-skill group (N) is observed
 
-监控仪器与被测条件无关：它观测的是 agent 的可观测行为（工具调用、token、时间戳），
-不观测 skill 本身。因此对 N 组完全同构：
+The monitoring instrumentation is independent of the condition under test: it observes the agent's observable behavior (tool calls, tokens, timestamps), not the skills themselves. It is therefore fully isomorphic for the N group:
 
-- stream-json 采集、hooks 侧信道、transcript 导入都由 harness 在带外完成，两组一致；
-- 阶段切分规则匹配的是**任务交付物**而非 skill 接口——`pgen.hpp`、`design.md`、
-  `cmake/make`、`sbatch/squeue`、`import nt2`、`submission.json` 都是 task.md 强制
-  要求的产物，N 组同样产生；S 特有的 `entityctl` 等信号只是 run 阶段的规则之一，
-  N 组直接 `sbatch` 同样命中；
-- N 组 `start` 不带 `--skill`，`resource_matches` 自然为空，不报错也不缺数据。
+- stream-json collection, hooks side channel, and transcript import are all done out of band by the harness, identically for both groups;
+- the phase segmentation rules match **task deliverables**, not skill interfaces — `pgen.hpp`, `design.md`, `cmake/make`, `sbatch/squeue`, `import nt2`, and `submission.json` are all artifacts mandated by task.md and produced by the N group too; S-specific signals like `entityctl` are only one of the run-phase rules, and the N group hitting `sbatch` directly matches as well;
+- the N group's `start` carries no `--skill`, so `resource_matches` is naturally empty — no error, no missing data.
 
-唯一 S-only 的观测是 skill 证据验证器（router-operation、pgen-preflight、env-build、
-nt2py-inventory）。它们不是裁判接口：两组的共同裁判是 oracle Gates A–E，读取
-scheduler、raw data、submission 等外部事实。N 组的 phases.json 与 S 组结构完全相同，
-可直接进入同一汇总比较（已有 N 组风格转录的切分测试覆盖）。
+The only S-only observation is the skill evidence validators (router-operation, pgen-preflight, env-build, nt2py-inventory). They are not the judging interface: the common judge for both groups is oracle Gates A–E, which read external facts such as the scheduler, raw data, and submission. The N group's phases.json has exactly the same structure as the S group's and can enter the same summary comparison directly (already covered by segmentation tests on N-group-style transcripts).
 
-## 4. 实施顺序
+## 4. Implementation order
 
-1. 准备本地源码缓存（§1.3）并记录版本指纹 manifest；
-2. 按 §1.6 落地新 `task.md`，更新 `evals/e2e-neutral-streaming/` fixtures
-   （含 physics-spec 的 MPI 与 2 GPU 资源上限）；
-3. 执行 §1.5 probe gate，确认资源可发现；
-4. 实现 collector 的 parser + segmenter + `phases.json` 与监控开关（§2.6），用
-   gold run 的既有 trace 回归验证切分规则；
-5. pilot：S/N 各一次，检验发现阶段可观测、监控数据完整、开关关闭时行为与裸跑一致；
-6. 通过后才启动 formal 配对（沿用 07-19 §5.3 顺序）。
+1. prepare the local source cache (§1.3) and record the version fingerprint manifest;
+2. land the new `task.md` per §1.6 and update the `evals/e2e-neutral-streaming/` fixtures (including the physics-spec's MPI and 2-GPU resource ceiling);
+3. execute the §1.5 probe gate to confirm resources are discoverable;
+4. implement the collector's parser + segmenter + `phases.json` and the monitoring switch (§2.6), regression-testing the segmentation rules against existing gold-run traces;
+5. pilot: one run each of S/N, verifying the discovery phase is observable, monitoring data is complete, and behavior with the switch off matches a bare run;
+6. start the formal pairs only after this passes (following the 07-19 §5.3 order).

@@ -1,10 +1,10 @@
 # Contributing
 
-## Git 边界
+## Git Boundaries
 
-`entity-skills` 是四个 skill 的唯一源仓库。不要在 `skills/*` 内创建 `.git`，也不要把 skill 改为 submodule。
+`entity-skills` is the single source repository for the four skills. Do not create a `.git` inside `skills/*`, and do not turn a skill into a submodule.
 
-从 `main` 创建短期分支，命名使用 `<type>/<scope>-<summary>`，例如：
+Create short-lived branches from `main`, named `<type>/<scope>-<summary>`, for example:
 
 ```text
 feat/ledger-resume-flow
@@ -12,7 +12,7 @@ fix/env-build-compatibility
 docs/pgen-boundary-contract
 ```
 
-提交信息使用 skill scope：
+Commit messages use the skill scope:
 
 ```text
 feat(ledger): add resume handoff
@@ -21,11 +21,11 @@ docs(pgen): clarify TOML contract
 refactor(nt2py): simplify data inventory
 ```
 
-一次行为变更如果同时影响 Ledger、子 skill 和测试，应作为一个原子 pull request 提交，不要拆到不同仓库或长期分支。
+A behavioral change that affects the Ledger, sub-skills, and tests at the same time should be submitted as a single atomic pull request — do not split it across different repositories or long-lived branches.
 
-## 验证
+## Verification
 
-提交前运行：
+Run before committing:
 
 ```bash
 python3 -m unittest discover -s tests -v
@@ -44,15 +44,15 @@ for schema in tools/skill_observability/schemas/*.json; do
 done
 ```
 
-四个 `SKILL.md` 都必须保留合法 YAML frontmatter，并通过 skill 结构校验。
+All four `SKILL.md` files must keep valid YAML frontmatter and pass skill structure validation.
 
-## 发布
+## Release
 
-版本号作用于整个 skills package。发布前确认工作区干净、CI 通过，然后在 `main` 上创建 annotated tag：
+Version numbers apply to the whole skills package. Before releasing, confirm the working tree is clean and CI passes, then create an annotated tag on `main`:
 
 ```bash
 git tag -a vX.Y.Z -m "Release vX.Y.Z"
 git push origin main --follow-tags
 ```
 
-不再从旧的单 skill 仓库发布新版本。
+New versions are no longer released from the old single-skill repositories.

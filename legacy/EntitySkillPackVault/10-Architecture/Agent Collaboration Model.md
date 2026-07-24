@@ -1,50 +1,49 @@
-# Agent 协作模型
+# Agent Collaboration Model
 
-## 单 Agent 模式
+## Single-Agent Mode
 
-一个 agent 可以使用整个 skill pack：
+One agent can use the entire skill pack:
 
 ```text
-用户请求
+user request
 -> router
 -> core knowledge
 -> task skill
--> 可选 debug/analysis/docs 支持
--> 最终产物
+-> optional debug/analysis/docs support
+-> final artifact
 ```
 
-这是默认设计目标，可以让第一版保持简单。
+This is the default design goal, keeping the first version simple.
 
-## 多 Agent 模式
+## Multi-Agent Mode
 
-同一套 skill pack 也可以支持多个专门 agent：
+The same skill pack can also support multiple specialized agents:
 
-- Coordinator Agent：路由任务、维护状态、处理交接。
-- Simulation Agent：配置、编译、运行并记录模拟。
-- Analysis Agent：读取数据、生成诊断、校准结论强度。
-- Development Agent：修改 Entity 源码并验证变更。
-- Debug Agent：调查编译、运行、集群和数值问题。
+- Coordinator Agent: routes tasks, maintains state, handles handoffs.
+- Simulation Agent: configures, builds, runs, and records simulations.
+- Analysis Agent: reads data, generates diagnostics, calibrates conclusion strength.
+- Development Agent: modifies Entity source code and verifies changes.
+- Debug Agent: investigates build, runtime, cluster, and numerical problems.
 
-所有 agent 必须共享同一个 core knowledge，不应该各自维护一份 Entity 事实。
+All agents must share the same core knowledge; they should not each maintain their own copy of Entity facts.
 
-## 交接契约
+## Handoff Contract
 
-每次交接都应包含：
+Every handoff should include:
 
-- Entity checkout 路径；
-- branch/tag/commit；
-- 任务目标；
-- 已检查文件；
-- 已产出 artifact；
-- 已运行命令；
-- 已完成测试或检查；
-- 未解决风险。
+- Entity checkout path;
+- branch/tag/commit;
+- task goal;
+- files inspected;
+- artifacts produced;
+- commands run;
+- tests or checks completed;
+- unresolved risks.
 
-模拟任务使用 [[90-Templates/Run Manifest Template|Run Manifest 模板]]。
+Simulation tasks use the [[90-Templates/Run Manifest Template|Run Manifest Template]].
 
-开发任务使用 [[90-Templates/Development Design Note Template|Development Design Note 模板]]。
+Development tasks use the [[90-Templates/Development Design Note Template|Development Design Note Template]].
 
-## 避免的模式
+## Patterns to Avoid
 
-不要创建一个声称凭记忆掌握所有 Entity API 的巨大 agent。Entity 会变化，这种模式必然漂移。
-
+Do not create one giant agent that claims to know every Entity API from memory. Entity changes, and this pattern inevitably drifts.

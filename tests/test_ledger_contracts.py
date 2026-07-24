@@ -65,12 +65,12 @@ class LedgerContractTest(unittest.TestCase):
         with open(os.path.join(LEDGER_ROOT, "SKILL.md"), "r") as handle:
             skill = handle.read()
         self.assertIn("status", skill)
-        self.assertIn("只读", skill)
+        self.assertIn("read-only", skill)
         with open(os.path.join(LEDGER_ROOT, "references",
                                "ledger-runtime.md"), "r") as handle:
             runtime = handle.read()
-        self.assertIn("控制器本地", runtime)
-        self.assertIn("最多做三次有界的后端查询", runtime)
+        self.assertIn("controller-local", runtime)
+        self.assertIn("at most three bounded", runtime)
 
 
 if __name__ == "__main__":

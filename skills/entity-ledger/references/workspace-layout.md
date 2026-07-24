@@ -1,25 +1,28 @@
-# 多站点工作区契约
+# Multi-Site Workspace Contract
 
-一个资源的 identity 始终是 `(site_id, 绝对路径)` 这一对组合加上它的
-fingerprint。一个 Site 可以是一台本地机器，也可以是一个 SSH 访问边界，
-覆盖一台 HPC 登录节点、scheduler、计算节点和共享文件系统。
+A resource's identity is always the pair `(site_id, absolute path)` plus
+its fingerprint. A Site can be a local machine or an SSH access boundary
+covering an HPC login node, scheduler, compute nodes, and shared
+filesystem.
 
-## 控制器布局
+## Controller layout
 
 ```text
 ~/.entity-ledger/
 └── ledger.db                         # controller authority
 ```
 
-`ledger.db` 只包含紧凑的事实和证据引用。它绝不放在
-源代码检出目录内，也绝不复制到 `.codex`、`.claude` 或
-`.kimi-code` 等 provider 私有根目录。从 v3 导入的控制器可能仍
-带有迁移前保留的文件（`registry.json`、`sites/`、`cases/`）；
-它们是只读的历史证据，当前运行时绝不读取或写入它们。
+`ledger.db` contains only compact facts and evidence references. It is
+never placed inside a source checkout, and never copied into
+provider-private roots such as `.codex`, `.claude`, or `.kimi-code`. A
+controller imported from v3 may still carry files retained from before the
+migration (`registry.json`, `sites/`, `cases/`); they are read-only
+historical evidence, and the current runtime never reads or writes them.
 
-## Owner-site 布局
+## Owner-site layout
 
-各根目录相互独立，不需要共享父目录：
+The roots are independent of each other and do not need a shared parent
+directory:
 
 ```text
 <build_root>/<case_uid>/<build_id>
@@ -28,25 +31,29 @@ fingerprint。一个 Site 可以是一台本地机器，也可以是一个 SSH �
 <analysis_root>/<case_uid>/<analysis_id>
 ```
 
-构建和运行在其 identity 提交之后即不可变。原始数据
-在执行/数据 Site 保持权威；只取回盘点清单、日志、
-图件、报告或明确选定的子集。
+Builds and runs are immutable once their identities are committed. Raw
+data remains authoritative on the execution/data Site; only inventory
+manifests, logs, plots, reports, or explicitly selected subsets are
+fetched back.
 
-## 源权威
+## Source authority
 
-每个 Case 只有一个可编辑的源权威。干净的 Git 工作树或
-内容寻址 manifest 标识其确切内容。脏文件和未跟踪
-文件也包含在 manifest 中；仅有 `dirty=true` 不构成一个 identity。
-其他检出目录在证明完全相等之前都只是副本。PGen、TOML 和
-design 的编辑只发生在源权威处。
+Each Case has exactly one editable source authority. A clean Git working
+tree or a content-addressed manifest identifies its exact contents. Dirty
+and untracked files are also included in the manifest; `dirty=true` alone
+does not constitute an identity. Other checkouts are mere copies until
+proven exactly equal. Edits to the PGen, TOML, and design happen only at
+the source authority.
 
-## 执行边界
+## Execution boundary
 
-控制器推导允许的根目录和不可变的执行请求。Site
-执行器只能在这些根目录之下写入，且绝不写 `ledger.db`。
-receipt 保留在该次操作的暂存根目录下，以便 record 原语在
-控制器进程丢失后重跑时认领既有效果、不重复提交。
+The controller derives the allowed roots and the immutable execution
+requests. A Site executor may only write beneath those roots, and never
+writes `ledger.db`. Receipts are kept under the operation's staging root
+so that, when a record primitive is rerun after the controller process is
+lost, it can adopt the existing effect instead of resubmitting.
 
-Site 本地的 module 配置或策略应放在受信任的 Site 适配器中，
-而不是 record 原语参数或通用 Ledger 核心中。密码、令牌、私钥、可变
-会话记忆以及完整的 skill 副本都不应进入项目或控制器状态。
+Site-local module configuration or policy belongs in a trusted Site
+adapter, not in record primitive parameters or the generic Ledger core.
+Passwords, tokens, private keys, mutable session memory, and full copies
+of skills must never enter project or controller state.

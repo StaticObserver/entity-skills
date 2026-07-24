@@ -1,31 +1,31 @@
-# 知识模型与版本策略
+# Knowledge Model and Version Strategy
 
-## 原则
+## Principle
 
-当前 Entity checkout 比 skill pack 更权威。
+The current Entity checkout is more authoritative than the skill pack.
 
-Skill pack 应该保存：
+The skill pack should store:
 
-- 去哪里查；
-- 查什么；
-- 如何解释查到的内容；
-- 应该遵循什么工作流。
+- where to look;
+- what to look for;
+- how to interpret what is found;
+- which workflows to follow.
 
-除非明确标注版本范围，否则不要在 skill pack 中保存大段复制的参数表或 API 签名。
+Unless a version range is explicitly marked, do not store large copied parameter tables or API signatures in the skill pack.
 
-## 信息源优先级
+## Information Source Priority
 
-每个 Entity 任务都按以下顺序优先：
+Every Entity task follows this priority order:
 
-1. 当前本地 checkout。
-2. 需要或用户要求时，检查当前上游仓库。
-3. 官方 wiki，用于概念解释。
-4. Skill pack 笔记，用于工作流和方向。
-5. Local overlays，用于用户 fork 或实验分支行为。
+1. The current local checkout.
+2. The current upstream repository, when needed or requested by the user.
+3. The official wiki, for conceptual explanations.
+4. Skill pack notes, for workflows and orientation.
+5. Local overlays, for user fork or experimental branch behavior.
 
-## 必做 Checkout 探测
+## Mandatory Checkout Probe
 
-在模拟或开发前，收集：
+Before simulation or development, collect:
 
 ```bash
 git rev-parse --show-toplevel
@@ -35,69 +35,69 @@ git rev-parse --short HEAD
 git describe --tags --always
 ```
 
-如果不是 Git checkout，就记录绝对路径和可用版本信息。
+If it is not a Git checkout, record the absolute path and whatever version information is available.
 
-## 官方权威文件
+## Official Authoritative Files
 
-先查这些文件，再相信 skill-pack 摘要：
+Check these files before trusting skill-pack summaries:
 
-- `input.example.toml`：运行参数和 TOML 层级。
-- `pgens/*/pgen.hpp` 与 `examples/*/pgen.hpp`：当前 PGen 写法。
-- `src/global/traits/pgen.h`：PGen hook 检测和签名。
-- `src/engines/*`：engine 调度顺序以及 time/step 状态归属。
-- `src/kernels/*`：device kernels 与数值操作。
-- `src/framework/domain/*`：`Metadomain`、`Domain`、`Mesh` 和 local domain 行为。
-- `src/output/*` 以及 ADIOS2 相关代码：输出语义。
+- `input.example.toml`: run parameters and TOML hierarchy.
+- `pgens/*/pgen.hpp` and `examples/*/pgen.hpp`: current PGen style.
+- `src/global/traits/pgen.h`: PGen hook detection and signatures.
+- `src/engines/*`: engine scheduling order and ownership of time/step state.
+- `src/kernels/*`: device kernels and numerical operations.
+- `src/framework/domain/*`: `Metadomain`, `Domain`, `Mesh`, and local domain behavior.
+- `src/output/*` and ADIOS2-related code: output semantics.
 
-## 版本桶
+## Version Buckets
 
-至少跟踪这些版本桶：
+Track at least these version buckets:
 
-- `official-v1.4.x`：当前上游 release 系列。
-- `official-master`：最新上游开发状态。
-- `legacy-v1.3.3`：仍和现有本地工作有关的旧分支系列。
-- `local-staticobserver`：用户 fork 行为。
-- `local-experimental`：任务分支和未发布修改。
+- `official-v1.4.x`: the current upstream release series.
+- `official-master`: the latest upstream development state.
+- `legacy-v1.3.3`: the old branch series still relevant to existing local work.
+- `local-staticobserver`: user fork behavior.
+- `local-experimental`: task branches and unpublished changes.
 
-任何描述行为的笔记都应该说明适用哪个版本桶。
+Any note describing behavior should state which version bucket it applies to.
 
-## 依赖版本矩阵
+## Dependency Version Matrix
 
-Entity 编译环境必须按 Entity 主版本选择依赖族，不能随意混用：
+The Entity build environment must select dependency families according to the Entity major version; they must not be mixed arbitrarily:
 
-| Entity 版本桶 | Kokkos | ADIOS2 | 关键注意事项 |
+| Entity version bucket | Kokkos | ADIOS2 | Key notes |
 | --- | --- | --- | --- |
-| `official-v1.4.x` | Kokkos 5.x | ADIOS2 2.11.x | 编译 ADIOS2 时需要带上 Kokkos 依赖。 |
-| `legacy-v1.3.x` | Kokkos 4.x | ADIOS2 2.10.x | 不要套用 1.4.x 的 ADIOS2/Kokkos 组合。 |
+| `official-v1.4.x` | Kokkos 5.x | ADIOS2 2.11.x | ADIOS2 must be built with the Kokkos dependency. |
+| `legacy-v1.3.x` | Kokkos 4.x | ADIOS2 2.10.x | Do not apply the 1.4.x ADIOS2/Kokkos combination here. |
 
-如果当前 checkout 不能明确归入这些版本桶，agent 必须先读取仓库的 `README.md`、`dependencies.py`、`cmake/` 和官方 wiki，再给出依赖建议。
+If the current checkout cannot be clearly assigned to one of these version buckets, the agent must first read the repository's `README.md`, `dependencies.py`, `cmake/`, and the official wiki before giving dependency advice.
 
-## 高漂移风险
+## High Drift Risk
 
-容易变化的内容：
+Content prone to change:
 
-- TOML 层级和默认值；
-- PGen hook 签名；
-- 输出 quantity 名称；
-- custom particle update hook；
-- Kokkos 和 ADIOS2 版本要求；
-- ADIOS2 是否需要 Kokkos 依赖；
-- 分支特定功能。
+- TOML hierarchy and default values;
+- PGen hook signatures;
+- output quantity names;
+- custom particle update hooks;
+- Kokkos and ADIOS2 version requirements;
+- whether ADIOS2 requires the Kokkos dependency;
+- branch-specific features.
 
-相对稳定的内容：
+Relatively stable content:
 
-- simulation 与 development 的工作流边界；
-- run manifest 的必要性；
-- `Metadomain -> Domain -> Mesh -> Fields/Particles` 概念层级；
-- code units、physical coordinates、tetrad basis、coordinate basis 的区别。
+- the workflow boundary between simulation and development;
+- the necessity of the run manifest;
+- the `Metadomain -> Domain -> Mesh -> Fields/Particles` concept hierarchy;
+- the distinction between code units, physical coordinates, tetrad basis, and coordinate basis.
 
-## Local Overlay 规则
+## Local Overlay Rules
 
-本地扩展不能写成上游事实。
+Local extensions must not be written as upstream facts.
 
-例子：
+Example:
 
-- 官方上游可能说明 `ext_current` 只限 Minkowski。
-- 本地 fork 可能扩展了 `ext_current`，加入 time-aware context 或其他行为。
+- Official upstream may state that `ext_current` is Minkowski-only.
+- A local fork may have extended `ext_current` with a time-aware context or other behavior.
 
-Skill pack 必须把后者标注为 local overlay，并要求使用前检查当前 checkout。
+The skill pack must label the latter as a local overlay and require checking the current checkout before use.

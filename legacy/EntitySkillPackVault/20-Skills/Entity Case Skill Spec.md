@@ -1,65 +1,65 @@
-# Entity Case Skill 规范
+# Entity Case Skill Spec
 
-## 使命
+## Mission
 
-维护一个 Entity simulation case 的一致性。
+Maintain the consistency of an Entity simulation case.
 
-一个 case 不是单独的 TOML，也不是单独的 `pgen.hpp`，而是：
+A case is not a standalone TOML, nor a standalone `pgen.hpp`, but:
 
 ```text
-TOML + pgen.hpp + setup 参数 + species + boundaries + output requests
+TOML + pgen.hpp + setup parameters + species + boundaries + output requests
 ```
 
-本 skill 的第一职责是让 agent 理解 PGen 的结构和 API，然后检查 TOML 与 PGen 是否一致。
+The first responsibility of this skill is to help the agent understand the structure and API of a PGen, then check whether the TOML and the PGen are consistent.
 
-## 不适用场景
+## Out of Scope
 
-本 skill 不负责：
+This skill does not handle:
 
-- 构建 Kokkos/ADIOS2/MPI/HDF5 环境；
-- 选择 CMake backend；
-- 修改 Entity `src/` 核心代码；
-- 分析输出数据的物理结论；
-- 写长期交接文档。
+- building the Kokkos/ADIOS2/MPI/HDF5 environment;
+- choosing the CMake backend;
+- modifying Entity `src/` core code;
+- drawing physics conclusions from output data;
+- writing long-term handover documentation.
 
-这些分别交给 env-build、core-dev、analysis 和 docs。
+Those go to env-build, core-dev, analysis, and docs respectively.
 
 ## PGen Source of Truth
 
-PGen API 高度版本敏感。使用前必须从目标 Entity checkout 核对：
+The PGen API is highly version-sensitive. Before use, verify against the target Entity checkout:
 
-- `src/global/traits/pgen.h`；
-- `pgens/*/pgen.hpp`；
-- `examples/*/pgen.hpp`；
-- `src/engines/reporter.*` 中报告的 PGen hooks；
-- `src/engines/*/fields_bcs.*`；
-- `src/engines/*/fieldsolvers.*`；
-- `src/engines/engine.hpp` 中调用 PGen hooks 的位置。
+- `src/global/traits/pgen.h`;
+- `pgens/*/pgen.hpp`;
+- `examples/*/pgen.hpp`;
+- the PGen hooks reported in `src/engines/reporter.*`;
+- `src/engines/*/fields_bcs.*`;
+- `src/engines/*/fieldsolvers.*`;
+- where PGen hooks are invoked in `src/engines/engine.hpp`.
 
-Skill 中的 API 总结只能作为导航，不能替代当前 checkout。
+API summaries in the skill are only for navigation; they cannot replace the current checkout.
 
-## PGen 文件结构
+## PGen File Structure
 
-典型 case 目录：
+Typical case directory:
 
 ```text
 pgens/<name>/
-├── pgen.hpp       # 必需，编译期选择
-├── <name>.toml    # 推荐，参考输入
-└── <name>.py      # 可选，可视化或分析脚本
+├── pgen.hpp       # required, selected at compile time
+├── <name>.toml    # recommended, reference input
+└── <name>.py      # optional, visualization or analysis script
 ```
 
-Entity 通过 CMake 选项选择 PGen：
+Entity selects the PGen via a CMake option:
 
 ```bash
 cmake -B build/<name> -D pgen=<name>
 ```
 
-如果 `pgen.hpp` 修改了，通常需要重新编译 Entity。
+If `pgen.hpp` is modified, Entity usually needs to be rebuilt.
 
-## PGen 顶层结构
+## PGen Top-Level Structure
 
-PGen 必须位于 `namespace user` 中，典型结构如下：
+A PGen must live in `namespace user`. A typical structure:
 
 ```cpp
 namespace user {
@@ -89,57 +89,57 @@ namespace user {
 }
 ```
 
-注意：旧资料中可能出现 `static constexpr auto engines = { SimEngine::SRPIC }` 这类写法。当前 checkout 是否支持，必须以 `src/global/traits/pgen.h` 和现有 pgen 为准。1.4.x 常见写法是 `traits::pgen::compatible_with<...>{}`。
+Note: older material may show forms like `static constexpr auto engines = { SimEngine::SRPIC }`. Whether the current checkout supports that must be determined from `src/global/traits/pgen.h` and the existing pgens. The common 1.4.x form is `traits::pgen::compatible_with<...>{}`.
 
 ## Compatibility Traits
 
-PGen 应声明支持的：
+A PGen should declare the supported:
 
-- engines；
-- metrics；
-- dimensions。
+- engines;
+- metrics;
+- dimensions.
 
-常见 engine：
+Common engines:
 
-- `SimEngine::SRPIC`；
-- `SimEngine::GRPIC`。
+- `SimEngine::SRPIC`;
+- `SimEngine::GRPIC`.
 
-常见 metric：
+Common metrics:
 
-- `Metric::Minkowski`；
-- `Metric::Spherical`；
-- `Metric::QSpherical`；
-- `Metric::Kerr_Schild`；
-- `Metric::QKerr_Schild`；
-- `Metric::Kerr_Schild_0`。
+- `Metric::Minkowski`;
+- `Metric::Spherical`;
+- `Metric::QSpherical`;
+- `Metric::Kerr_Schild`;
+- `Metric::QKerr_Schild`;
+- `Metric::Kerr_Schild_0`.
 
-常见 dimension：
+Common dimensions:
 
-- `Dim::_1D`；
-- `Dim::_2D`；
-- `Dim::_3D`。
+- `Dim::_1D`;
+- `Dim::_2D`;
+- `Dim::_3D`.
 
-TOML 中的 `simulation.engine`、`grid.metric.metric` 和 `grid.resolution` 维度必须与 PGen traits 一致。
+The TOML `simulation.engine`, `grid.metric.metric`, and the dimension implied by `grid.resolution` must be consistent with the PGen traits.
 
-## 参数读取
+## Parameter Reading
 
-PGen 通常从 `SimulationParams` 读取 TOML 参数：
+A PGen usually reads TOML parameters from `SimulationParams`:
 
 ```cpp
 const auto value = params.template get<real_t>("setup.value", 1.0);
 const auto required = params.template get<real_t>("setup.required");
 ```
 
-约定：
+Conventions:
 
-- PGen 自定义参数优先放在 `[setup]` 下；
-- 有默认值的参数应记录默认值；
-- 必需参数应在参考 TOML 或 case note 中明确；
-- 参数路径必须和 TOML 层级一致。
+- PGen custom parameters should live under `[setup]`;
+- parameters with defaults should document their defaults;
+- required parameters should be stated explicitly in the reference TOML or case note;
+- parameter paths must match the TOML hierarchy.
 
-## Field Initialization：`init_flds`
+## Field Initialization: `init_flds`
 
-如果 PGen 提供初始场，通常定义一个 field initializer，并在 PGen 中放置名为 `init_flds` 的成员。
+If the PGen provides initial fields, it usually defines a field initializer and places a member named `init_flds` in the PGen.
 
 ```cpp
 template <Dimension D>
@@ -156,18 +156,18 @@ struct InitFields {
 InitFields<D> init_flds;
 ```
 
-规则：
+Rules:
 
-- 成员名通常必须是 `init_flds`；
-- 方法名按 `ex1/ex2/ex3`、`bx1/bx2/bx3`；
-- 参数通常是 physical coordinates；
-- SRPIC 通常按 local tetrad/orthonormal basis 给场；
-- GRPIC 场 basis 和坐标约定必须按当前 checkout/wiki 核对；
-- 代码会处理 staggering 和内部转换，但不能把 code units 与 physical units 混用。
+- the member name must usually be `init_flds`;
+- method names follow `ex1/ex2/ex3`, `bx1/bx2/bx3`;
+- arguments are usually physical coordinates;
+- SRPIC usually specifies fields in the local tetrad/orthonormal basis;
+- GRPIC field basis and coordinate conventions must be verified against the current checkout/wiki;
+- the code handles staggering and internal conversions, but code units and physical units must not be mixed.
 
-## Particle Initialization：`InitPrtls`
+## Particle Initialization: `InitPrtls`
 
-`InitPrtls` 在 simulation start 时对每个 local domain 初始化粒子：
+`InitPrtls` initializes particles for each local domain at simulation start:
 
 ```cpp
 void InitPrtls(Domain<S, M>& local_domain) {
@@ -175,45 +175,45 @@ void InitPrtls(Domain<S, M>& local_domain) {
 }
 ```
 
-常见职责：
+Common responsibilities:
 
-- 根据 TOML species 初始化电子、离子、正电子、光子等；
-- 使用 built-in energy/spatial distribution；
-- 使用 `arch::InjectUniform...` 或 `arch::InjectNonUniform...`；
-- 从 `[setup]` 读取密度、温度、漂移速度、层宽等参数；
-- 注意 species index 与 TOML `[[particles.species]]` 的一致性。
+- initialize electrons, ions, positrons, photons, etc. according to the TOML species;
+- use built-in energy/spatial distributions;
+- use `arch::InjectUniform...` or `arch::InjectNonUniform...`;
+- read density, temperature, drift velocity, layer width, and similar parameters from `[setup]`;
+- pay attention to the consistency between species index and TOML `[[particles.species]]`.
 
-注意：
+Note:
 
-- Entity 代码中 species index 经常是 1-indexed；
-- C++ 容器访问经常是 0-indexed；
-- agent 必须根据当前 API 和调用点确认这一点，不能凭直觉混用。
+- species index in Entity code is often 1-indexed;
+- C++ container access is often 0-indexed;
+- the agent must confirm this against the current API and call sites, and must not mix them by intuition.
 
-## Spatial 和 Energy Distribution
+## Spatial and Energy Distributions
 
-PGen 可以定义自定义空间分布和能量/速度分布。
+A PGen can define custom spatial distributions and energy/velocity distributions.
 
-典型用途：
+Typical use cases:
 
-- current sheet；
-- shock；
-- turbulence；
-- localized injection；
-- atmosphere；
-- beam / streaming setup。
+- current sheet;
+- shock;
+- turbulence;
+- localized injection;
+- atmosphere;
+- beam / streaming setup.
 
-设计要求：
+Design requirements:
 
-- 分布函数应明确输入坐标是 physical coordinates 还是 code coordinates；
-- 速度/动量 basis 必须明确；
-- 随机数 pool 的使用必须符合 Kokkos/device 约束；
-- 分布参数应来自 `[setup]` 或 PGen constructor。
+- distribution functions should state explicitly whether input coordinates are physical coordinates or code coordinates;
+- the velocity/momentum basis must be explicit;
+- random number pool usage must satisfy Kokkos/device constraints;
+- distribution parameters should come from `[setup]` or the PGen constructor.
 
 ## Boundary Hooks
 
-PGen 可以提供 field boundary behavior。
+A PGen can provide field boundary behavior.
 
-常见 hooks：
+Common hooks:
 
 ```cpp
 auto MatchFields(simtime_t time) const -> FieldProvider;
@@ -222,22 +222,22 @@ auto MatchFieldsInX2(simtime_t time) const -> FieldProvider;
 auto MatchFieldsInX3(simtime_t time) const -> FieldProvider;
 ```
 
-以及 fixed-field behavior：
+And fixed-field behavior:
 
 ```cpp
 auto FixFieldsConst(simtime_t time, const bc_in& bc, em comp) const
   -> std::pair<real_t, bool>;
 ```
 
-注意：
+Note:
 
-- 具体签名随版本变化，必须以 `fields_bcs` 和 `traits/pgen.h` 为准；
-- TOML boundary 如果使用 `MATCH`、`FIXED` 或 `CUSTOM`，PGen 必须提供对应逻辑；
-- spherical/GR 边界可能由框架自动设置一部分，不能照搬 cartesian 逻辑。
+- exact signatures change across versions; defer to `fields_bcs` and `traits/pgen.h`;
+- if the TOML boundary uses `MATCH`, `FIXED`, or `CUSTOM`, the PGen must provide the corresponding logic;
+- spherical/GR boundaries may be partially set automatically by the framework; cartesian logic must not be copied over blindly.
 
-## Runtime Hook：`CustomPostStep`
+## Runtime Hook: `CustomPostStep`
 
-`CustomPostStep` 在 timestep 末尾调用：
+`CustomPostStep` is called at the end of each timestep:
 
 ```cpp
 void CustomPostStep(timestep_t step, simtime_t time, Domain<S, M>& domain) {
@@ -245,25 +245,25 @@ void CustomPostStep(timestep_t step, simtime_t time, Domain<S, M>& domain) {
 }
 ```
 
-常见用途：
+Common uses:
 
-- runtime particle injection；
-- 改变 boundary condition；
-- 维护自定义 buffer；
-- 执行 case-specific physics。
+- runtime particle injection;
+- changing boundary conditions;
+- maintaining custom buffers;
+- executing case-specific physics.
 
-风险：
+Risks:
 
-- `Domain` 内部 raw quantities 往往是 code units；
-- 删除 charged particles 可能破坏 charge conservation；
-- 在这里实现外部源可能绕过正确的 field solver/source path；
-- 如果功能属于核心算法，应该路由到 core-dev，而不是塞进 PGen。
+- raw quantities inside `Domain` are often in code units;
+- deleting charged particles may break charge conservation;
+- implementing an external source here may bypass the proper field solver/source path;
+- if a feature belongs to the core algorithm, it should be routed to core-dev rather than stuffed into the PGen.
 
-## External Force：`ext_force`
+## External Force: `ext_force`
 
-PGen 可定义名为 `ext_force` 的成员，为指定 species 提供外力。
+A PGen can define a member named `ext_force` to provide an external force for specified species.
 
-典型形式：
+Typical form:
 
 ```cpp
 struct ExtForce {
@@ -277,18 +277,18 @@ struct ExtForce {
 ExtForce ext_force;
 ```
 
-注意：
+Note:
 
-- 签名必须按当前 checkout 核对；
-- species 列表与 TOML species 必须一致；
-- force basis 和单位必须明确；
-- 部分 methods 可能是 optional，由 traits 检测。
+- the signature must be verified against the current checkout;
+- the species list must be consistent with the TOML species;
+- force basis and units must be explicit;
+- some methods may be optional, detected via traits.
 
-## External Current：`ext_current`
+## External Current: `ext_current`
 
-PGen 可定义名为 `ext_current` 的成员，为 Ampere law 提供外部电流源。
+A PGen can define a member named `ext_current` to provide an external current source for Ampere's law.
 
-典型形式：
+Typical form:
 
 ```cpp
 struct ExtCurrent {
@@ -300,23 +300,23 @@ struct ExtCurrent {
 ExtCurrent ext_current;
 ```
 
-注意：
+Note:
 
-- 官方上游可能限制 `ext_current` 只用于 Minkowski/SRPIC 路径；
-- 本地 fork 可能扩展过它，但必须标为 local overlay；
-- 时间 staggering、source time 和 field solver 调用点是高风险点；
-- 任何涉及 `src/kernels/ampere*` 或 engine time ownership 的改动都应路由到 core-dev。
+- official upstream may restrict `ext_current` to the Minkowski/SRPIC path;
+- a local fork may have extended it, but that must be marked as a local overlay;
+- time staggering, source time, and field solver call sites are high-risk points;
+- any change involving `src/kernels/ampere*` or engine time ownership should be routed to core-dev.
 
 ## Custom Field Output
 
-TOML 中可以请求 custom field output：
+Custom field output can be requested in the TOML:
 
 ```toml
 [output.fields]
 custom = ["my_field"]
 ```
 
-PGen 需要提供对应 hook，例如：
+The PGen needs to provide the corresponding hook, for example:
 
 ```cpp
 void CustomFieldOutput(
@@ -332,23 +332,23 @@ void CustomFieldOutput(
 }
 ```
 
-注意：
+Note:
 
-- 具体 buffer 类型和签名必须以当前 checkout 为准；
-- custom field 名称必须与 TOML `custom` 列表一致；
-- 输出 quantity 应尽量 resolution-independent；
-- 如果 quantity 需要从粒子重新 deposit，必须说明 oracle 和数值误差。
+- the exact buffer type and signature must defer to the current checkout;
+- custom field names must match the TOML `custom` list;
+- output quantities should be as resolution-independent as possible;
+- if a quantity must be re-deposited from particles, the oracle and numerical error must be documented.
 
 ## Custom Stats
 
-TOML 中可以请求 custom scalar stats：
+Custom scalar stats can be requested in the TOML:
 
 ```toml
 [output.stats]
 custom = ["my_stat"]
 ```
 
-PGen 需要提供对应 hook。1.4.x 中常见签名包含 `name`、`step`、`time`、`domain`，但必须以 checkout 为准：
+The PGen needs to provide the corresponding hook. The common 1.4.x signature includes `name`, `step`, `time`, `domain`, but defer to the checkout:
 
 ```cpp
 real_t CustomStat(
@@ -358,17 +358,17 @@ real_t CustomStat(
     const Domain<S, M>& domain) const;
 ```
 
-注意：
+Note:
 
-- stats 通常会跨 local domains 做 reduction；
-- 返回值应明确是否是 sum、average 或局部量；
-- 名称必须与 TOML `custom` 一致。
+- stats are usually reduced across local domains;
+- the return value should state whether it is a sum, an average, or a local quantity;
+- the name must match the TOML `custom` list.
 
 ## Custom Particle Update
 
-Entity 支持 case-specific particle update hook，用于定制粒子 push 或边界响应。
+Entity supports a case-specific particle update hook for customizing particle push or boundary response.
 
-典型模式是 PGen 返回一个 functor：
+The typical pattern is that the PGen returns a functor:
 
 ```cpp
 template <class D>
@@ -376,87 +376,87 @@ auto CustomParticleUpdate(simtime_t time, spidx_t sp, D& domain) const
   -> CustomPrtlUpdate;
 ```
 
-functor 在 device/kernel context 中运行，必须满足 Kokkos 约束。
+The functor runs in a device/kernel context and must satisfy Kokkos constraints.
 
-用途：
+Uses:
 
-- 特殊反射边界；
-- 速度重采样；
-- case-specific particle update；
-- payload 更新。
+- special reflecting boundaries;
+- velocity resampling;
+- case-specific particle update;
+- payload updates.
 
-风险：
+Risks:
 
-- host/device 捕获错误；
-- species index 混用；
-- 位置坐标和 metric transform 使用错误；
-- 与标准 pusher、boundary condition 或 charge conservation 交互复杂。
+- host/device capture errors;
+- species index mix-ups;
+- incorrect use of position coordinates and metric transforms;
+- complex interactions with the standard pusher, boundary conditions, or charge conservation.
 
-## PGen API 检查表
+## PGen API Checklist
 
-Agent 在读写 PGen 时至少检查：
+When reading or writing a PGen, the agent checks at least:
 
-- `namespace user` 是否正确；
-- `PGen` template 参数是否符合当前版本；
-- compatibility traits 是否与 TOML 匹配；
-- constructor 是否保存 `params` 和必要的 `metadomain`；
-- `init_flds` 是否存在且名称正确；
-- `InitPrtls` 是否使用正确 species；
-- `[setup]` 参数是否全部在 TOML 中有说明；
-- boundaries 是否需要对应 hooks；
-- custom output/stat 名称是否与 TOML 一致；
-- `CustomPostStep` 是否误用 code units/physical units；
-- ext_force/ext_current 是否受 engine/metric 限制；
-- 修改 PGen 后是否提醒重新编译。
+- whether `namespace user` is correct;
+- whether the `PGen` template parameters match the current version;
+- whether compatibility traits match the TOML;
+- whether the constructor stores `params` and the necessary `metadomain`;
+- whether `init_flds` exists and is named correctly;
+- whether `InitPrtls` uses the correct species;
+- whether all `[setup]` parameters are documented in the TOML;
+- whether boundaries require corresponding hooks;
+- whether custom output/stat names match the TOML;
+- whether `CustomPostStep` misuses code units/physical units;
+- whether ext_force/ext_current are subject to engine/metric restrictions;
+- whether a rebuild reminder is given after modifying the PGen.
 
-## TOML-PGen 契约
+## TOML-PGen Contract
 
-TOML 和 PGen 是同一个 case 的两半。Agent 不能只检查其中一个。
+TOML and PGen are the two halves of the same case. The agent must not check only one of them.
 
-TOML 提供：
+TOML provides:
 
-- engine、metric、dimension；
-- grid、boundaries、scales；
-- species 定义；
-- output requests；
-- PGen 自定义 `[setup]` 参数。
+- engine, metric, dimension;
+- grid, boundaries, scales;
+- species definitions;
+- output requests;
+- PGen custom `[setup]` parameters.
 
-PGen 提供：
+PGen provides:
 
-- 对 engine/metric/dimension 的 compile-time compatibility；
-- 初始场；
-- 初始粒子；
-- 自定义边界、外力、电流、输出和 runtime hooks；
-- 对 `[setup]` 参数的解释。
+- compile-time compatibility with engine/metric/dimension;
+- initial fields;
+- initial particles;
+- custom boundaries, external forces, currents, outputs, and runtime hooks;
+- interpretation of the `[setup]` parameters.
 
-## 契约 1：Engine / Metric / Dimension
+## Contract 1: Engine / Metric / Dimension
 
-TOML 中这些字段必须与 PGen traits 一致：
+These TOML fields must be consistent with the PGen traits:
 
 ```toml
 [simulation]
 engine = "SRPIC"  # or "GRPIC"
 
 [grid]
-resolution = [nx, ny, nz]  # 长度决定维度
+resolution = [nx, ny, nz]  # length determines the dimension
 
 [grid.metric]
 metric = "Minkowski"
 ```
 
-检查规则：
+Check rules:
 
-- `simulation.engine` 必须在 PGen `engines` traits 中；
-- `grid.metric.metric` 必须在 PGen `metrics` traits 中；
-- `grid.resolution` 推出的维度必须在 PGen `dimensions` traits 中；
-- GRPIC case 不应误用只支持 SRPIC 的 PGen；
-- spherical/GR metric 的 boundary 和 coordinate 规则不能照搬 Minkowski/cartesian case。
+- `simulation.engine` must be in the PGen `engines` traits;
+- `grid.metric.metric` must be in the PGen `metrics` traits;
+- the dimension implied by `grid.resolution` must be in the PGen `dimensions` traits;
+- a GRPIC case must not misuse a PGen that only supports SRPIC;
+- boundary and coordinate rules for spherical/GR metrics must not be copied from a Minkowski/cartesian case.
 
-如果这三者不一致，case 不成立，应先修 TOML 或 PGen traits。
+If these three are inconsistent, the case is invalid; fix the TOML or the PGen traits first.
 
-## 契约 2：Species
+## Contract 2: Species
 
-TOML 中 `[[particles.species]]` 定义了 species 的顺序、label、mass、charge、pusher 和容量：
+`[[particles.species]]` in the TOML defines the order, label, mass, charge, pusher, and capacity of species:
 
 ```toml
 [particles]
@@ -475,28 +475,28 @@ charge = 1.0
 maxnpart = 1000000
 ```
 
-PGen 中常见使用方式：
+Common PGen usage:
 
-- `InitPrtls` 按 species index 注入粒子；
-- `ext_force.species` 指定受力 species；
-- custom output/stats 可能按 species 累积 moments；
-- `CustomParticleUpdate` 通常按 `spidx_t sp` 分支。
+- `InitPrtls` injects particles by species index;
+- `ext_force.species` specifies which species feel the force;
+- custom output/stats may accumulate moments per species;
+- `CustomParticleUpdate` usually branches on `spidx_t sp`.
 
-检查规则：
+Check rules:
 
-- PGen 使用的 species index 是否存在；
-- PGen 使用的 species label 是否与 TOML 一致；
-- 1-indexed API 与 0-indexed container access 是否被正确区分；
-- massless species 是否使用合适 pusher；
-- photon/emission species 是否在 TOML 中定义；
-- `maxnpart` 是否覆盖初始注入和 runtime injection；
-- `tracking`、payload 数量是否满足 PGen 使用。
+- whether the species indices used by the PGen exist;
+- whether the species labels used by the PGen match the TOML;
+- whether 1-indexed API and 0-indexed container access are correctly distinguished;
+- whether massless species use an appropriate pusher;
+- whether photon/emission species are defined in the TOML;
+- whether `maxnpart` covers initial injection and runtime injection;
+- whether `tracking` and payload counts satisfy PGen usage.
 
-## 契约 3：`[setup]` 参数
+## Contract 3: `[setup]` Parameters
 
-`[setup]` 是 PGen 自定义参数空间。
+`[setup]` is the PGen custom parameter space.
 
-TOML：
+TOML:
 
 ```toml
 [setup]
@@ -505,42 +505,42 @@ temperature = 1e-3
 cs_width = 0.1
 ```
 
-PGen：
+PGen:
 
 ```cpp
 bg_B { params.template get<real_t>("setup.bg_B", 1.0) }
 cs_width { params.template get<real_t>("setup.cs_width") }
 ```
 
-检查规则：
+Check rules:
 
-- PGen 所有 `params.get("setup.*")` 都应在 case note 中列出；
-- 没有默认值的 `setup.*` 参数必须在 TOML 中出现；
-- 有默认值的参数也应在文档中说明默认值；
-- 参数单位必须明确：code units、physical units、`m0 c^2`、`n0`、`B0` 等；
-- 参数名不能和旧 pgen 或旧分支残留混淆；
-- 如果 PGen 改了 `[setup]` 参数名，对应 TOML 必须同步修改。
+- all `params.get("setup.*")` in the PGen should be listed in the case note;
+- `setup.*` parameters without defaults must appear in the TOML;
+- parameters with defaults should also document the default value;
+- parameter units must be explicit: code units, physical units, `m0 c^2`, `n0`, `B0`, etc.;
+- parameter names must not be confused with leftovers from old pgens or old branches;
+- if the PGen renames a `[setup]` parameter, the corresponding TOML must be updated in sync.
 
-## 契约 4：Scales 与 PGen 物理量
+## Contract 4: Scales and PGen Physical Quantities
 
-TOML 中 `[scales]` 给出归一化尺度，PGen 读取或隐含使用这些尺度。
+The TOML `[scales]` section gives normalization scales, which the PGen reads or uses implicitly.
 
-常见字段包括：
+Common fields include:
 
-- `larmor0`；
-- `skindepth0`；
-- 推导出的 `B0`、`n0`、`q0`、`sigma0`、`omegaB0`。
+- `larmor0`;
+- `skindepth0`;
+- derived `B0`, `n0`, `q0`, `sigma0`, `omegaB0`.
 
-检查规则：
+Check rules:
 
-- PGen 中读取 `scales.*` 的位置必须与 TOML 一致；
-- 初始场强、温度、密度、漂移速度等是否使用同一套归一化；
-- `InitPrtls` 中 physical coordinates 与 `Domain` 内 code units 不要混用；
-- `CustomPostStep` 中 raw `domain` quantities 通常是 code units，应谨慎比较。
+- where the PGen reads `scales.*` must be consistent with the TOML;
+- whether initial field strengths, temperatures, densities, drift velocities, etc. use the same normalization;
+- do not mix physical coordinates in `InitPrtls` with code units inside `Domain`;
+- raw `domain` quantities in `CustomPostStep` are usually in code units; compare them cautiously.
 
-## 契约 5：Boundaries 与 PGen Hooks
+## Contract 5: Boundaries and PGen Hooks
 
-TOML boundary 决定框架如何处理边界：
+The TOML boundary determines how the framework treats boundaries:
 
 ```toml
 [grid.boundaries]
@@ -548,33 +548,33 @@ fields = [["MATCH"], ["PERIODIC"]]
 particles = [["ABSORB"], ["PERIODIC"]]
 ```
 
-如果 TOML 使用：
+If the TOML uses:
 
-- `MATCH`：PGen 可能需要 `MatchFields` 或 `MatchFieldsInX*`；
-- `FIXED`：PGen 可能需要 `FixFieldsConst`；
-- `CUSTOM`：PGen 必须提供对应 custom behavior；
-- `ATMOSPHERE`：TOML 需要 atmosphere 参数，PGen 也可能假设特定 species；
-- runtime boundary change：PGen 可能在 `CustomPostStep` 中调用 `metadomain.setFldsBC` 或 `setPrtlBC`。
+- `MATCH`: the PGen may need `MatchFields` or `MatchFieldsInX*`;
+- `FIXED`: the PGen may need `FixFieldsConst`;
+- `CUSTOM`: the PGen must provide the corresponding custom behavior;
+- `ATMOSPHERE`: the TOML needs atmosphere parameters, and the PGen may also assume specific species;
+- runtime boundary change: the PGen may call `metadomain.setFldsBC` or `setPrtlBC` in `CustomPostStep`.
 
-检查规则：
+Check rules:
 
-- TOML boundary type 是否被当前 engine/metric 支持；
-- PGen 是否提供所需 hook；
-- hook 是否覆盖对应方向；
-- spherical/GR 自动边界是否被误手动指定；
-- particle boundary 与 field boundary 是否物理一致；
-- runtime 改 boundary 是否有明确触发时间和风险说明。
+- whether the TOML boundary type is supported by the current engine/metric;
+- whether the PGen provides the required hook;
+- whether the hook covers the corresponding direction;
+- whether spherical/GR automatic boundaries are mistakenly specified manually;
+- whether particle boundaries and field boundaries are physically consistent;
+- whether runtime boundary changes have a clear trigger time and risk notes.
 
-## 契约 6：Output Requests 与 PGen Custom Hooks
+## Contract 6: Output Requests and PGen Custom Hooks
 
-TOML 中标准输出不一定需要 PGen hook：
+Standard output in the TOML does not necessarily need a PGen hook:
 
 ```toml
 [output.fields]
 quantities = ["E", "B", "Rho", "N"]
 ```
 
-但 custom output 必须和 PGen 对齐：
+But custom output must align with the PGen:
 
 ```toml
 [output.fields]
@@ -584,91 +584,91 @@ custom = ["my_field"]
 custom = ["my_stat"]
 ```
 
-检查规则：
+Check rules:
 
-- `output.fields.custom` 中每个名称是否由 `CustomFieldOutput` 处理；
-- `output.stats.custom` 中每个名称是否由 `CustomStat` 处理；
-- custom 名称大小写是否完全一致；
-- custom quantity 的单位、basis、staggering 是否明确；
-- 如果 PGen 在 `CustomPostStep` 预计算 output buffer，要检查更新时机；
-- 如果 output 依赖粒子 moments，要说明 smoothing 和 species selection。
+- whether every name in `output.fields.custom` is handled by `CustomFieldOutput`;
+- whether every name in `output.stats.custom` is handled by `CustomStat`;
+- whether custom names match exactly, including case;
+- whether custom quantity units, basis, and staggering are explicit;
+- if the PGen precomputes an output buffer in `CustomPostStep`, check the update timing;
+- if the output depends on particle moments, document smoothing and species selection.
 
-## 契约 7：Radiation / Emission / Payloads
+## Contract 7: Radiation / Emission / Payloads
 
-如果 TOML species 使用：
+If TOML species use:
 
-- `radiative_drag`；
-- `emission`；
-- `n_payloads_real`；
-- `n_payloads_int`；
-- `tracking`。
+- `radiative_drag`;
+- `emission`;
+- `n_payloads_real`;
+- `n_payloads_int`;
+- `tracking`.
 
-PGen 必须配合：
+The PGen must cooperate by:
 
-- 定义 photon species；
-- 正确引用 emission species index；
-- 不覆盖 reserved payload；
-- 在 custom particle update 中正确维护 payload；
-- 在 output/analysis 中记录 payload 语义。
+- defining photon species;
+- correctly referencing emission species indices;
+- not overwriting reserved payloads;
+- correctly maintaining payloads in custom particle update;
+- documenting payload semantics in output/analysis.
 
-## 契约 8：Checkpoint 与 Restart
+## Contract 8: Checkpoint and Restart
 
-Checkpoint 主要是运行可靠性问题，不属于 PGen API 核心。但 case 设计仍要注意：
+Checkpointing is mainly a run-reliability concern and is not part of the PGen API core. But case design should still note:
 
-- `CustomPostStep` 中的 runtime state 是否能从 checkpoint 恢复；
-- PGen constructor 中的随机初始化是否在 restart 后稳定；
-- custom buffers 或 local flags 是否需要 checkpoint 支持；
-- runtime boundary changes 是否依赖 `time`/`step`，restart 后是否重复触发。
+- whether runtime state in `CustomPostStep` can be restored from a checkpoint;
+- whether random initialization in the PGen constructor is stable after a restart;
+- whether custom buffers or local flags need checkpoint support;
+- whether runtime boundary changes depend on `time`/`step`, and whether they re-trigger after a restart.
 
-如果 case 有不可 checkpoint 的 runtime state，必须在 run manifest 中记录。
+If a case has non-checkpointable runtime state, it must be recorded in the run manifest.
 
-## 契约 9：修改边界与重新编译
+## Contract 9: Modification Boundaries and Rebuilds
 
-只修改 TOML 通常不需要重新编译。
+Modifying only the TOML usually does not require a rebuild.
 
-需要重新编译的情况：
+Changes that require a rebuild:
 
-- 修改 `pgen.hpp`；
-- 新增或删除 PGen hook；
-- 修改 compatibility traits；
-- 修改 compile-time CMake options；
-- 更换 CMake `pgen`；
-- 修改 Entity `src/`。
+- modifying `pgen.hpp`;
+- adding or removing a PGen hook;
+- modifying compatibility traits;
+- modifying compile-time CMake options;
+- switching the CMake `pgen`;
+- modifying Entity `src/`.
 
-只需要重新运行的情况：
+Changes that only require a rerun:
 
-- 修改 `[setup]` 数值但 PGen 参数名不变；
-- 修改 runtime、resolution、extent、output interval；
-- 修改 standard output quantities；
-- 修改 checkpoint policy。
+- modifying `[setup]` values without changing PGen parameter names;
+- modifying runtime, resolution, extent, output interval;
+- modifying standard output quantities;
+- modifying checkpoint policy.
 
-灰区：
+Gray areas:
 
-- 修改 custom output name，需要确认 PGen 是否已支持；
-- 修改 species 数量或顺序，需要确认 PGen index 是否仍正确；
-- 修改 metric/dimension，即使不改 PGen，也可能因 traits 不支持而需要改 PGen 并重编。
+- changing a custom output name requires confirming the PGen already supports it;
+- changing the number or order of species requires confirming the PGen indices are still correct;
+- changing metric/dimension may require modifying and rebuilding the PGen even without PGen edits, because traits may not support it.
 
-## Case 一致性检查顺序
+## Case Consistency Check Order
 
-Agent 应按这个顺序检查 case：
+The agent should check a case in this order:
 
-1. 确认 Entity checkout 和版本桶。
-2. 读取当前 `input.example.toml`，确认 TOML 层级。
-3. 读取目标 TOML。
-4. 读取目标 `pgen.hpp`。
-5. 从 PGen 提取 traits。
-6. 对齐 engine/metric/dimension。
-7. 对齐 species index、label、mass、charge、pusher、payload。
-8. 列出 PGen 读取的 `[setup]` 参数，并和 TOML 对齐。
-9. 对齐 boundaries 与 PGen boundary hooks。
-10. 对齐 custom fields/stats 与 PGen output hooks。
-11. 检查 units、basis、coordinate convention。
-12. 判断是否需要重新编译。
-13. 输出 case consistency report。
+1. Confirm the Entity checkout and version bucket.
+2. Read the current `input.example.toml` and confirm the TOML hierarchy.
+3. Read the target TOML.
+4. Read the target `pgen.hpp`.
+5. Extract traits from the PGen.
+6. Align engine/metric/dimension.
+7. Align species index, label, mass, charge, pusher, payload.
+8. List the `[setup]` parameters the PGen reads, and align them with the TOML.
+9. Align boundaries with PGen boundary hooks.
+10. Align custom fields/stats with PGen output hooks.
+11. Check units, basis, and coordinate conventions.
+12. Decide whether a rebuild is needed.
+13. Output the case consistency report.
 
-## 输出契约
+## Output Contract
 
-本 skill 输出 PGen 相关结论时，应包含：
+When this skill outputs PGen-related conclusions, it should include:
 
 ```yaml
 pgen:

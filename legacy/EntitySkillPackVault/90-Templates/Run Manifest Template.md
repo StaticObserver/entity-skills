@@ -1,6 +1,6 @@
-# Run Manifest 模板
+# Run Manifest Template
 
-下面的 YAML 字段名保留英文，方便 agent 和脚本读取。
+The YAML field names below stay in English so agents and scripts can read them.
 
 ```yaml
 run_id:
@@ -56,4 +56,3 @@ artifacts:
 risks:
   - 
 ```
-

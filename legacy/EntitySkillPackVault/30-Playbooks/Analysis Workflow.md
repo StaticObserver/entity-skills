@@ -1,25 +1,24 @@
-# 分析工作流
+# Analysis Workflow
 
-## 目标
+## Goal
 
-把 simulation output 转换成诊断证据。
+Turn simulation output into diagnostic evidence.
 
-## 步骤
+## Steps
 
-1. 定位 output path 和 metadata。
-2. 如果存在 `.err`，先读 `.err`。
-3. 读取 `.info` 和 stats CSV。
-4. 用 nt2py lazy load。
-5. 加载数组前先按 time/space/species 选择。
-6. 生成所需 plots 和 numeric diagnostics。
-7. 可行时与 expectation 或 previous run 比较。
-8. 标记证据强度。
-9. 保存 script/notebook 和 report。
+1. Locate the output path and metadata.
+2. If a `.err` file exists, read it first.
+3. Read `.info` and the stats CSV.
+4. Use nt2py lazy load.
+5. Select by time/space/species before loading arrays.
+6. Generate the required plots and numeric diagnostics.
+7. Compare against an expectation or a previous run when possible.
+8. Mark the evidence strength.
+9. Save the script/notebook and the report.
 
-## 证据标签
+## Evidence Labels
 
-- visual；
-- numerical；
-- regression；
-- unresolved。
-
+- visual;
+- numerical;
+- regression;
+- unresolved.

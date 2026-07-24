@@ -1,98 +1,98 @@
-# Entity 编译选项参考
+# Entity Compile Options Reference
 
-来源：https://entity-toolkit.github.io/wiki/content/1-getting-started/1-compile-run/
+Source: https://entity-toolkit.github.io/wiki/content/1-getting-started/1-compile-run/
 
-在生成 `requirements.json` 编译字段时，以及在 `entity-deps.local.json` 完成、兼容性为 `pass`、且已生成 `env.sh` 之后生成 `entity-build.sh` 时，使用本参考。
+Use this reference when generating the compile fields of `requirements.json`, and when generating `entity-build.sh` after `entity-deps.local.json` is complete, compatibility is `pass`, and `env.sh` has been generated.
 
-## Configure 模式
+## Configure Mode
 
-从 Entity 仓库根目录运行 CMake：
+Run CMake from the Entity repository root:
 
 ```bash
 cmake -B <build-dir> -D pgen=<PROBLEM_GENERATOR> <options...>
 ```
 
-Problem generator 规则：
+Problem generator rules:
 
-- `pgen` 可以是 `pgens/` 中的内置 problem generator 名称，例如 `reconnection`。
-- `pgen` 可以指向 `entity-pgens` 子模块中的 generator；此时使用 `pgens/` 路径，如 `pgens/kelvin-helmholtz`，并确保子模块已初始化。
-- `pgen` 可以是包含 `pgen.hpp` 的目录的相对或绝对路径。
+- `pgen` can be the name of a built-in problem generator in `pgens/`, for example `reconnection`.
+- `pgen` can point to a generator in the `entity-pgens` submodule; in that case use a `pgens/` path, such as `pgens/kelvin-helmholtz`, and ensure the submodule is initialized.
+- `pgen` can be a relative or absolute path to a directory containing `pgen.hpp`.
 
-布尔 CMake 选项使用 `ON` 或 `OFF`。
+Boolean CMake options use `ON` or `OFF`.
 
-## Entity 构建选项
+## Entity Build Options
 
-| 选项 | 描述 | 取值 | 默认值 | 备注 |
+| Option | Description | Values | Default | Notes |
 | --- | --- | --- | --- | --- |
-| `pgen` | Problem generator | 内置名称、`pgens/...` 或包含 `pgen.hpp` 的路径 | 必填 | 更改 `pgen` 需要重新 configure/build。 |
-| `pgens` | 多个 problem generator | 逗号分隔的 generator 名称/路径 | 可选 | Entity 1.4.0 新增。仅当请求明确需要多个 generator 时使用。 |
-| `precision` | 浮点精度 | `single`、`double` | `single` | 构建期数值类型。 |
-| `deposit` | 电流沉积方案 | `zigzag`、`esirkepov` | `zigzag` | |
-| `shape_order` | deposit 与 pusher 的插值阶数 | `1` 到 `11` | `1` | |
-| `output` | 启用输出 | `ON`、`OFF` | `ON` | 默认意味着依赖环境通常需要 ADIOS2/HDF5 支持。 |
-| `mpi` | 启用多节点支持 | `ON`、`OFF` | `OFF` | 仅当当前需求需要 MPI 时启用。 |
-| `gpu_aware_mpi` | 启用 GPU-aware MPI 通信 | `ON`、`OFF` | `ON` | 除非确认，否则保持保守的环境默认值 `OFF`。 |
-| `DEBUG` | 启用调试模式 | `ON`、`OFF` | `OFF` | 用于调试构建。 |
-| `TESTS` | 编译单元测试 | `ON`、`OFF` | `OFF` | 运行 `ctest` 之前必需。 |
-| `CMAKE_CXX_STANDARD` | C++ 语言标准 | `20` | `20` | `1.4.0` 之前的 Entity 版本不受支持。 |
+| `pgen` | Problem generator | Built-in name, `pgens/...`, or a path containing `pgen.hpp` | Required | Changing `pgen` requires a fresh configure/build. |
+| `pgens` | Multiple problem generators | Comma-separated generator names/paths | Optional | New in Entity 1.4.0. Use only when the request explicitly needs multiple generators. |
+| `precision` | Floating-point precision | `single`, `double` | `single` | Build-time numeric type. |
+| `deposit` | Current deposition scheme | `zigzag`, `esirkepov` | `zigzag` | |
+| `shape_order` | Interpolation order for deposit and pusher | `1` to `11` | `1` | |
+| `output` | Enable output | `ON`, `OFF` | `ON` | Default means the dependency environment usually needs ADIOS2/HDF5 support. |
+| `mpi` | Enable multi-node support | `ON`, `OFF` | `OFF` | Enable only when the current requirements need MPI. |
+| `gpu_aware_mpi` | Enable GPU-aware MPI communication | `ON`, `OFF` | `ON` | Unless confirmed, keep the conservative environment default `OFF`. |
+| `DEBUG` | Enable debug mode | `ON`, `OFF` | `OFF` | For debug builds. |
+| `TESTS` | Compile unit tests | `ON`, `OFF` | `OFF` | Required before running `ctest`. |
+| `CMAKE_CXX_STANDARD` | C++ language standard | `20` | `20` | Entity versions before `1.4.0` are not supported. |
 
-## Entity 版本 profile
+## Entity Version Profiles
 
-Entity 版本决定默认的 C++ 标准与依赖族：
+The Entity version determines the default C++ standard and dependency families:
 
-| Entity 版本 | Profile | C++ 标准 | Kokkos | ADIOS2 | ADIOS2 Kokkos 支持 |
+| Entity version | Profile | C++ standard | Kokkos | ADIOS2 | ADIOS2 Kokkos support |
 | --- | --- | --- | --- | --- | --- |
-| `1.4.0` 及更新 | `modern` | `20` | `5.x` | `2.11.x` | `ON` |
+| `1.4.0` and newer | `modern` | `20` | `5.x` | `2.11.x` | `ON` |
 
-精确的源码构建标签可以在 `requirements.environment.dependency_versions` 中固定，但必须保持在 profile 的版本族之内，除非用户明确接受 override。
+Exact source build tags can be pinned in `requirements.environment.dependency_versions`, but must stay within the profile's version family unless the user explicitly accepts an override.
 
-## Kokkos 与后端选项
+## Kokkos and Backend Options
 
-这些选项用于与 Entity 一起在树内编译 Kokkos/ADIOS2 时。使用外部 Kokkos/ADIOS2 时，这些库通常不需要这些标志，但 Entity 后端配置仍必须与选定的依赖 JSON 及 `env.sh` 保持一致。
+These options apply when compiling Kokkos/ADIOS2 in-tree together with Entity. When using external Kokkos/ADIOS2, these libraries usually do not need these flags, but the Entity backend configuration must still match the selected dependency JSON and `env.sh`.
 
-| 选项 | 描述 | 取值 | 默认值 | 备注 |
+| Option | Description | Values | Default | Notes |
 | --- | --- | --- | --- | --- |
-| `Kokkos_ENABLE_CUDA` | 启用 CUDA 后端 | `ON`、`OFF` | `OFF` | CUDA 构建应使用 Kokkos `nvcc_wrapper` 作为 `CXX`。 |
-| `Kokkos_ENABLE_HIP` | 启用 HIP 后端 | `ON`、`OFF` | `OFF` | 与 ROCm/HIP 环境一起使用。 |
-| `Kokkos_ENABLE_SYCL` | 启用 SYCL 后端 | `ON`、`OFF` | `OFF` | 存在于上游选项中；仅当依赖计划支持时使用。 |
-| `Kokkos_ENABLE_OPENMP` | 启用 OpenMP 后端 | `ON`、`OFF` | `OFF` | 常见的 CPU 后端。 |
-| `Kokkos_ARCH_***` | 选择 CPU/GPU 架构 | Kokkos 架构关键字 | 由 Kokkos 自动检测 | 编译节点与运行节点不同时，优先显式指定架构。 |
+| `Kokkos_ENABLE_CUDA` | Enable the CUDA backend | `ON`, `OFF` | `OFF` | CUDA builds should use the Kokkos `nvcc_wrapper` as `CXX`. |
+| `Kokkos_ENABLE_HIP` | Enable the HIP backend | `ON`, `OFF` | `OFF` | Use together with a ROCm/HIP environment. |
+| `Kokkos_ENABLE_SYCL` | Enable the SYCL backend | `ON`, `OFF` | `OFF` | Present among the upstream options; use only when the dependency plan supports it. |
+| `Kokkos_ENABLE_OPENMP` | Enable the OpenMP backend | `ON`, `OFF` | `OFF` | Common CPU backend. |
+| `Kokkos_ARCH_***` | Select the CPU/GPU architecture | Kokkos architecture keyword | Auto-detected by Kokkos | Prefer specifying the architecture explicitly when the compile node differs from the run node. |
 
-来自 wiki 的架构示例：
+Architecture examples from the wiki:
 
-- NVIDIA A100：`-D Kokkos_ARCH_AMPERE80=ON`
-- NVIDIA V100：`-D Kokkos_ARCH_VOLTA70=ON`
-- AMD MI250X：`-D Kokkos_ARCH_AMD_GFX90A=ON`
+- NVIDIA A100: `-D Kokkos_ARCH_AMPERE80=ON`
+- NVIDIA V100: `-D Kokkos_ARCH_VOLTA70=ON`
+- AMD MI250X: `-D Kokkos_ARCH_AMD_GFX90A=ON`
 
-## 构建、安装与测试命令
+## Build, Install, and Test Commands
 
-configure 之后：
+After configure:
 
 ```bash
 cmake --build <build-dir> -j <NCORES>
 ```
 
-如果省略 `-j <NCORES>` 而只使用 `-j`，CMake 可能使用尽可能多的线程。不带 `-j` 时编译只用一个核心。
+If `-j <NCORES>` is omitted and only `-j` is used, CMake may use as many threads as possible. Without `-j`, compilation uses a single core.
 
-预期可执行文件：
+Expected executable:
 
 ```text
 <build-dir>/src/entity.xc
 ```
 
-可选安装：
+Optional install:
 
 ```bash
 cmake --install <build-dir>
 ```
 
-默认安装位置是 `./bin`；用以下方式覆盖：
+The default install location is `./bin`; override with:
 
 ```bash
 -D CMAKE_INSTALL_PREFIX=<prefix>
 ```
 
-测试：
+Tests:
 
 ```bash
 cmake -B <build-dir> -D TESTS=ON <options...>
@@ -102,24 +102,24 @@ ctest --test-dir <build-dir> --output-on-failure
 ctest --test-dir <build-dir> -R <regex>
 ```
 
-## AMD HIP/ROCm 注意事项
+## AMD HIP/ROCm Notes
 
-对于 HIP/ROCm 构建：
+For HIP/ROCm builds:
 
-- 确保 ROCm 已加载且可发现，例如用 `rocminfo`。
-- 将 `CMAKE_PREFIX_PATH` 设为 ROCm 前缀，通常是 `/opt/rocm`。
-- 使用 `CC=hipcc` 和 `CXX=hipcc`；少数情况下还要传 `-D CMAKE_CXX_COMPILER=hipcc -D CMAKE_C_COMPILER=hipcc`。
-- 使用合适的 Kokkos HIP 后端与架构标志编译，例如 MI250X 用 `-D Kokkos_ENABLE_HIP=ON -D Kokkos_ARCH_AMD_GFX90A=ON`。
-- 在有多个 AMD agent 的机器上，从 `rocminfo`/`rocm-smi` 中识别目标 GPU；运行时可能需要 `HSA_OVERRIDE_GFX_VERSION`、`HIP_VISIBLE_DEVICES` 和 `ROCR_VISIBLE_DEVICES`。
+- Ensure ROCm is loaded and discoverable, e.g., with `rocminfo`.
+- Set `CMAKE_PREFIX_PATH` to the ROCm prefix, usually `/opt/rocm`.
+- Use `CC=hipcc` and `CXX=hipcc`; in rare cases also pass `-D CMAKE_CXX_COMPILER=hipcc -D CMAKE_C_COMPILER=hipcc`.
+- Compile with the appropriate Kokkos HIP backend and architecture flags, e.g., `-D Kokkos_ENABLE_HIP=ON -D Kokkos_ARCH_AMD_GFX90A=ON` for MI250X.
+- On machines with multiple AMD agents, identify the target GPU from `rocminfo`/`rocm-smi`; at runtime `HSA_OVERRIDE_GFX_VERSION`, `HIP_VISIBLE_DEVICES`, and `ROCR_VISIBLE_DEVICES` may be needed.
 
-## 本技能的构建阶段规则
+## Build-Phase Rules for This Skill
 
-- 在生成构建脚本之前，把 Entity 编译选项写入 `requirements.json`。
-- 从 `requirements.json + env.sh` 生成 `entity-build.sh`；不要把手写 configure/build 命令当作事实来源。
-- `entity-build.sh` 必须在 configure 之前 source 生成的 `env.sh`。
-- 从 `entity-deps.local.json` 读取环境输入，从 `requirements.json` 读取编译输入；不要从 shell 历史重建状态。
-- 更改 `pgen`、backend、MPI、precision、deposit、shape order、`DEBUG` 或 `TESTS` 时使用全新的构建目录。
-- 保持 `output`、`mpi` 与 backend 选项与依赖 checkpoint 一致。
-- 当 `requirements.environment.output=true` 时，除非 ADIOS2/HDF5 兼容性已通过，否则不要配置 `output=ON`。
-- 当 `requirements.environment.mpi=false` 时，不要意外使用仅 MPI 的 ADIOS2/HDF5 目标。
-- 当 `requirements.environment.backend=cuda` 时，使用 JSON 中选定的 Kokkos `nvcc_wrapper` 作为 `CXX`。
+- Write the Entity compile options into `requirements.json` before generating build scripts.
+- Generate `entity-build.sh` from `requirements.json + env.sh`; do not treat hand-written configure/build commands as a source of truth.
+- `entity-build.sh` must source the generated `env.sh` before configure.
+- Read environment inputs from `entity-deps.local.json` and compile inputs from `requirements.json`; do not reconstruct state from shell history.
+- Use a fresh build directory when changing `pgen`, backend, MPI, precision, deposit, shape order, `DEBUG`, or `TESTS`.
+- Keep the `output`, `mpi`, and backend options consistent with the dependency checkpoint.
+- When `requirements.environment.output=true`, do not configure `output=ON` unless ADIOS2/HDF5 compatibility has passed.
+- When `requirements.environment.mpi=false`, do not accidentally use MPI-only ADIOS2/HDF5 targets.
+- When `requirements.environment.backend=cuda`, use the Kokkos `nvcc_wrapper` selected in the JSON as `CXX`.

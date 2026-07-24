@@ -1,47 +1,37 @@
 ---
 name: entity-nt2py
-description: 使用 nt2py 读取、检查、可视化和导出 Entity 模拟输出。适用于 nt2py API 问题，以及涉及 Entity 场、粒子、能谱、运行时诊断、绘图、影片、nt2 CLI 或原始 BP5/HDF5 读取器的工作。本技能提供数据访问知识和一个只读盘点探针；它不规定物理诊断方法，也不判断模拟在物理上是否正确。
+description: Use nt2py to read, inspect, visualize, and export Entity simulation output. Applies to nt2py API questions and to work involving Entity fields, particles, spectra, runtime diagnostics, plotting, movies, the nt2 CLI, or raw BP5/HDF5 readers. This skill provides data-access knowledge and a read-only inventory probe; it does not prescribe physics diagnostic methods, nor does it judge whether a simulation is physically correct.
 ---
 
 # Entity nt2py
 
-将 nt2py 用作访问 Entity 输出的灵活接口。科学分析保持开放；
-只对数据发现、内存使用和原始数据安全性加以约束。
+Use nt2py as a flexible interface to Entity output. Scientific analysis stays open-ended; only data discovery, memory usage, and raw-data safety are constrained.
 
-随附的参考文档以 nt2py v1.5.3 为目标。当已安装的软件包和实际输出
-与参考文档不一致时，以它们为准。
+The accompanying references target nt2py v1.5.3. When the installed package and the actual output disagree with the references, the installed package and actual output take precedence.
 
-## 边界
+## Boundaries
 
-处理范围：
+In scope:
 
-- nt2py 安装与数据根目录定位；
-- 场、粒子、能谱和运行时诊断的访问；
-- xarray/Dask 选取、绘图、影片与导出；
-- `nt2` CLI 以及有边界的原始读取器使用；
-- 由用户选定量的推导或可视化代码。
+- nt2py installation and data-root location;
+- access to fields, particles, spectra, and runtime diagnostics;
+- xarray/Dask selection, plotting, movies, and export;
+- the `nt2` CLI and bounded raw-reader usage;
+- derivation or visualization code for quantities chosen by the user.
 
-不要仅凭变量名就定义某个量的物理含义、归一化方式或有效性。
-当解释尚未确立时，阅读相关的 TOML/PGen 契约或询问用户。
-输出损坏或运行失败的诊断不在本技能范围内，应转交他处处理。
+Do not define the physical meaning, normalization, or validity of a quantity from its variable name alone. When the interpretation is not established, read the relevant TOML/PGen contract or ask the user. Diagnosing corrupted output or failed runs is out of scope for this skill and should be handed off elsewhere.
 
-## 最小规则
+## Minimal rules
 
-1. 在编写针对具体数据的分析之前，先检查实际的变量、维度、物种和
-   nt2py 版本。不要从 PGen 名称推断它们。
-2. 在 `.values`、`.load()`、`.compute()` 或绘图之前先选取场和能谱。
-   在 `ParticleDataset.load()` 之前先选取粒子时间/物种和所需列。
-3. 将 Entity 数据根目录视为只读。绘图、帧、notebook、脚本和导出
-   一律写到别处。
-4. 将 API 事实与物理解释分开。没有必要的模拟上下文时，不要把
-   某个视觉模式或变量名提升为科学结论。
-5. 创建产物时，运行相关代码并确认所请求的输出确实存在。用户没有
-   要求时，不要强加报告、notebook、脚本或目录格式。
+1. Before writing analysis against concrete data, inspect the actual variables, dimensions, species, and nt2py version. Do not infer them from the PGen name.
+2. Select fields and spectra before `.values`, `.load()`, `.compute()`, or plotting. Select particle times/species and the needed columns before `ParticleDataset.load()`.
+3. Treat the Entity data root as read-only. Always write plots, frames, notebooks, scripts, and exports elsewhere.
+4. Keep API facts separate from physical interpretation. Without the necessary simulation context, do not promote a visual pattern or variable name into a scientific conclusion.
+5. When creating artifacts, run the relevant code and confirm the requested output actually exists. Do not impose reports, notebooks, scripts, or directory layouts the user did not ask for.
 
-## 探测实际输出
+## Probing the actual output
 
-对于概念性的 nt2py 问题，直接阅读相关参考文档。当有实际的数据根目录
-可用时，先运行只读探针，再选择具体的变量或选取方式：
+For conceptual nt2py questions, read the relevant reference directly. When an actual data root is available, run the read-only probe before choosing concrete variables or selections:
 
 ```bash
 python3 scripts/inspect_nt2_data.py /path/to/data-root
@@ -49,26 +39,20 @@ python3 scripts/inspect_nt2_data.py /path/to/data-root \
   --output /path/to/analysis/nt2-inventory.json
 ```
 
-探针打印 JSON，并可选择将其镜像写入 `--output`。它不会调用
-`print(data)`、粒子 `.nbytes`、粒子 `.load()` 或 Dask 计算。它确实会
-初始化 `nt2.Data`；该库的初始化会读取坐标/分箱信息，并且在 v1.5.3 中，
-为确定形状还会读取第一个已存储的能谱。探针拒绝位于数据根目录内部的
-输出路径。将其 JSON 视为当前证据，而不是持久的分析状态机。
+The probe prints JSON and optionally mirrors it to `--output`. It does not call `print(data)`, particle `.nbytes`, particle `.load()`, or Dask computation. It does initialize `nt2.Data`; the library's initialization reads coordinate/binning information and, in v1.5.3, also reads the first stored spectrum to determine shapes. The probe rejects output paths located inside the data root. Treat its JSON as current evidence, not as a persistent analysis state machine.
 
-如果探针报告版本不匹配，使用它发现的盘点信息，并在依赖版本特定的
-示例之前核对已安装 nt2py 的源码或文档。
+If the probe reports a version mismatch, use the inventory it discovered, and check the installed nt2py source or documentation before relying on version-specific examples.
 
-## 参考文档路由
+## Reference routing
 
-只阅读当前任务所需的参考文档：
+Read only the references the current task needs:
 
-| 任务 | 参考文档 |
+| Task | Reference |
 |---|---|
-| 安装 nt2py、定位数据根目录、初始化 `nt2.Data`、检查诊断 | `references/data-layout-and-loading.md` |
-| 选取场、构建派生数组或使用预计算能谱 | `references/fields-and-spectra.md` |
-| 选取、加载、绘制或导出粒子 | `references/particles.md` |
-| 创建 xarray、inspect、极坐标、相空间或影片输出 | `references/plotting-and-movies.md` |
-| 使用 CLI 或读取精确的 BP5/HDF5 数组 | `references/cli-and-raw-readers.md` |
+| Install nt2py, locate the data root, initialize `nt2.Data`, inspect diagnostics | `references/data-layout-and-loading.md` |
+| Select fields, build derived arrays, or use precomputed spectra | `references/fields-and-spectra.md` |
+| Select, load, plot, or export particles | `references/particles.md` |
+| Create xarray, inspect, polar, phase-space, or movie output | `references/plotting-and-movies.md` |
+| Use the CLI or read exact BP5/HDF5 arrays | `references/cli-and-raw-readers.md` |
 
-默认使用高层容器。仅当需要精确的存储名称/数组，或高层构造失败时，
-才加载原始读取器参考文档。
+Prefer the high-level containers by default. Load the raw-reader reference only when exact storage names/arrays are needed, or when a high-level construction fails.

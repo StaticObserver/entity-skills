@@ -1,8 +1,8 @@
-# Analysis Report 模板
+# Analysis Report Template
 
-## 问题
+## Question
 
-## 数据
+## Data
 
 - output path:
 - Entity commit:
@@ -11,21 +11,20 @@
 - time range:
 - species:
 
-## 方法
+## Method
 
-## 结果
+## Results
 
-## 证据强度
+## Evidence Strength
 
 visual | numerical | regression | unresolved
 
-## 图表
+## Figures
 
 ## Caveats
 
-## 可复现性
+## Reproducibility
 
 ```bash
 
 ```
-

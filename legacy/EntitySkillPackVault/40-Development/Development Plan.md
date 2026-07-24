@@ -1,94 +1,93 @@
-# 开发计划
+# Development Plan
 
-## 目标
+## Goal
 
-把这个 vault 落地成可维护的 Entity skill pack，既支持单 agent 使用，也支持多个专门 agent 协作。
+Turn this vault into a maintainable Entity skill pack that supports both single-agent use and collaboration among multiple specialized agents.
 
-## Phase 0：Vault 基础
+## Phase 0: Vault Foundation
 
-状态：进行中。
+Status: in progress.
 
-交付物：
+Deliverables:
 
-- Obsidian vault 结构；
-- 架构笔记；
-- skill 规范；
-- 开发计划；
-- 初始模板。
+- Obsidian vault structure;
+- architecture notes;
+- skill specifications;
+- development plan;
+- initial templates.
 
-验收：
+Acceptance:
 
-- vault 可以作为连贯的 Obsidian 知识库打开；
-- 每个主要设计笔记都能从 [[Home|首页]] 找到；
-- simulation 和 development 的 skill 边界明确。
+- the vault opens as a coherent Obsidian knowledge base;
+- every major design note is reachable from [[Home|Home]];
+- the skill boundaries for simulation and development are clear.
 
-## Phase 1：最小 Skill Pack
+## Phase 1: Minimal Skill Pack
 
-交付物：
+Deliverables:
 
-- `SKILL.md` router；
-- `core/source-of-truth.md`；
-- `core/code-map.md`；
-- `skills/entity-sim.md`；
-- `skills/entity-dev.md`；
-- run manifest template；
-- development design note template。
+- `SKILL.md` router;
+- `core/source-of-truth.md`;
+- `core/code-map.md`;
+- `skills/entity-sim.md`;
+- `skills/entity-dev.md`;
+- run manifest template;
+- development design note template.
 
-验收：
+Acceptance:
 
-- 单个 agent 可以把 simulation request 路由到 `entity-sim`；
-- 单个 agent 可以把 source-code request 路由到 `entity-dev`；
-- 两个 skill 都要求 checkout/version probing；
-- 两个 skill 都把版本敏感细节交给当前 checkout 文件确认。
+- a single agent can route a simulation request to `entity-sim`;
+- a single agent can route a source-code request to `entity-dev`;
+- both skills require checkout/version probing;
+- both skills defer version-sensitive details to files in the current checkout.
 
-## Phase 2：Analysis 和 Debug Skills
+## Phase 2: Analysis and Debug Skills
 
-交付物：
+Deliverables:
 
-- `skills/entity-analysis.md`；
-- `skills/entity-debug.md`；
-- analysis report template；
-- debugging workflow；
-- nt2py source-of-truth notes。
+- `skills/entity-analysis.md`;
+- `skills/entity-debug.md`;
+- analysis report template;
+- debugging workflow;
+- nt2py source-of-truth notes.
 
-验收：
+Acceptance:
 
-- analysis skill 区分 visual、numerical、regression 和 unresolved 证据；
-- debug skill 覆盖 build/runtime/output/checkpoint/performance 类别；
-- 常见 debug 结论包含 evidence 和 remaining uncertainty。
+- the analysis skill distinguishes visual, numerical, regression, and unresolved evidence;
+- the debug skill covers build/runtime/output/checkpoint/performance categories;
+- common debug conclusions include evidence and remaining uncertainty.
 
-## Phase 3：Playbooks 和 Local Overlays
+## Phase 3: Playbooks and Local Overlays
 
-交付物：
+Deliverables:
 
-- new simulation playbook；
-- reproduce run playbook；
-- add pgen playbook；
-- add output quantity playbook；
-- modify kernel playbook；
-- checkpoint restart playbook；
-- StaticObserver fork 和实验分支的 local overlays。
+- new simulation playbook;
+- reproduce run playbook;
+- add pgen playbook;
+- add output quantity playbook;
+- modify kernel playbook;
+- checkpoint restart playbook;
+- local overlays for the StaticObserver fork and experimental branches.
 
-验收：
+Acceptance:
 
-- local overlays 被标注为本地行为；
-- 官方上游行为没有和 fork 行为混淆；
-- 每个 playbook 都有 inputs、outputs 和 stop conditions。
+- local overlays are labeled as local behavior;
+- official upstream behavior is not conflated with fork behavior;
+- every playbook has inputs, outputs, and stop conditions.
 
-## Phase 4：Packaging 和 Validation
+## Phase 4: Packaging and Validation
 
-交付物：
+Deliverables:
 
-- 最终 skill-pack 目录；
-- README install instructions；
-- smoke examples；
-- validation checklist；
-- 可选 GitHub 发布计划。
+- final skill-pack directory;
+- README install instructions;
+- smoke examples;
+- validation checklist;
+- optional GitHub publishing plan.
 
-验收：
+Acceptance:
 
-- skill pack 可以复制进 agent skills directory；
-- relative links 可用；
-- agent 可以完成一次模拟路由测试且不缺文件；
-- docs 标明当前支持的 Entity version buckets。
-
+- the skill pack can be copied into an agent skills directory;
+- relative links work;
+- an agent can complete a simulation routing test without missing files;
+- docs state the currently supported Entity version buckets.

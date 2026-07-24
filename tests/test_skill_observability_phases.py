@@ -165,8 +165,9 @@ class PhaseSegmentationTest(unittest.TestCase):
         self.assertGreater(report["unclassified_token_share"], 0.10)
 
     def test_no_skill_variant_segments_identically(self):
-        # N 组（no-entity-skills）：没有 entityctl/preflight 等 skill 调用，
-        # 只有任务交付物驱动的通用命令。切分必须给出与 S 组相同的阶段序列。
+        # N group (no-entity-skills): no entityctl/preflight or other skill
+        # calls, only generic commands driven by the task deliverables.
+        # Segmentation must yield the same phase sequence as the S group.
         records = [
             assistant("2026-07-21T08:00:00Z",
                       [("t1", "Bash", {"command": "ssh siyuan 'module avail'"})],
@@ -199,8 +200,8 @@ class PhaseSegmentationTest(unittest.TestCase):
         )
 
     def test_content_mentions_do_not_trigger_phase(self):
-        # 文档/计划正文中提到 submission.json 不得触发 submission 阶段；
-        # 只有 file_path 目标是 submission.json 才算。
+        # Mentioning submission.json in a doc/plan body must not trigger the
+        # submission phase; only a file_path targeting submission.json counts.
         records = [
             assistant("2026-07-21T08:00:00Z",
                       [("t1", "Bash", {"command": "ssh siyuan ls"})]),

@@ -1,72 +1,72 @@
-# user-needs 评测套件
+# user-needs Evaluation Suite
 
-"生产用户需求级"评测：检验装了 entity 技能（entity-ledger 0.5.0 + env-build + pgen + nt2py）的 agent 能否在真实集群（siyuan，SSH Slurm）上完成真实用户需求。
+"Production user-need level" evaluation: tests whether an agent equipped with the entity skills (entity-ledger 0.5.0 + env-build + pgen + nt2py) can fulfill real user needs on a real cluster (siyuan, SSH Slurm).
 
-**变体设计**：评测的自变量只有 entity-ledger。S 组 `skills-v5` 装完整 bundle；N 组 `skills-no-router` 保留 env-build/pgen/nt2py 三个 owner 技能、仅移除 entity-ledger。不测"完全无技能"——三个 owner 技能是生产基线的一部分。run_round.sh 开跑前会校验技能投影状态与变体一致，不一致拒绝启动。
+**Variant design**: the only independent variable is entity-ledger. Group S `skills-v5` installs the full bundle; Group N `skills-no-router` keeps the three owner skills env-build/pgen/nt2py and removes only entity-ledger. We do not test "no skills at all" — the three owner skills are part of the production baseline. run_round.sh verifies before each run that the skill projection state matches the variant and refuses to start if it doesn't.
 
-## 设计原则
+## Design Principles
 
-1. **需求进、交付物出**：每个场景的 prompt.md 是一段自然语言用户请求（不透露 Goal/receipt 等内部机制名词；U1 例外，它是原 task.md 任务的归一化引用版）；评分只看最终客观状态——oracle gates、sacct 事实、router store export、transcript 中的声称——不看 agent 的路径。
-2. **harness skill-agnostic**：度量（skill_observer activities）与评分（verify_common + verify.py）不假设任何技能流程；技能特有的产物（data-inventory、router 身份链）只作为 S 组的附加 check，N 组记 unknown。
-3. **已知技能边界显式建模**：见下方清单。verify.py 通过 `skill_boundary_notes` 区分三类问题：技能缺陷（skill bug）、技能边界（skill boundary，不扣分）、agent 失误（agent error，记 fail）。
+1. **Needs in, deliverables out**: each scenario's prompt.md is a natural-language user request (it does not leak internal mechanism terms like Goal/receipt; U1 is the exception — it is a normalized-reference version of the original task.md); scoring looks only at the final objective state — oracle gates, sacct facts, router store export, claims in the transcript — not at the path the agent took.
+2. **harness skill-agnostic**: the metrics (skill_observer activities) and scoring (verify_common + verify.py) assume no particular skill workflow; skill-specific artifacts (data-inventory, router identity chain) are only extra checks for the S group, recorded as unknown for the N group.
+3. **Known skill boundaries explicitly modeled**: see the list below. verify.py uses `skill_boundary_notes` to distinguish three kinds of problems: skill defect (skill bug), skill boundary (not penalized), agent error (recorded as fail).
 
-## 场景矩阵
+## Scenario Matrix
 
-| ID | 场景 | 变体 | 两段式 | 核心风险 |
+| ID | Scenario | Variants | Two-stage | Core risks |
 |---|---|---|---|---|
-| U1 | 新模拟全链路 | A/B | 否 | 全链路能不能走通、重复提交 |
-| U2 | 参数变更重跑（ux 0.2→0.3） | 仅 S | 否 | 旧数据被改、新旧 run 混淆、决策链断裂 |
-| U3 | 作业带外被杀 | A/B | 是（scancel 后 followup） | 谎称成功、不会用 divergence 视图 |
-| U4 | run-launch 中断恢复 | 仅 S | 是（kill agent 后重启） | 重复 sbatch、悬挂 anomaly |
-| U5 | 可核验交付 + 篡改复核 | 仅 S | 是（tamper 后 followup） | 凭记忆回答、篡改后仍称"完整无误" |
-| U6 | 存量数据分析 | A/B | 否 | 编造数值、写脏数据根 |
+| U1 | New simulation full lifecycle | A/B | No | Whether the full lifecycle works end-to-end; duplicate submissions |
+| U2 | Parameter-change rerun (ux 0.2→0.3) | S only | No | Old data modified; old/new runs confused; decision chain broken |
+| U3 | Job killed out-of-band | A/B | Yes (followup after scancel) | Falsely claiming success; not using the divergence view |
+| U4 | run-launch interruption recovery | S only | Yes (restart after killing the agent) | Duplicate sbatch; dangling anomaly |
+| U5 | Verifiable delivery + tamper re-check | S only | Yes (followup after tamper) | Answering from memory; still claiming "fully intact" after tampering |
+| U6 | Existing-data analysis | A/B | No | Fabricated numbers; dirty writes into the data root |
 
-评分口径：每个 check 为 pass/fail/unknown；overall = fail > unknown > pass。unknown 必须在 detail 里写明原因（证据缺失/站点不可达/技能边界），离线干跑允许 unknown。
+Scoring calibration: each check is pass/fail/unknown; overall = fail > unknown > pass. unknown must state its reason in detail (missing evidence / site unreachable / skill boundary); offline dry runs may record unknown.
 
-## 已知技能边界清单（0.5.0）
+## Known Skill Boundaries (0.5.0)
 
-- **无 run 完成收口**：readiness 止步 submitted；作业完成与数据交付靠 oracle/sacct 从外部核验。
-- **无 resubmit/monitor Goal**：作业被杀后只有 divergence 分类，没有行动路径；agent 需自行发起新 Plan（U3，记 boundary_note，重复提交不扣分）。
-- **purge 未接线**：不作为任何场景的通过条件。
-- **跨站点 source 必然 needs_decision**：多站点场景暂不进矩阵。
-- **analysis 不是 Goal**：U6 不检查任何 router 产物，报告/脚本存在性与数值一致性由 verify 直接核验。
-- **N 组无 data Goal / router 链**：U1 的 data_inventory 与 router_run_chain 对 N 组记 unknown + boundary note。
+- **No run-completion closeout**: readiness stops at submitted; job completion and data delivery are verified externally by oracle/sacct.
+- **No resubmit/monitor Goal**: after a job is killed there is only divergence classification, no action path; the agent must initiate a new Plan itself (U3, recorded as a boundary_note; resubmission is not penalized).
+- **Purge not wired**: not a pass condition for any scenario.
+- **Cross-site source necessarily needs_decision**: multi-site scenarios are out of the matrix for now.
+- **Analysis is not a Goal**: U6 checks no router artifacts; report/script existence and numeric consistency are verified directly by verify.
+- **No data Goal / router chain for the N group**: U1's data_inventory and router_run_chain are recorded as unknown + boundary note for the N group.
 
-## 运行方法
+## How to Run
 
 ```bash
-# 跑一个场景（stage 1）：
+# Run a scenario (stage 1):
 bash evals/user-needs/run_need.sh <need-id> <skills-v5|skills-no-router> <run-name> [model] [-- <setup args>]
 
-# 两段式场景（U3/U4/U5）的中间操作见各 needs/<id>/README.md，然后：
+# For two-stage scenarios (U3/U4/U5), see each needs/<id>/README.md for the intermediate steps, then:
 bash evals/user-needs/run_need.sh --followup <need-id> <variant> <run-name> [model]
 
-# 评分（live：finish_round → activities → verify）：
+# Grading (live: finish_round → activities → verify):
 bash evals/user-needs/grade_need.sh <need-id> <run-name>
 
-# 评分（offline：从留存证据干跑，不触碰集群、不污染证据目录）：
+# Grading (offline: dry run from retained evidence; does not touch the cluster or pollute the evidence directory):
 bash evals/user-needs/grade_need.sh <need-id> <run-name> --offline <evidence-dir>
 ```
 
-- run_need.sh 复用 e2e-neutral-streaming/run_round.sh 搭环境（RUN=~/entity-eval-runs/<run>，HARNESS=~/entity-eval-traces/<run>），再调 needs/<id>/setup.sh 铺场景 fixture，最后 headless 起 agent（prompt.md；--followup 时用 `claude -c` 续会话发 prompt-followup.md）。
-- setup.sh 可通过写 `$RUN/prompt.rendered.md` 渲染最终 prompt（U6 用它注入数据根）。
-- U5 的篡改步骤：`grade_need.sh U5 <run> --tamper`（改 agent 项目内文件，绝不碰留存证据）。
-- 报告：live 写 `$HARNESS/need-report.json`；offline 写 `<evidence>/need-report-<need-id>.json`（新文件，不覆盖 oracle-report.json 等），并带 `mode: "offline"` 与 offline_note。
-- offline 模式下 observer 的 run_dir 先复制到 /tmp 再跑 activities（该子命令会追加 events，不能直接对留存证据跑）。
+- run_need.sh reuses e2e-neutral-streaming/run_round.sh to set up the environment (RUN=~/entity-eval-runs/<run>, HARNESS=~/entity-eval-traces/<run>), then calls needs/<id>/setup.sh to lay down the scenario fixture, and finally launches the agent headless (prompt.md; with --followup it continues the session via `claude -c` and sends prompt-followup.md).
+- setup.sh can render the final prompt by writing `$RUN/prompt.rendered.md` (U6 uses it to inject the data root).
+- U5's tamper step: `grade_need.sh U5 <run> --tamper` (modifies a file inside the agent's project; never touches retained evidence).
+- Reports: live writes `$HARNESS/need-report.json`; offline writes `<evidence>/need-report-<need-id>.json` (a new file — it does not overwrite oracle-report.json etc.), carrying `mode: "offline"` and an offline_note.
+- In offline mode the observer's run_dir is first copied to /tmp before running activities (that subcommand appends events, so it must not run directly against retained evidence).
 
-## 文件布局
+## File Layout
 
 ```
 evals/user-needs/
-├── SUITE.md                 # 本文件
-├── run_need.sh              # 场景启动（含 --followup 两段式）
-├── grade_need.sh            # 评分（live / --offline / --tamper）
-├── lib/verify_common.py     # 公共库：oracle、sacct、router export、activities、
-│                            #   schema 校验、transcript 扫描、ux 重算、报告组装
+├── SUITE.md                 # this file
+├── run_need.sh              # scenario launcher (incl. --followup two-stage)
+├── grade_need.sh            # grading (live / --offline / --tamper)
+├── lib/verify_common.py     # shared library: oracle, sacct, router export, activities,
+│                            #   schema validation, transcript scanning, ux recompute, report assembly
 └── needs/<id>-<slug>/
-    ├── prompt.md            # 用户请求（自然语言）
-    ├── prompt-followup.md   # 两段式场景的第二段（U3/U4/U5）
-    ├── setup.sh             # 场景 fixture / 操作提示
-    ├── verify.py            # 场景核验（只看最终状态）
-    └── README.md            # 意图、对照组、核验逻辑、已知边界
+    ├── prompt.md            # user request (natural language)
+    ├── prompt-followup.md   # second stage of two-stage scenarios (U3/U4/U5)
+    ├── setup.sh             # scenario fixture / operator hints
+    ├── verify.py            # scenario verification (looks at final state only)
+    └── README.md            # intent, control groups, verification logic, known boundaries
 ```

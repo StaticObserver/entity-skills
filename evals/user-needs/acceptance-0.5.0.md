@@ -1,59 +1,61 @@
-# 0.5.0 生产验收报告（user-needs 套件）
+# 0.5.0 Production Acceptance Report (user-needs suite)
 
-被测对象：entity skills bundle 0.5.0（bundle_hash 见各轮 bundle.json）。
-评测框架：evals/user-needs/（场景定义见 SUITE.md，流程见 LIVE-RUN.md）。
-变体：S = skills-v5（完整 bundle）；N = skills-no-router（仅无 entity-ledger）。
-基线对照：S1（2026-07-21）/ Snr1（2026-07-22）留存证据。
+System under test: entity skills bundle 0.5.0 (see each round's bundle.json for the bundle_hash).
+Evaluation framework: evals/user-needs/ (scenario definitions in SUITE.md, procedure in LIVE-RUN.md).
+Variants: S = skills-v5 (full bundle); N = skills-no-router (only entity-ledger removed).
+Baseline comparison: S1 (2026-07-21) / Snr1 (2026-07-22) retained evidence.
 
-> 状态：5/9 轮完成（U1-S、U1-Nr、U6-Nr、U4-S、U6-S）。U2-S/U3-S/U3-Nr/U5-S
-> 被环境阻塞：siyuan 账户级 GPU GRES 自 2026-07-22 ~22:00 起不可用
-> （AssocGrpGRES，GrpTRES 空；两个 agent 独立诊断一致；gold run 前一天可跑），
-> 由 gpu_probe.sh 每 20 分钟探测（cron 4441807b），恢复后按 LIVE-RUN.md 补跑；
-> 因 U2-S 依赖一个 S 组完成的 run，恢复顺序为：重跑 U1-S → U2-S → U3-S/Nr → U5-S。
+> Status: 5/9 rounds complete (U1-S, U1-Nr, U6-Nr, U4-S, U6-S). U2-S/U3-S/U3-Nr/U5-S
+> are blocked by the environment: the siyuan account-level GPU GRES has been
+> unavailable since 2026-07-22 ~22:00 (AssocGrpGRES, GrpTRES empty; two agents
+> independently diagnosed it the same way; the gold run worked the day before),
+> probed every 20 minutes by gpu_probe.sh (cron 4441807b); once it recovers,
+> rerun per LIVE-RUN.md; since U2-S depends on a completed S-group run, the
+> recovery order is: rerun U1-S → U2-S → U3-S/Nr → U5-S.
 
-## 结果总表
+## Results Summary
 
-| 轮次 | 场景 | 组 | overall | 关键事实 | 报告 |
+| Round | Scenario | Group | overall | Key facts | Report |
 |---|---|---|---|---|---|
-| 2026-07-22-U1-S | U1 新模拟全链路 | S | **fail**（操作者按 §5 中止） | GPU 账户级 AssocGrpGRES 阻塞全程（~2h）；agent 试探 router 7 次（doctor/site list）但止步于 onboarding，未 site add 未 plan（share=0.081、手术=0）；67 次提交（26 build/41 sim 含 21 次 wrap 探测）；gcc 11.2 ICE 阻碍构建；agent 改 Entity 源码（get_gpu 补丁）并尝试 CPU 分区跑 sim（违 spec）；未交付 submission.json | need-report.json |
-| 2026-07-22-U1-Nr | U1 | N | **fail**（agent 自行完成交付） | **Gate D 物理全过**（CPU 跑 sim，ux 漂移 2.35%、E² 4.7e-05）；schema ✓；失败项：未交付 input.toml/pgen/analysis 到 project（B/E）、4 次登录节点分析（A）、28 次 sim 提交；sim 作业在 64c512g（违 task.md 的 debuga100 要求，oracle 按 submission 自报值比对未抓——已记为 gate 缺口）；skill 调用仅 env-build | need-report.json |
-| U2-S | U2 参数变更重跑 | S | 阻塞（GPU） | 依赖 U1-S 完成的 GPU run；待 GPU 恢复后补跑 | |
-| U3-S | U3 作业带外被杀 | S | 阻塞（GPU） | 需要 RUNNING 中的 sim 作业才能 scancel | |
-| U3-Nr | U3 | N | 阻塞（GPU） | 同上 | |
-| 2026-07-23-U4-S | U4 中断恢复 | S | **fail**（环境阻塞下的部分结论） | 崩溃恢复：agent 采用 cancel+resubmit（run_a100.sbatch ×4，无并行重复，但每次损失队列位置——router 的 apply/adopt 正是为此设计，agent 却未用）；router 调用 9 次且完成 site add 注册，但始终未执行 plan/apply（onboarding 后回退裸 sbatch）；agent 两次精确诊断 GPU 根因（GrpTRES 空=0 需管理员）并按 task.md 停手；数据未交付（GPU 墙） | need-report.json |
-| U5-S | U5 可核验交付 | S | 阻塞（GPU） | 依赖一次完成交付；待 GPU 恢复 | |
-| U6-S | U6 存量数据分析 | S | _待跑_ | | |
-| 2026-07-23-U6-Nr | U6 | N | **pass**（套件首个 pass） | 报告 ux=0.1985 与独立重算 0.2021 一致；analyze.py 重跑 exit 0；数据根只读；~8 min 完成（对照 U1 轮次数小时） | need-report.json |
+| 2026-07-22-U1-S | U1 new simulation full lifecycle | S | **fail** (operator aborted per §5) | Account-level AssocGrpGRES blocked the entire round (~2h); agent probed the router 7 times (doctor/site list) but stalled at onboarding, never site add, never plan (share=0.081, surgery=0); 67 submissions (26 build/41 sim, including 21 wrap probes); gcc 11.2 ICE blocked the build; agent patched Entity source (get_gpu patch) and tried running sim on a CPU partition (spec violation); submission.json not delivered | need-report.json |
+| 2026-07-22-U1-Nr | U1 | N | **fail** (agent completed delivery on its own) | **Gate D physics fully passed** (sim on CPU, ux drift 2.35%, E² 4.7e-05); schema ✓; failures: input.toml/pgen/analysis not delivered to project (B/E), 4 analyses on the login node (A), 28 sim submissions; sim job ran on 64c512g (violates task.md's debuga100 requirement; oracle compared against the submission's self-reported values and didn't catch it — recorded as a gate gap); skill usage limited to env-build | need-report.json |
+| U2-S | U2 parameter-change rerun | S | blocked (GPU) | Depends on the GPU run completed by U1-S; rerun after GPU recovery | |
+| U3-S | U3 job killed out-of-band | S | blocked (GPU) | Requires a RUNNING sim job to scancel | |
+| U3-Nr | U3 | N | blocked (GPU) | Same as above | |
+| 2026-07-23-U4-S | U4 interrupted-launch recovery | S | **fail** (partial conclusion under environment blockage) | Crash recovery: agent used cancel+resubmit (run_a100.sbatch ×4, no parallel duplicates, but losing queue position each time — the router's apply/adopt is designed exactly for this, yet the agent didn't use it); router invoked 9 times and site add registration completed, but plan/apply was never executed (fell back to bare sbatch after onboarding); agent precisely diagnosed the GPU root cause twice (GrpTRES empty=0, needs admin) and stopped per task.md; data not delivered (GPU wall) | need-report.json |
+| U5-S | U5 verifiable delivery | S | blocked (GPU) | Depends on one completed delivery; waiting for GPU recovery | |
+| U6-S | U6 existing-data analysis | S | _pending_ | | |
+| 2026-07-23-U6-Nr | U6 | N | **pass** (first pass of the suite) | Reported ux=0.1985 consistent with the independent recompute of 0.2021; analyze.py rerun exit 0; data root read-only; completed in ~8 min (vs. hours for the U1 rounds) | need-report.json |
 
-## 1.0.0 候选标准对照
+## Comparison Against 1.0.0 Candidate Criteria
 
-| 标准 | 证据 | 结果 |
+| Criterion | Evidence | Result |
 |---|---|---|
-| 真实 SSH 站点端到端 build→run→data 跑通 | U1-S need-report + router export | **未达成**（GPU 墙 + router 未采用） |
-| 技能脚本命中率 >0 | U1-S activities.json skill_call_share | 0.081（router=7 次但无 plan/apply；指标 bug 修复后口径） |
-| 无 sqlite 控制面手术 | 全部 S 轮 control_plane_surgery_calls | **达成**（U1-S=0、U4-S=0；S1 基线=1） |
-| S1/Snr1 失败点被 gate 拦截 | U1-S oracle Gates B/C/D | 部分（U1-Nr 的 Snr1 式布局已被 Gate B 正确解析；物理 Gate D 在 U1-Nr 全过） |
+| End-to-end build→run→data on a real SSH site | U1-S need-report + router export | **Not met** (GPU wall + router not adopted) |
+| Skill script hit rate >0 | U1-S activities.json skill_call_share | 0.081 (router=7 calls but no plan/apply; metric after the bug-fix calibration) |
+| No sqlite control-plane surgery | control_plane_surgery_calls in all S rounds | **Met** (U1-S=0, U4-S=0; S1 baseline=1) |
+| S1/Snr1 failure points intercepted by gates | U1-S oracle Gates B/C/D | Partial (U1-Nr's Snr1-style layout was correctly parsed by Gate B; physics Gate D fully passed in U1-Nr) |
 
-## 与 S1/Snr1 基线对比（U1 场景）
+## Baseline Comparison vs S1/Snr1 (U1 Scenario)
 
-| 指标 | S1 | Snr1 | U1-S | U1-Nr |
+| Metric | S1 | Snr1 | U1-S | U1-Nr |
 |---|---|---|---|---|
-| sim 提交次数 | 4 | 8（7 成功） | | |
-| 构建类提交 | 8 | 12 | | |
-| 轮询次数（squeue/sacct/scontrol） | 26 | 42 | | |
+| sim submission count | 4 | 8 (7 succeeded) | | |
+| build-class submissions | 8 | 12 | | |
+| poll count (squeue/sacct/scontrol) | 26 | 42 | | |
 | skill_call_share | 0.328 | 0.057 | | |
-| sqlite 手术 | 1 | 0 | | |
+| sqlite surgery | 1 | 0 | | |
 | oracle overall | fail | fail | | |
 
-## 头条发现：router 的 onboarding 摩擦
+## Headline Finding: Router Onboarding Friction
 
-初报"router 采用率为零"是**测量 bug**（skill_adoption 把 `python3 ~/.claude/skills/.../entityctl.py` 的路径执行误判为"读技能文档"而跳过，已修并回归测试）。修正后的事实更有意思：
+The initial report of "zero router adoption" was a **measurement bug** (skill_adoption misclassified path invocations of `python3 ~/.claude/skills/.../entityctl.py` as "reading skill docs" and skipped them; fixed and covered by regression tests). The corrected facts are more interesting:
 
-- U1-S：7 次 entityctl 试探（doctor 带错参数 → usage 错误 → help → doctor → site list），随后**放弃**，全程未 site add、未 plan；
-- U4-S：9 次调用且**成功完成 site add**，但从未执行 `plan --goal` / `apply`——恢复阶段明文说"试试 router 的 plan"，下一秒却回退裸 sbatch；
-- 结论：问题不在"agent 不知道 router"，而在**从 CLI 试探到第一个成功 plan 之间的摩擦**——手写 site profile、手写 GoalSpec JSON、decisions 确认链，每一步都可能报错，而裸 sbatch 一行即可提交。router 的价值（幂等/恢复/归因）要在 apply 之后才显现，onboarding 成本却前置。**0.6.0 的头号需求：降低首个 plan 的启动成本**（如 `entityctl init` 一键生成 site profile + goal 模板、或 agent-facing quickstart playbook）。
+- U1-S: 7 entityctl probes (doctor with wrong arguments → usage error → help → doctor → site list), then **gave up** — never site add, never plan;
+- U4-S: 9 invocations and **site add succeeded**, but `plan --goal` / `apply` was never executed — during recovery the agent literally said "try the router's plan", then fell back to bare sbatch the next second;
+- Conclusion: the problem is not "the agent doesn't know about the router" but the **friction between CLI probing and the first successful plan** — hand-written site profile, hand-written GoalSpec JSON, decisions confirmation chain, every step can fail, while bare sbatch submits in a single line. The router's value (idempotence/recovery/attribution) only appears after apply, yet the onboarding cost is front-loaded. **The top requirement for 0.6.0: lower the startup cost of the first plan** (e.g. `entityctl init` to one-shot generate a site profile + goal template, or an agent-facing quickstart playbook).
 
-## 技能边界与缺陷记录（跑批中累积）
+## Skill Boundaries and Defects Recorded (accumulated during the run batch)
 
-- （已知边界）0.5.0 无 run 完成收口 / 无 resubmit Goal / purge 未接线 / 跨站点 source 必然 needs_decision / analysis 非 Goal。
-- （环境）siyuan 上存在一个 2026-07-20 遗留作业 59839672（dgx2, PENDING/AssocGrpGRES），非本评测产物，不干预。
+- (Known boundaries) 0.5.0 has no run-completion closeout / no resubmit Goal / purge not wired / cross-site source necessarily needs_decision / analysis is not a Goal.
+- (Environment) There is a leftover 2026-07-20 job 59839672 on siyuan (dgx2, PENDING/AssocGrpGRES), not produced by this evaluation; left alone.

@@ -1,4 +1,4 @@
 interface:
   display_name: "Entity Ledger"
-  short_description: "编排多站点的 Entity 模拟 Case"
-  default_prompt: "使用 $entity-ledger 处理这个受管理的 Entity 任务：用 status 读取控制器本地事实，按 render-run → record run-prepare → record run-launch → record run-exit → record data 的原语链路推进，除非需要一次实时的 scheduler 观测，否则只汇报控制器本地的 Status。"
+  short_description: "Orchestrate multi-site Entity simulation Cases"
+  default_prompt: "Use $entity-ledger to handle this managed Entity task: read controller-local facts with status, advance along the primitive chain render-run → record run-prepare → record run-launch → record run-exit → record data, and report only controller-local Status unless a live scheduler observation is needed."

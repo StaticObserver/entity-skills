@@ -1,36 +1,36 @@
-# GCC 构建笔记
+# GCC Build Notes
 
-## 已知不良版本
+## Known Bad Versions
 
-### GCC 12.2.0 ICE：模板代码中的 if constexpr
-- **症状**：`internal compiler error: in tsubst_copy, at cp/pt.cc:17004`
-- **触发**：Entity 1.4.3+ 框架代码在模板密集路径（如 `simulation.cpp`）中使用 `if constexpr` 构造。TOML11 的 `std::source_location::current()` consteval 失败也会触发。
-- **受影响版本**：GCC 12.2.0（可能还有其他 12.x）。GCC 13.3+ 或 11.x 不会触发。
-- **修复**：使用 GCC 13.3+ 或 GCC 11.x。Entity 构建不要使用 GCC 12.x。
-- **检测**：`entity_compat.py` 会把任何 GCC 12.2.x 标记为 `compiler.version.gcc.known_bad`，状态为 WARN。
+### GCC 12.2.0 ICE: if constexpr in template code
+- **Symptom**: `internal compiler error: in tsubst_copy, at cp/pt.cc:17004`
+- **Trigger**: Entity 1.4.3+ framework code uses `if constexpr` constructs in template-heavy paths (e.g., `simulation.cpp`). TOML11's `std::source_location::current()` consteval failure also triggers it.
+- **Affected versions**: GCC 12.2.0 (possibly other 12.x). GCC 13.3+ or 11.x do not trigger it.
+- **Fix**: use GCC 13.3+ or GCC 11.x. Do not use GCC 12.x for Entity builds.
+- **Detection**: `entity_compat.py` flags any GCC 12.2.x as `compiler.version.gcc.known_bad` with status WARN.
 
-## C++ 标准支持
+## C++ Standard Support
 
-| GCC 版本 | C++20 | 备注 |
+| GCC version | C++20 | Notes |
 |-------------|-------|-------|
-| 8.x | 部分 | 不受支持 |
-| 10.4+ | 是 | 最低支持版本 |
-| 11.x | 是 | 安全选择 |
-| 12.x | 是 | **if constexpr 有已知 ICE** |
-| 13.3+ | 是 | Entity >= 1.4.0 推荐 |
+| 8.x | Partial | Not supported |
+| 10.4+ | Yes | Minimum supported version |
+| 11.x | Yes | Safe choice |
+| 12.x | Yes | **Known ICE with if constexpr** |
+| 13.3+ | Yes | Recommended for Entity >= 1.4.0 |
 
-## SDK 兼容性
+## SDK Compatibility
 
 ### NVCC + GCC Host
-- NVCC 包装 host GCC 编译器。host GCC 必须是与 CUDA 工具包兼容的版本：
-  - CUDA 12.0：默认附带 GCC 12.x 头文件；可能需要 `--allow-unsupported-compiler`
-  - CUDA 12.2+：支持 GCC 12.x 与 13.x
-- 使用 conda GCC 时，确保 `libstdc++` 路径在 `LD_LIBRARY_PATH` 中，以获得正确的 ABI 链接。
+- NVCC wraps the host GCC compiler. The host GCC must be a version compatible with the CUDA toolkit:
+  - CUDA 12.0: ships with GCC 12.x headers by default; may need `--allow-unsupported-compiler`
+  - CUDA 12.2+: supports GCC 12.x and 13.x
+- When using conda GCC, ensure the `libstdc++` path is in `LD_LIBRARY_PATH` for correct ABI linking.
 
 ### Spack GCC
-在 HPC 系统上获取更新 GCC 的首选方式：
+The preferred way to obtain a newer GCC on HPC systems:
 ```bash
 spack install gcc@13.3.0
 spack load gcc@13.3.0
 ```
-在搭建环境之前，用 `spack find gcc` 发现可用版本。
+Before setting up the environment, discover available versions with `spack find gcc`.

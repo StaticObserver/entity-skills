@@ -1,60 +1,70 @@
-# Scheduler 后端抽象设计方案（2026-07-23）
+# Scheduler Backend Abstraction Design (2026-07-23)
 
-状态：方案待评审。动机证据：`evals/e2e-neutral-streaming/findings-2026-07-23.md`
-（m87 轮：scheduler=none 站点上 router 主链路零进入，agent 绕过控制面裸跑）。
+Status: design pending review. Motivating evidence: `evals/e2e-neutral-streaming/findings-2026-07-23.md`
+(round m87: on a scheduler=none site the router main path was never entered; the agent ran bare, bypassing the control plane).
 
-## 1. 问题定义
+## 1. Problem Statement
 
-Router 的抽象骨架（GoalSpec 语义层、Site profile 的 `scheduler.kind` 枚举、
-Locator、Step 白名单、意图收据/恢复）是系统无关的；但 **run 生命周期只落地了
-Slurm 一个实现，且没有收口成后端接口**，Slurm 调用散在四个文件：
+The Router's abstract skeleton (GoalSpec semantic layer, the `scheduler.kind`
+enum in the Site profile, Locator, Step whitelist, intent receipts/recovery) is
+system-agnostic; but **the run lifecycle has only a single Slurm implementation,
+and it has not been consolidated behind a backend interface**. Slurm calls are
+scattered across four files:
 
-| 位置 | 耦合点 |
+| Location | Coupling point |
 |---|---|
-| `entity_router_planner.py:434` | `run Goal currently requires a Slurm Site`，plan 硬拒绝 |
-| `entity_router_planner.py:284-295` | policy 强制 `default_partition`/`default_submit_user` |
-| `entity_router_executor.py:178-216` | `render_sbatch`：`run.prepare.v2` 的提交脚本就是 sbatch 脚本 |
+| `entity_router_planner.py:434` | `run Goal currently requires a Slurm Site`, plan hard-rejects |
+| `entity_router_planner.py:284-295` | policy enforces `default_partition`/`default_submit_user` |
+| `entity_router_executor.py:178-216` | `render_sbatch`: the submit script for `run.prepare.v2` is an sbatch script |
 | `entity_router_executor.py:219-253` | preflight = `sbatch --test-only` |
-| `entity_router_executor.py:337-439` | launch = `sbatch --parsable`；恢复用 `squeue`/`sacct` 匹配 comment |
-| `entity_router_operation.py:615-731` | `--live` 与三类 divergence 全部基于 `squeue`/`sacct` |
+| `entity_router_executor.py:337-439` | launch = `sbatch --parsable`; recovery matches comment via `squeue`/`sacct` |
+| `entity_router_operation.py:615-731` | `--live` and all three divergence classes rely on `squeue`/`sacct` |
 | `entityctl.py:394-427` | `site discover` = `sacctmgr list qos` |
 
-本质：**"一次运行的身份"被等同于 Slurm job_id**，缺少
+The essence: **"the identity of a run" is equated with the Slurm job_id**, and
+the unified interface for the backend operations
 `validate_policy / render / preflight / submit / probe / history /
-scan_foreign / recover_match` 这一组后端操作的统一接口。
+scan_foreign / recover_match` is missing.
 
-## 2. 设计原则
+## 2. Design Principles
 
-1. **GoalSpec 不动**。`compute`（gpus/walltime/precision）是用户语义，
-   partition/qos 本来就不是 Goal 字段——抽象缺口不在这一层。
-2. **收据与恢复语义不动**。`pending → intent_written → effect_observed →
-   verified → committed`、同一 Plan 重放恢复、意图先行，全部保留。
-3. **后端选择烘进 Plan，executor 不读 Site profile**。envelope 目前不含
-   profile（executor 可能被推到远端独立执行），planner 按
-   `profile.scheduler.kind` 生成后端专属 request，executor 按 request 里的
-   `scheduler` 字段分发——保持 executor 的单向依赖。
-4. **Slurm 行为逐字节不变**是第一阶段的验收标准；现有收据/plan 不需要迁移。
-5. 不为 `pbs`/`custom` 写实现（枚举保留，报 `PlanError` 指引），本期只加
-   `direct`。
+1. **GoalSpec is untouched.** `compute` (gpus/walltime/precision) is user
+   semantics; partition/qos were never Goal fields — the abstraction gap is not
+   at this layer.
+2. **Receipt and recovery semantics are untouched.** `pending → intent_written →
+   effect_observed → verified → committed`, replay-based recovery of the same
+   Plan, intent-first — all preserved.
+3. **Backend selection is baked into the Plan; the executor does not read the
+   Site profile.** The envelope currently does not contain the profile (the
+   executor may be pushed to a remote host for standalone execution); the
+   planner generates a backend-specific request from `profile.scheduler.kind`,
+   and the executor dispatches on the `scheduler` field in the request —
+   preserving the executor's one-way dependency.
+4. **Byte-for-byte identical Slurm behavior** is the acceptance criterion for
+   phase one; existing receipts/plans need no migration.
+5. Do not write implementations for `pbs`/`custom` (the enum values are kept,
+   with a `PlanError` giving guidance); this phase only adds `direct`.
 
-## 3. 后端接口面
+## 3. Backend Interface Surface
 
-逻辑接口（按 `scheduler.kind` 分发，不是公开 API，先做成各文件内的一张
-分发表 + 每后端一组函数，避免过度工程）：
+Logical interface (dispatched on `scheduler.kind`; not a public API — implement
+it first as one dispatch table per file plus a set of functions per backend, to
+avoid over-engineering):
 
 ```text
-validate_policy(profile)          → policy 缺失时的 needs_decision 问题列表
-render_launch(run_spec, context)  → 提交载体文本（sbatch 脚本 | run.sh）
-preflight(request)                → 提交前验收（sbatch --test-only | 可执行性检查）
-submit(request)                   → effect_identity（见下）
+validate_policy(profile)          → needs_decision question list when policy is missing
+render_launch(run_spec, context)  → submit payload text (sbatch script | run.sh)
+preflight(request)                → pre-submit acceptance (sbatch --test-only | executability check)
+submit(request)                   → effect_identity (see below)
 probe(identity)                   → RUNNING | PENDING | <terminal> | NOT_FOUND
-history(identity, comment)        → 终端态回退查询（sacct | exit-code 文件）
-scan_foreign(run_root, identity)  → 带外作业扫描（squeue %Z | /proc cwd 扫描）
-recover_match(request, comment)   → 中断后认领既有效果（唯一匹配才采纳）
+history(identity, comment)        → terminal-state fallback query (sacct | exit-code file)
+scan_foreign(run_root, identity)  → out-of-band job scan (squeue %Z | /proc cwd scan)
+recover_match(request, comment)   → claim an existing effect after interruption (adopt only on unique match)
 ```
 
-**effect_identity 已是开放结构**（现有收据里就是
-`{"scheduler": "slurm", "job_id": ..., "comment": ...}`），direct 后端扩展为：
+**effect_identity is already an open structure** (existing receipts already carry
+`{"scheduler": "slurm", "job_id": ..., "comment": ...}`); the direct backend
+extends it to:
 
 ```json
 {"scheduler": "direct", "pid": 418795, "pgid": 418795,
@@ -62,61 +72,72 @@ recover_match(request, comment)   → 中断后认领既有效果（唯一匹配
  "exit_file": "<run_root>/.entity-exit-code", "comment": "entity-router:..."}
 ```
 
-旧收据不含这些键，读取路径已按键名取，无需迁移。
+Old receipts lack these keys; the read path already accesses by key name, so no
+migration is needed.
 
-## 4. direct 后端语义（scheduler.kind == "none"）
+## 4. direct Backend Semantics (scheduler.kind == "none")
 
-- **prepare**：渲染 `run.sh`（`set -eu`；`timeout <walltime> exec <executable>
-  -input input.toml`；退出码写入 `.entity-exit-code`）。run-manifest 与
-  Slurm 路径完全一致。
-- **preflight**：可执行文件存在且可执行、run_root 可写、（有 GPU 需求时）
-  `nvidia-smi` 可用。不承诺资源可用性——无调度器站点没有这个概念。
-- **launch**：`setsid nohup bash run.sh >> run.log 2>&1 &`，记录 pid/pgid。
-  恢复时按 comment 扫描 `/proc/*/cmdline`+cwd 认领唯一匹配；多个匹配同样
-  报 terminal anomaly（语义与 Slurm 一致）。
-- **probe**：`kill -0 <pgid>` + exit_file 存在性 → RUNNING / 终端态 / NOT_FOUND。
-- **divergence 降级语义**：`job_gone`/`state_mismatch` 可完整支持；
-  `untracked_job` 靠 /proc 扫描 entity 进程 cwd，**允许 unknown**（权限/
-  容器边界下扫描不可靠），unknown 不算 fail——与评测套件对 known boundary
-  的处理一致。
-- **walltime 由 `timeout` 执行**，超时即 SIGTERM，退出码 124 写入 exit_file。
+- **prepare**: render `run.sh` (`set -eu`; `timeout <walltime> exec <executable>
+  -input input.toml`; exit code written to `.entity-exit-code`). The run-manifest
+  is exactly the same as on the Slurm path.
+- **preflight**: the executable exists and is executable, run_root is writable,
+  and (when GPUs are required) `nvidia-smi` is available. No resource-availability
+  guarantee — scheduler-less sites have no such concept.
+- **launch**: `setsid nohup bash run.sh >> run.log 2>&1 &`, record pid/pgid.
+  On recovery, scan `/proc/*/cmdline`+cwd by comment and claim a unique match;
+  multiple matches likewise report a terminal anomaly (same semantics as Slurm).
+- **probe**: `kill -0 <pgid>` + exit_file existence → RUNNING / terminal state /
+  NOT_FOUND.
+- **degraded divergence semantics**: `job_gone`/`state_mismatch` are fully
+  supported; `untracked_job` relies on a /proc scan of entity process cwd,
+  **unknown is allowed** (scans are unreliable across permission/container
+  boundaries), and unknown does not count as fail — consistent with how the
+  evaluation suite treats known boundaries.
+- **walltime is enforced by `timeout`**; on timeout it sends SIGTERM, and exit
+  code 124 is written to exit_file.
 
-## 5. 涉及文件与改动量（估算）
+## 5. Affected Files and Change Size (estimate)
 
-| 文件 | 改动 | 量级 |
+| File | Change | Size |
 |---|---|---|
-| `entity_router_common.py` | profile 校验按 kind 分发（slurm 保留现有要求） | 小 |
-| `entity_router_planner.py` | 删 :434 硬拒绝；`_site_policy` 按后端要字段；direct 时 steps 的 request 换后端字段 | 中 |
-| `entity_router_executor.py` | `render_sbatch`/`_preflight`/`_launch` 按 request.scheduler 分发；新增 direct 渲染/提交/认领 | 中大 |
-| `entity_router_operation.py` | `status --live`/`_reconcile_job` 按后端分发；direct 的 probe/exit_file 判定 | 中 |
-| `entityctl.py` | `site discover`：none 站点探测 GPU/可执行环境（nvidia-smi、可写根）替代 sacctmgr | 小中 |
-| `tests/test_router_v5.py` 等 | 新增 local + scheduler=none 的端到端：plan→apply→status 全链路本机可测（direct 后端的最大测试红利） | 中 |
-| SKILL.md / router-runtime.md | run Goal 不再写 "requires a Slurm Site"；后端语义各一段 | 小 |
+| `entity_router_common.py` | profile validation dispatched by kind (slurm keeps existing requirements) | small |
+| `entity_router_planner.py` | remove the :434 hard reject; `_site_policy` requires fields per backend; for direct, switch step requests to backend fields | medium |
+| `entity_router_executor.py` | `render_sbatch`/`_preflight`/`_launch` dispatched on request.scheduler; add direct render/submit/claim | medium-large |
+| `entity_router_operation.py` | `status --live`/`_reconcile_job` dispatched per backend; direct probe/exit_file determination | medium |
+| `entityctl.py` | `site discover`: for none sites probe GPU/execution environment (nvidia-smi, writable root) instead of sacctmgr | small-medium |
+| `tests/test_router_v5.py` etc. | add local + scheduler=none end-to-end: plan→apply→status full path testable on a single machine (the direct backend's biggest testing dividend) | medium |
+| SKILL.md / router-runtime.md | run Goal no longer says "requires a Slurm Site"; one paragraph per backend semantics | small |
 
-未读细 `entity_router_remote.py` 与 store 层，量级为估算；remote 只负责
-搬运 envelope，预期不受影响。
+`entity_router_remote.py` and the store layer have not been read in detail, so
+sizes are estimates; remote only moves envelopes and is expected to be
+unaffected.
 
-## 6. 一个显式设计决策：Step kind 不升版
+## 6. One Explicit Design Decision: Step kind Is Not Bumped
 
-`run.prepare.v2`/`run.launch.v2` 的 kind 名保持不变，request 内部字段按后端
-不同（planner 侧已按 plan_hash 绑定不可变内容）。理由：kind 表达的是"生命
-周期阶段"而非"提交机制"，升版会污染白名单且旧 plan 无法对读。代价是
-executor 校验逻辑按 `request.scheduler` 分支——可接受，因为分发表本来就
-要在 executor 落地。
+The kind names `run.prepare.v2`/`run.launch.v2` stay unchanged; the request's
+internal fields differ per backend (the planner side already binds immutable
+content via plan_hash). Rationale: kind expresses the "lifecycle phase", not the
+"submission mechanism"; bumping the version would pollute the whitelist and old
+plans could not be cross-read. The cost is that the executor validation logic
+branches on `request.scheduler` — acceptable, since the dispatch table has to
+land in the executor anyway.
 
-## 7. 分期
+## 7. Phasing
 
-- **Phase A（纯重构）**：把四处 Slurm 调用收口到分发表后面，Slurm 行为
-  逐字节不变，现有测试全绿。可独立发布。
-- **Phase B（direct 后端）**：planner/executor/operation 接 direct；
-  本机 scheduler=none 端到端测试；m87 场景重跑验证 router 主链路可进入。
-- **Phase C（发现与观测）**：`site discover` 的 none 分支、direct divergence
-  的 unknown 语义、SKILL.md 更新。
+- **Phase A (pure refactor)**: consolidate the four Slurm call sites behind the
+  dispatch table; Slurm behavior byte-for-byte identical; all existing tests
+  green. Independently releasable.
+- **Phase B (direct backend)**: planner/executor/operation wire up direct;
+  local scheduler=none end-to-end tests; re-run the m87 scenario to verify the
+  router main path can be entered.
+- **Phase C (discovery and observation)**: the none branch of `site discover`,
+  the unknown semantics of direct divergence, SKILL.md updates.
 
-每期独立可发布（0.6.0 / 0.7.0 / 0.7.x），不捆绑。
+Each phase is independently releasable (0.6.0 / 0.7.0 / 0.7.x), not bundled.
 
-## 8. 明确不做
+## 8. Explicitly Out of Scope
 
-- 不实现 pbs/custom；不在 GoalSpec 加 execution 机制字段；不改收据/身份链
-  schema 主版本；不为 direct 后端加资源互斥（单机 GPU 争抢超出控制面职责，
-  divergence 报告即边界）。
+- No pbs/custom implementation; no execution-mechanism fields added to GoalSpec;
+  no major-version change to the receipt/identity-chain schema; no resource
+  mutual exclusion for the direct backend (GPU contention on a single machine is
+  beyond the control plane's remit — divergence reporting is the boundary).

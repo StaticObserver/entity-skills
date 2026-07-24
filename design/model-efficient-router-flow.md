@@ -1,110 +1,121 @@
-# Entity Router 模型高效执行流程
+# Entity Router Model-Efficient Execution Flow
 
-日期：2026-07-17
-状态：本地核心路径、默认公共入口和多 provider 观测完成；显式授权的 m87 live canary 待执行
+Date: 2026-07-17
+Status: local core path, default public entry, and multi-provider observability completed; the explicitly authorized m87 live canary remains to be executed
 
-实现快照（2026-07-17）：WP0–WP5 的本地 runtime、合同与 replay 测试已落地；
-本地 Slurm fake transport 已验证 launch recovery/watch；Linux `/proc` PID launcher
-已实现“先原子 PID record、再 exec”的恢复协议，但当前 macOS CI 只能验证其安全
-拒绝门。真实 SSH runner staging 和 m87 canary 尚未完成。
-`entityctl flow` 已成为默认受管事务入口，旧低层命令仅用于恢复。Claude/Kimi 原生
-usage 已可读取；matched-scenario token reduction 在 live canary 前仍保持
-`not_assessed`，不能由字符数或不同任务的 session 直接替代。
+Implementation snapshot (2026-07-17): the local runtime, contracts, and replay tests for
+WP0–WP5 are landed; the local Slurm fake transport has verified launch recovery/watch;
+the Linux `/proc` PID launcher implements the "atomic PID record first, then exec"
+recovery protocol, but the current macOS CI can only verify its safe rejection gate.
+Real SSH runner staging and the m87 canary are not yet complete.
+`entityctl flow` has become the default managed-transaction entry point; the legacy
+low-level commands are reserved for recovery only. Claude/Kimi native usage is now
+readable; matched-scenario token reduction stays `not_assessed` until the live canary
+and cannot be replaced by character counts or sessions from different tasks.
 
-| 工作包 | 当前状态 | 剩余门 |
+| Work package | Current status | Remaining gate |
 |---|---|---|
-| WP0 合同/identity | completed | 无 |
-| WP1 inspect/check | completed | 无 |
+| WP0 contracts/identity | completed | none |
+| WP1 inspect/check | completed | none |
 | WP2 deterministic execute | local completed | SSH build runner staging |
 | WP3 launch/watch | local Slurm + Linux PID implemented | SSH live recovery |
 | WP4 data/model Worker | local completed | SSH nt2/Worker staging |
 | WP5 eval/default entry | query canary + native baselines completed | m87 matched-scenario canary |
 
-## 1. 目标与边界
+## 1. Goals and Boundaries
 
-本方案保留 Router v3 的 `Case -> Workflow -> Action -> Worker`、controller
-single-writer、不可变 source/build/run identity、site/path envelope 和证据门禁，
-只增加一个确定性 façade，把状态压缩、固定 Action 执行、恢复和轮询移出模型
-循环。
+This proposal keeps Router v3's `Case -> Workflow -> Action -> Worker`, controller
+single-writer, immutable source/build/run identity, site/path envelope, and evidence
+gates, and only adds a deterministic façade that moves state compression, fixed Action
+execution, recovery, and polling out of the model loop.
 
-目标：
+Goals:
 
-- 模型/工具往返相对基线减少至少 60%；
-- 正常 build/run/data 路径不因中间 Action 成功而唤醒模型；
-- 运行中的无变化轮询不进入模型上下文；
-- Case summary 和正常 terminal result 分别不超过 4 KiB；
-- 失败摘要不超过 8 KiB；
-- 不向模型默认注入完整 Case、完整日志、全量 evidence 或 raw data inventory；
-- 任何效率改进不得弱化 revision、identity、site/path、证据和恢复语义。
+- reduce model/tool roundtrips by at least 60% relative to baseline;
+- the normal build/run/data path does not wake the model when intermediate Actions succeed;
+- unchanged polling during a run does not enter the model context;
+- the Case summary and the normal terminal result are each no more than 4 KiB;
+- failure summaries are no more than 8 KiB;
+- never inject full Cases, complete logs, the full evidence set, or raw data inventories into the model by default;
+- no efficiency improvement may weaken revision, identity, site/path, evidence, or recovery semantics.
 
-不在本方案范围内：
+Out of scope for this proposal:
 
-- 不修改 Entity、nt2py 或 scheduler 的科学/执行语义；
-- 不让 façade 直接编辑 `case.json`、Action request/result 或 Case events；
-- 不让 Router 缓存或伪造宿主平台的权限审批；
-- 不把自由文本 `goal/done_when` 解析成物理事实；
-- 不自动修复未分类异常，不自动接受兼容性 warning；
-- 不建立第二套可变 workflow 状态机。
+- no changes to the scientific/execution semantics of Entity, nt2py, or the scheduler;
+- the façade must not directly edit `case.json`, Action request/result, or Case events;
+- the Router must not cache or forge the host platform's permission approvals;
+- free-text `goal/done_when` must not be parsed into physical facts;
+- no automatic repair of unclassified anomalies, no automatic acceptance of compatibility warnings;
+- no second mutable workflow state machine.
 
-`bh-reconnection` 旧链路记录了 73 次命令调用、8 次等待和 39 次审批审查。
-该数据只作为历史基线；进入评测前必须把原始观测、统计口径和工具版本固化为
-`evals/router-flow/baseline.json`，不能只引用本文数字。
+The legacy `bh-reconnection` pipeline recorded 73 command invocations, 8 waits, and 39
+approval reviews. That data serves only as a historical baseline; before entering
+evaluation, the raw observations, statistical methodology, and tool versions must be
+frozen into `evals/router-flow/baseline.json` — this document's numbers alone are not
+a sufficient citation.
 
-## 2. 不可破坏的控制原则
+## 2. Unbreakable Control Principles
 
-1. 所有 Case mutation 仍由 `entity_router_state.py` 在 Case lock 下完成；façade
-   只能调用其公开子命令。
-2. `entity_router_site.py` 继续负责 site profile、probe 和 source
-   materialization；owner runner 不自行解释 site 配置。
-3. 一个 Case 同时最多一个 active mutating Action。flow bundle 中的步骤严格串行，
-   前一步完成并验证后才能启动下一步。
-4. 每个 Action 仍有独立 request/result、owner、execution domain、site/path
-   envelope 和 controller revision；bundle 不能合并或跳过 Action 边界。
-5. flow request 是不可变执行计划，不记录运行进度。恢复时只从 Case revision、
-   Action request/result 和远端 receipt 推导进度。
-6. Worker 只能写 Action envelope；controller Case root 永远是 protected path。
-7. `run.status` 保持现有一次性只读 fast path。持久轮询必须使用
-   `run.monitor` Action。
-8. `data.purge` 不进入普通 flow bundle，继续要求独立 Action 和显式业务授权。
+1. All Case mutations are still performed by `entity_router_state.py` under the Case
+   lock; the façade may only call its public subcommands.
+2. `entity_router_site.py` continues to own site profiles, probing, and source
+   materialization; owner runners do not interpret site configuration on their own.
+3. At most one active mutating Action per Case at any time. Steps in a flow bundle are
+   strictly serial; the next step may only start after the previous one has completed
+   and been verified.
+4. Every Action still has an independent request/result, owner, execution domain,
+   site/path envelope, and controller revision; a bundle must not merge or skip Action
+   boundaries.
+5. A flow request is an immutable execution plan and records no runtime progress. On
+   recovery, progress is derived only from the Case revision, Action request/result,
+   and remote receipts.
+6. Workers may only write to the Action envelope; the controller Case root is always a
+   protected path.
+7. `run.status` keeps its existing one-shot read-only fast path. Persistent polling
+   must use the `run.monitor` Action.
+8. `data.purge` does not enter ordinary flow bundles; it continues to require an
+   independent Action and explicit business authorization.
 
-## 3. 模型与程序的明确分工
+## 3. Explicit Division of Labor Between Model and Program
 
-### 3.1 必须由模型处理
+### 3.1 Must be handled by the model
 
-- 把用户目标转成结构化 `workflow.target` 和成功标准；
-- 决定 PGen/物理参数、build 配置、计算资源、数据保留和 authority transfer；
-- 执行 `pgen.*` 和需要科学判断的 `analysis.*`；
-- 处理首次出现的 `needs_decision`、`anomaly` 或未知 owner 失败；
-- 形成科学解释和最终报告。
+- translating the user goal into a structured `workflow.target` and success criteria;
+- deciding PGen/physics parameters, build configuration, compute resources, data retention, and authority transfer;
+- executing `pgen.*` and `analysis.*` Actions that require scientific judgment;
+- handling first-time `needs_decision`, `anomaly`, or unknown-owner failures;
+- forming the scientific interpretation and final report.
 
-### 3.2 必须由确定性程序处理
+### 3.2 Must be handled by the deterministic program
 
-- Case 候选发现、歧义报告和 compact summary；
-- schema、revision、allowed action、owner/domain、site/path 和 identity chain 检查；
-- 已经完整确认的 source/build/run/data Action；
-- Action start、staging、runner dispatch、reprobe 和 finish；
-- scheduler/PID 轮询、重复状态抑制和 terminal Action 收口；
-- request/result/log 的 hash、字节数、调用数和 wall time 统计。
+- Case candidate discovery, ambiguity reporting, and compact summaries;
+- schema, revision, allowed action, owner/domain, site/path, and identity chain checks;
+- fully confirmed source/build/run/data Actions;
+- Action start, staging, runner dispatch, reprobe, and finish;
+- scheduler/PID polling, duplicate-status suppression, and terminal Action closure;
+- hash, byte count, call count, and wall-time statistics for request/result/log.
 
-### 3.3 模型唤醒定义
+### 3.3 Definition of a model wakeup
 
-一次 `model_wakeup` 指 façade 返回了必须由 controller 或 owner 模型处理的事件，
-原因枚举固定为：
+A `model_wakeup` occurs when the façade returns an event that must be handled by the
+controller or owner model. The reason enumeration is fixed:
 
-- `user_goal`：新目标或范围改变；
-- `owner_model_required`：进入 `pgen.*` 或科学 `analysis.*`；
-- `needs_decision`：缺少会改变物理、资源或数据策略的选择；
-- `anomaly`：首次出现或 evidence fingerprint 已变化的异常；
-- `workflow_terminal`：整个 Workflow 达到 complete/blocked；
-- `user_requested_report`：用户显式要求说明。
+- `user_goal`: a new goal or a change of scope;
+- `owner_model_required`: entering `pgen.*` or scientific `analysis.*`;
+- `needs_decision`: a choice is missing that would change physics, resources, or data policy;
+- `anomaly`: a first-occurrence anomaly or one whose evidence fingerprint has changed;
+- `workflow_terminal`: the entire Workflow has reached complete/blocked;
+- `user_requested_report`: the user explicitly requested an explanation.
 
-确定性 Action 的 `completed` 不是模型唤醒事件。重复的同一异常只在第一次返回；
-后续相同 `issue_code + evidence_fingerprint` 被抑制，直到 evidence 改变。这样端到端
-链路可以保留每个 Action 的独立性，同时满足不超过 6 次模型唤醒的目标。
+A deterministic Action's `completed` is not a model wakeup event. A repeated identical
+anomaly is returned only the first time; subsequent occurrences with the same
+`issue_code + evidence_fingerprint` are suppressed until the evidence changes. This
+lets the end-to-end pipeline preserve each Action's independence while meeting the
+goal of no more than 6 model wakeups.
 
-## 4. 新增运行时文件
+## 4. New Runtime Files
 
-所有 runnable 文件仍位于 `skills/entity-router/`：
+All runnable files remain under `skills/entity-router/`:
 
 ```text
 skills/entity-router/
@@ -120,23 +131,24 @@ skills/entity-router/
     └── dispatch-receipt.schema.json
 ```
 
-约束：
+Constraints:
 
-- Python 3.6.8 可运行，不引入第三方 runtime 依赖；
-- runner 使用显式映射表，不用动态 import、`eval` 或调用方提供的 shell 字符串；
-- JSON canonicalization 固定为 UTF-8、sorted keys、紧凑 separators、禁止 NaN；
-- 所有 compact 输出在脱敏后按 UTF-8 实际字节数计量；
-- 超限时保存完整 artifact，stdout 只返回 Locator、sha256、size 和尾部摘要。
+- must run on Python 3.6.8 with no third-party runtime dependencies;
+- runners use an explicit mapping table — no dynamic import, no `eval`, no caller-supplied shell strings;
+- JSON canonicalization is fixed to UTF-8, sorted keys, compact separators, and no NaN;
+- all compact outputs are measured in actual UTF-8 bytes after redaction;
+- on limit overflow, the full artifact is saved and stdout returns only the Locator, sha256, size, and a tail excerpt.
 
-## 5. Case v3 的增量状态合同
+## 5. Incremental State Contract for Case v3
 
-本方案不升级 `case.json.schema_version=3`，只增加可选字段。旧 Case 可以继续
-`show/verify/status`；只有进入 flow façade 时才要求完成 backfill。所有 backfill
-通过新的 state CLI mutation 完成，façade 不直接写文件。
+This proposal does not bump `case.json.schema_version=3`; it only adds optional fields.
+Legacy Cases can still `show/verify/status`; backfill is only required when entering
+the flow façade. All backfill goes through the new state CLI mutations — the façade
+never writes files directly.
 
-### 5.1 结构化 Workflow target
+### 5.1 Structured Workflow target
 
-在 `workflow` 下增加：
+Added under `workflow`:
 
 ```json
 {
@@ -171,7 +183,7 @@ skills/entity-router/
 }
 ```
 
-`check` 只接受固定枚举，不执行表达式：
+`check` only accepts a fixed enumeration; no expressions are evaluated:
 
 - `identity_exists`
 - `source_revision_matches`
@@ -182,40 +194,47 @@ skills/entity-router/
 - `nt2_inventory_status`
 - `analysis_result_status`
 
-`memory.goal` 和 `memory.done_when` 保留为人类可读描述，但不得用于自动推进
-readiness 或 completion。若旧 Case 只有自由文本目标，`check` 返回
-`needs_decision/WF_TARGET_MISSING`，由模型或用户确认一次结构化 target。
+`memory.goal` and `memory.done_when` remain human-readable descriptions but must not be
+used to automatically advance readiness or completion. If a legacy Case has only a
+free-text goal, `check` returns `needs_decision/WF_TARGET_MISSING`, and the model or
+user confirms a structured target once.
 
-`build_id/run_id/data_id/analysis_id` 可以为空，但语义不是“任意当前值”：
+`build_id/run_id/data_id/analysis_id` may be empty, but the semantics are not "any
+current value":
 
-- deterministic build/run bundle 启动前，source revision、build ID、run ID 和相应
-  spec hash 必须已绑定；PGen 修改后的新 source revision 应在进入该 bundle 前由模型
-  确认一次 target；
-- 新 run 尚未产生 data/analysis identity 时，空 `data_id/analysis_id` 表示 late
-  binding，只允许绑定到 parent chain 精确匹配 target run 的第一个 verified identity；
-- late-bound 实际 ID 记录在 resource current identity 和 completion evidence 中，
-  不回写 target，因此不会改变 `target_hash`；
-- 若工作流要求复用某个已有 data/analysis，必须在 target 中写 exact ID。
+- before a deterministic build/run bundle starts, the source revision, build ID, run
+  ID, and corresponding spec hashes must already be bound; after a PGen modification,
+  the model should confirm the target once for the new source revision before entering
+  that bundle;
+- when a new run has not yet produced data/analysis identities, empty
+  `data_id/analysis_id` means late binding, and only the first verified identity whose
+  parent chain exactly matches the target run may be bound;
+- late-bound actual IDs are recorded in the resource current identity and completion
+  evidence and are not written back into the target, so `target_hash` does not change;
+- if the workflow requires reusing an existing data/analysis, the exact ID must be
+  written into the target.
 
-新增 state CLI：
+New state CLI:
 
 ```bash
 python3 entity_router_state.py set-workflow-target \
   --case <uid> --expected-revision <n> --target <target.json>
 ```
 
-门禁：无 active Action；target schema 合法；引用已有 identity 时其 hash/parent
-必须匹配；`target_hash` 由 state 工具计算而不是信任输入。修改 target 不自动修改
-外部资源，只重新计算 allowed actions，并把与新 target 冲突的下游 readiness 标为
-`stale/unknown/none`。
+Gates: no active Action; target schema is valid; when referencing existing identities
+their hash/parent must match; `target_hash` is computed by the state tool rather than
+trusted from input. Modifying the target does not automatically modify external
+resources; it only recomputes allowed actions and marks downstream readiness that
+conflicts with the new target as `stale/unknown/none`.
 
-对带结构化 target 的 Workflow，`complete-workflow` 必须逐条执行 criteria 的固定
-evaluator，并记录 criterion ID、subject identity 和 evidence；原有“verification 数量
-不少于 done_when 数量”的逻辑只保留给尚未进入 façade 的 legacy Workflow。
+For a Workflow with a structured target, `complete-workflow` must execute the fixed
+evaluator for each criterion one by one and record the criterion ID, subject identity,
+and evidence; the original "verification count no less than done_when count" logic is
+retained only for legacy Workflows that have not yet entered the façade.
 
-### 5.2 统一 identity record
+### 5.2 Unified identity record
 
-`resources.<dimension>.identities[]` 使用共同字段：
+`resources.<dimension>.identities[]` uses common fields:
 
 ```json
 {
@@ -234,24 +253,24 @@ evaluator，并记录 criterion ID、subject identity 和 evidence；原有“ve
 }
 ```
 
-维度约束：
+Per-dimension constraints:
 
-| Identity | 必需 parent/spec/evidence |
+| Identity | Required parent/spec/evidence |
 |---|---|
-| source | authority/snapshot fingerprint；canonical revision hash |
-| build | `source_revision_hash`、`build_spec_hash`、executable hash |
-| run | `build_id`、`run_spec_hash`、run manifest hash、run root |
-| data | `run_id`、data root、nt2 inventory hash；即使 raw data 增长也创建新 identity |
-| analysis | `data_id`、analysis spec/code hash、结果 artifact hash |
+| source | authority/snapshot fingerprint; canonical revision hash |
+| build | `source_revision_hash`, `build_spec_hash`, executable hash |
+| run | `build_id`, `run_spec_hash`, run manifest hash, run root |
+| data | `run_id`, data root, nt2 inventory hash; a new identity is created even as raw data grows |
+| analysis | `data_id`, analysis spec/code hash, result artifact hash |
 
-`data_id` 由 canonical JSON
-`{run_id, data_root, inventory_sha256, nt2py_version}` 的 sha256 生成；
-`analysis_id` 由 `{data_id, analysis_spec_hash, code_hash}` 生成。程序不得按目录 mtime
-或“最新文件”生成 identity。
+`data_id` is generated from the sha256 of the canonical JSON
+`{run_id, data_root, inventory_sha256, nt2py_version}`; `analysis_id` is generated from
+`{data_id, analysis_spec_hash, code_hash}`. The program must not generate identities
+from directory mtime or the "latest file".
 
-### 5.3 原子激活新 run
+### 5.3 Atomic activation of a new run
 
-`run.prepare` 完成时，Action request 必须包含：
+When `run.prepare` completes, the Action request must contain:
 
 ```json
 {
@@ -266,20 +285,21 @@ evaluator，并记录 criterion ID、subject identity 和 evidence；原有“ve
 }
 ```
 
-`finish-action` 针对成功的 `run.prepare` 在同一个 Case lock 和 revision 中：
+For a successful `run.prepare`, `finish-action` performs the following within the same
+Case lock and revision:
 
-1. 验证 run/data/analysis binding 的 site 和注册 root；
-2. 追加不可变 run identity 并设置 `resources.run.current_id/active`；
-3. 更新 data/analysis root；
-4. 清空 data/analysis current ID；历史 identities 保留；
-5. 设置 `data=unknown`、`analysis=none`；
-6. 若 workflow target 的 run ID/spec hash 不匹配，拒绝完成而不是自动改 target。
+1. verifies the site and registered root of the run/data/analysis bindings;
+2. appends the immutable run identity and sets `resources.run.current_id/active`;
+3. updates the data/analysis roots;
+4. clears the data/analysis current IDs; historical identities are retained;
+5. sets `data=unknown`, `analysis=none`;
+6. if the workflow target's run ID/spec hash does not match, refuses to finish rather than automatically changing the target.
 
-禁止用独立的 `reconcile` 调用分步完成以上切换。
+Using separate `reconcile` calls to perform this switch step by step is forbidden.
 
-### 5.4 Action request/result 的增量字段
+### 5.4 Incremental fields on Action request/result
 
-Action request v2 增加可选字段：
+Action request v2 adds optional fields:
 
 ```json
 {
@@ -295,12 +315,14 @@ Action request v2 增加可选字段：
 }
 ```
 
-Action result v2 增加同一 `orchestration` 和可选 `identity` record。旧 request/result
-仍可读取；缺少 orchestration 的 active Action 只能按原 Router 流程恢复，façade
-不得隐式接管。若确需接管，必须由用户显式执行未来单独设计的 adopt 操作，本期
-不实现 `--adopt`。
+Action result v2 adds the same `orchestration` and an optional `identity` record.
+Legacy request/result files remain readable; an active Action lacking orchestration can
+only be recovered through the original Router flow — the façade must not implicitly
+take it over. If takeover is genuinely needed, the user must explicitly execute a
+separately designed adopt operation in the future; `--adopt` is not implemented in
+this phase.
 
-`start-action` 增加：
+`start-action` gains:
 
 ```text
 --flow-id
@@ -312,11 +334,11 @@ Action result v2 增加同一 `orchestration` 和可选 `identity` record。旧 
 --resource-binding DIMENSION=LOCATOR
 ```
 
-这些字段在 Action 启动后不可修改。
+These fields are immutable once the Action has started.
 
-## 6. Flow request：不可变 bundle，不是第二套状态机
+## 6. Flow Request: an Immutable Bundle, Not a Second State Machine
 
-`flow-request.json` schema v1：
+`flow-request.json` schema v1:
 
 ```json
 {
@@ -360,25 +382,27 @@ Action result v2 增加同一 `orchestration` 和可选 `identity` record。旧 
 }
 ```
 
-规则：
+Rules:
 
-- bundle 最多 8 个步骤；每个步骤仍创建一个独立 Action；
-- `action_id`、Action type、owner/domain/site、identity、roots、acceptance 和 runner
-  均在执行前固定；
-- `flow_request_hash` 是去掉该 hash 字段后的完整 canonical JSON sha256；
-- `base_revision` 只约束 bundle 起点。后续每一步重读 current revision，但必须证明
-  从起点以来的新增 mutation 都属于同一 flow 的已完成前序步骤；否则返回
-  `revision_conflict`；
-- façade 不维护 `current_step`。它扫描 Action request/result 的 flow hash 和 index
-  推导已完成、active 或尚未开始的步骤；
-- 下一步只有同时满足“前序 completed、在当前 allowed actions、target hash 未变、
-  无未决选择、runner preflight pass”时才启动；
-- bundle 不能包含 `data.purge`、`source.transfer-authority` 或 dependency source
-  build；这些操作要求独立决策和授权；
-- model-required step 只能使用 `execute --prepare/--resume`，不能在普通 bundle 中
-  被 façade 假装完成。
+- a bundle has at most 8 steps; each step still creates an independent Action;
+- `action_id`, Action type, owner/domain/site, identity, roots, acceptance, and runner
+  are all fixed before execution;
+- `flow_request_hash` is the sha256 of the complete canonical JSON with that hash field removed;
+- `base_revision` only constrains the bundle's starting point. Each subsequent step
+  rereads the current revision but must prove that every new mutation since the start
+  belongs to a completed earlier step of the same flow; otherwise it returns
+  `revision_conflict`;
+- the façade maintains no `current_step`. It scans the flow hash and index in Action
+  request/result to derive which steps are completed, active, or not yet started;
+- the next step starts only when all of the following hold: the predecessor completed,
+  it is in the current allowed actions, the target hash is unchanged, there are no
+  pending decisions, and runner preflight passes;
+- a bundle must not contain `data.purge`, `source.transfer-authority`, or dependency
+  source builds; those operations require independent decisions and authorization;
+- a model-required step may only use `execute --prepare/--resume`; it must not be
+  faked as completed by the façade inside an ordinary bundle.
 
-后续步骤只能通过声明式 `input_from` 读取前序输出：
+Later steps may only read predecessor outputs through the declarative `input_from`:
 
 ```json
 {
@@ -388,20 +412,22 @@ Action result v2 增加同一 `orchestration` 和可选 `identity` record。旧 
 }
 ```
 
-不支持字符串插值或表达式。façade 在前序 Action 完成后，从其已验证 result 中按
-`step_index + role + exact Locator` 解析输入、重新 probe，并把实际 scheduler/PID
-identity 写入即将启动的 Action request。这样 flow plan 在 launch 前不需要猜 job
-ID，而 `run.monitor` Action request 启动后仍然完全不可变。
+No string interpolation or expressions are supported. After the predecessor Action
+completes, the façade resolves the input from its verified result by
+`step_index + role + exact Locator`, reprobes it, and writes the actual scheduler/PID
+identity into the Action request about to start. This way the flow plan does not need
+to guess the job ID before launch, while the `run.monitor` Action request remains
+fully immutable once started.
 
-## 7. Façade CLI 精确合同
+## 7. Façade CLI Precise Contract
 
-入口：
+Entry point:
 
 ```text
 skills/entity-router/scripts/entity_router_flow.py
 ```
 
-公共输出字段：
+Common output fields:
 
 ```json
 {
@@ -417,19 +443,19 @@ skills/entity-router/scripts/entity_router_flow.py
 }
 ```
 
-退出码：
+Exit codes:
 
-| Exit | 语义 |
+| Exit | Meaning |
 |---:|---|
 | 0 | `pass/completed/observe_only` |
 | 10 | `needs_decision` |
 | 20 | `blocked` |
 | 30 | `anomaly` |
-| 40 | request/schema/envelope 非法 |
-| 50 | revision/active Action/flow hash 冲突 |
+| 40 | invalid request/schema/envelope |
+| 50 | revision/active Action/flow hash conflict |
 
-所有非零退出仍必须输出符合 schema 的 JSON；traceback 只写脱敏后的本地 debug
-artifact，不进入 stdout。
+All non-zero exits must still output schema-conformant JSON; tracebacks are only
+written to a redacted local debug artifact and never enter stdout.
 
 ### 7.1 `inspect`
 
@@ -439,21 +465,21 @@ python3 entity_router_flow.py inspect --cwd <absolute-path>
 python3 entity_router_flow.py inspect --case <uid> --live --phase run
 ```
 
-Case 选择规则：
+Case selection rules:
 
-1. `--case` 接受 exact UID 或 control path，优先使用；
-2. `--cwd` 只按 registry 中的 authority/artifact/resource envelope 匹配，不读取
-   source checkout 内的控制标记；
-3. 0 个候选返回 `needs_decision/CASE_NOT_FOUND`；
-4. 多个候选返回 `needs_decision/CASE_AMBIGUOUS` 和 compact candidates；
-5. 永不按 last-opened、mtime、标签或“最新”自动选择。
+1. `--case` accepts an exact UID or control path and takes precedence;
+2. `--cwd` matches only against the authority/artifact/resource envelopes in the
+   registry; it does not read control markers inside the source checkout;
+3. 0 candidates returns `needs_decision/CASE_NOT_FOUND`;
+4. multiple candidates returns `needs_decision/CASE_AMBIGUOUS` and compact candidates;
+5. never auto-select by last-opened, mtime, tags, or "latest".
 
-`--live` 只 probe `--phase` 所需资源。新增
-`entity_router_site.py probe-batch`，每个相关 site 最多一次 transport call，在该调用
-内检查多个精确 Locator。多站点 Case 可以每 site 一次，不能承诺全局只有一次远端
-调用。
+`--live` only probes the resources needed by `--phase`. Adds
+`entity_router_site.py probe-batch`: at most one transport call per relevant site,
+checking multiple exact Locators within that call. A multi-site Case may use one call
+per site; a single global remote call cannot be promised.
 
-compact 输出至少包含：
+The compact output contains at least:
 
 ```json
 {
@@ -479,10 +505,10 @@ python3 entity_router_flow.py check --case <uid>
 python3 entity_router_flow.py check --case <uid> --live --phase run
 ```
 
-静态 `check` 不访问远端；live check 复用 batch probe。结果优先级为
-`anomaly > blocked > needs_decision > pass`。
+Static `check` does not touch the remote; live check reuses the batch probe. Result
+precedence is `anomaly > blocked > needs_decision > pass`.
 
-Issue schema：
+Issue schema:
 
 ```json
 {
@@ -495,24 +521,24 @@ Issue schema：
 }
 ```
 
-首批 invariant：
+First batch of invariants:
 
-| Code | 检查 | 失败分类 |
+| Code | Check | Failure class |
 |---|---|---|
-| `WF_TARGET_MISSING` | active flow 有结构化 target | needs_decision |
-| `WF_TARGET_HASH_DRIFT` | request 与 current target hash 一致 | anomaly |
-| `ACTION_REQUEST_MISSING` | active Action request 存在且 schema 合法 | anomaly |
-| `ACTION_RESULT_ON_ACTIVE` | active Action 不得已有 terminal result | anomaly |
-| `ACTION_OWNER_ENVELOPE` | owner/domain/site/read/write/protected 完整 | anomaly |
-| `ID_BUILD_SOURCE_MISMATCH` | build parent 等于目标 source revision | anomaly |
-| `ID_RUN_BUILD_MISMATCH` | run parent 等于目标/current build ID | anomaly |
-| `ID_ACTIVE_RUN_SCOPE` | active run 位于 run root | anomaly |
-| `ID_DATA_RUN_MISMATCH` | data parent 等于 current run ID | anomaly |
-| `ID_DATA_SCOPE` | positive data evidence 位于 current data root | anomaly |
-| `ID_ANALYSIS_DATA_MISMATCH` | analysis parent 等于 current data ID | anomaly |
-| `MONITOR_TERMINAL_ACTIVE` | live terminal process 不保留 active monitor | anomaly |
-| `RETRY_UNCHANGED_EVIDENCE` | 相同 request 的重试必须有 changed evidence | blocked |
-| `SITE_UNREACHABLE` | live check 无 current evidence | blocked |
+| `WF_TARGET_MISSING` | an active flow has a structured target | needs_decision |
+| `WF_TARGET_HASH_DRIFT` | request and current target hash agree | anomaly |
+| `ACTION_REQUEST_MISSING` | the active Action request exists and is schema-valid | anomaly |
+| `ACTION_RESULT_ON_ACTIVE` | an active Action must not already have a terminal result | anomaly |
+| `ACTION_OWNER_ENVELOPE` | owner/domain/site/read/write/protected complete | anomaly |
+| `ID_BUILD_SOURCE_MISMATCH` | build parent equals the target source revision | anomaly |
+| `ID_RUN_BUILD_MISMATCH` | run parent equals the target/current build ID | anomaly |
+| `ID_ACTIVE_RUN_SCOPE` | the active run is located under the run root | anomaly |
+| `ID_DATA_RUN_MISMATCH` | data parent equals the current run ID | anomaly |
+| `ID_DATA_SCOPE` | positive data evidence is located under the current data root | anomaly |
+| `ID_ANALYSIS_DATA_MISMATCH` | analysis parent equals the current data ID | anomaly |
+| `MONITOR_TERMINAL_ACTIVE` | a live terminal process must not retain an active monitor | anomaly |
+| `RETRY_UNCHANGED_EVIDENCE` | a retry of the same request must have changed evidence | blocked |
+| `SITE_UNREACHABLE` | a live check has no current evidence | blocked |
 
 ### 7.3 `execute`
 
@@ -523,7 +549,7 @@ python3 entity_router_flow.py execute --request <flow-request.json> --resume \
   --step <index> --worker-result <site:/path>
 ```
 
-普通 bundle：
+Ordinary bundle:
 
 ```text
 validate flow schema/hash/base revision/target
@@ -538,37 +564,39 @@ validate flow schema/hash/base revision/target
   -> emit one compact bundle result
 ```
 
-`--prepare`：
+`--prepare`:
 
-1. 校验并启动 model-required Action；
-2. stage immutable Action request；
-3. 返回不超过 4 KiB 的 worker envelope，只包含 Action request Locator/hash、owner
-   skill/playbook、精确 input/read/write roots、成功标准和 worker-result 目标；
-4. 不加载其他 phase 的 skill 或历史对话。
+1. validates and starts the model-required Action;
+2. stages the immutable Action request;
+3. returns a worker envelope of no more than 4 KiB containing only the Action request
+   Locator/hash, owner skill/playbook, exact input/read/write roots, success criteria,
+   and the worker-result destination;
+4. does not load skills from other phases or conversation history.
 
-owner Worker 将结构化结果写到 Action 授权的 staging Locator。`--resume`：
+The owner Worker writes its structured result to the staging Locator authorized by the
+Action. `--resume`:
 
-1. 校验 worker-result 的 `case_uid/action_id/request_hash/owner`；
-2. 不信任 Worker 的 success 文本，重新 probe changed/output Locator；
-3. 逐项执行 acceptance check；
-4. 通过 state.py finish；失败则关闭为 `failed/blocked` 并保留 evidence。
+1. validates the worker-result's `case_uid/action_id/request_hash/owner`;
+2. does not trust the Worker's success text; reprobes the changed/output Locators;
+3. executes each acceptance check one by one;
+4. finishes via state.py; on failure, closes as `failed/blocked` and preserves the evidence.
 
-### 7.4 runner allowlist
+### 7.4 Runner allowlist
 
-`entity_router_flow_runners.py` 使用固定映射：
+`entity_router_flow_runners.py` uses a fixed mapping:
 
-| Runner ID | Action | 固定入口/结果 |
+| Runner ID | Action | Fixed entry/result |
 |---|---|---|
-| `source.materialize.v1` | `source.materialize` | `entity_router_site.py materialize`；revision evidence |
-| `build.plan.v1` | `build.plan` | validate/create checkpoint、compat、generate env/build；requirements/checkpoint/scripts |
-| `build.compile.v1` | `build.compile` | `entity_run.py build ... --quiet --json`；build_result/log/executable |
-| `run.prepare.v1` | `run.prepare` | 创建 immutable run root/input/manifest；manifest hash |
-| `run.launch.v1` | `run.launch` | scheduler/PID launcher；submission receipt/process identity |
-| `run.monitor.v1` | `run.monitor` | `entity_router_status.py` 循环；terminal evidence |
-| `data.inspect.v1` | `data.inspect` | `inspect_nt2_data.py DATA --output INVENTORY`；inventory/data identity |
+| `source.materialize.v1` | `source.materialize` | `entity_router_site.py materialize`; revision evidence |
+| `build.plan.v1` | `build.plan` | validate/create checkpoint, compat, generate env/build; requirements/checkpoint/scripts |
+| `build.compile.v1` | `build.compile` | `entity_run.py build ... --quiet --json`; build_result/log/executable |
+| `run.prepare.v1` | `run.prepare` | create immutable run root/input/manifest; manifest hash |
+| `run.launch.v1` | `run.launch` | scheduler/PID launcher; submission receipt/process identity |
+| `run.monitor.v1` | `run.monitor` | `entity_router_status.py` loop; terminal evidence |
+| `data.inspect.v1` | `data.inspect` | `inspect_nt2_data.py DATA --output INVENTORY`; inventory/data identity |
 
-`build.plan.v1` 仅在 schema-v2 `requirements.json` 已包含全部用户选择时运行；
-checkpoint 已存在时才使用 `--merge`：
+`build.plan.v1` runs only when the schema-v2 `requirements.json` already contains all
+user choices; `--merge` is used only when a checkpoint already exists:
 
 ```text
 entity_checkpoint.py validate requirements.json
@@ -578,30 +606,33 @@ entity_generate.py env checkpoint --output env.sh
 entity_generate.py build requirements.json --env env.sh --checkpoint checkpoint --output entity-build.sh
 ```
 
-若 validation 为 partial、compat 不是 pass、需要 dependency source build 或存在未接受
-warning，runner 返回 `needs_decision`，不得自动降级或安装依赖。
+If validation is partial, compat is not pass, a dependency source build is needed, or
+there are unaccepted warnings, the runner returns `needs_decision` and must not
+automatically downgrade or install dependencies.
 
-runner_args 是每个 Runner ID 的独立 schema。任何 `command`、`shell`、`script_text`、
-`pre_command` 字段一律拒绝；site-specific module/pre-command 只能来自已验证的
-entity-env-build checkpoint，不能来自 flow request 自由文本。
+runner_args is an independent schema per Runner ID. Any `command`, `shell`,
+`script_text`, or `pre_command` field is rejected outright; site-specific
+modules/pre-commands may only come from a verified entity-env-build checkpoint, never
+from free text in the flow request.
 
-## 8. 幂等执行与崩溃恢复
+## 8. Idempotent Execution and Crash Recovery
 
-### 8.1 恢复判定
+### 8.1 Recovery determination
 
-对每个 step，execute 按以下顺序判定：
+For each step, execute determines the following in order:
 
-1. 已存在同 action ID 的 result，且 flow hash/index 相同：返回缓存 terminal，
-   不重跑；
-2. 同 action ID active，且 flow hash/index 相同：进入恢复，不重新 start；
-3. 同 action ID 存在但 hash/index 不同：`revision_conflict`；
-4. Case 有其他 active Action：`revision_conflict`；
-5. 前序 flow Action 与 Case events 不构成连续链：`revision_conflict`；
-6. 否则启动新 Action。
+1. a result with the same action ID exists and flow hash/index match: return the cached
+   terminal result without rerunning;
+2. an Action with the same action ID is active and flow hash/index match: enter
+   recovery without restarting;
+3. the same action ID exists but hash/index differ: `revision_conflict`;
+4. the Case has another active Action: `revision_conflict`;
+5. the prior flow Actions and Case events do not form a continuous chain: `revision_conflict`;
+6. otherwise start a new Action.
 
-### 8.2 dispatch receipt
+### 8.2 Dispatch receipt
 
-每个 runner 在 Action staging/write root 写：
+Each runner writes in the Action staging/write root:
 
 ```json
 {
@@ -624,132 +655,143 @@ entity-env-build checkpoint，不能来自 flow request 自由文本。
 }
 ```
 
-`state` 枚举：`intent_written`、`effect_observed`、`outputs_verified`。receipt 是 owner
-artifact，不是 controller workflow state；controller 只在 finish 时把其 hash/Locator
-记为 evidence。每次 state 更新都必须以临时文件 + rename 原子替换；最终
-`outputs_verified` receipt 的 hash 才进入 Action result。
+`state` enumeration: `intent_written`, `effect_observed`, `outputs_verified`. The
+receipt is an owner artifact, not controller workflow state; the controller only
+records its hash/Locator as evidence at finish. Every state update must atomically
+replace via temporary file + rename; only the hash of the final `outputs_verified`
+receipt enters the Action result.
 
-### 8.3 `run.launch` 特殊规则
+### 8.3 `run.launch` special rules
 
-作业提交是不可盲重放的外部副作用：
+Job submission is an external side effect that must not be blindly replayed:
 
-1. 提交前写 `intent_written`，job name/comment 包含 deterministic action hash；
-2. 提交成功后立即写 job ID 和 scheduler identity；
-3. 若进程在 1 与 2 之间崩溃，恢复时先按 exact job name、user、submission time
-   window 和 run root 查询 scheduler；
-4. 恰好一个匹配则补写 receipt；0 个匹配才允许再次提交；多个匹配返回 anomaly；
-5. 非 scheduler 启动必须由 wrapper 原子写 PID、`/proc` start ticks 和 run root；
-6. 没有足够 identity evidence 时返回 blocked，绝不猜测进程。
+1. write `intent_written` before submission; the job name/comment contains the deterministic action hash;
+2. immediately after a successful submission, write the job ID and scheduler identity;
+3. if the process crashes between 1 and 2, recovery first queries the scheduler by
+   exact job name, user, submission time window, and run root;
+4. exactly one match: backfill the receipt; 0 matches: submission may be retried;
+   multiple matches: return anomaly;
+5. a non-scheduler launch must be wrapped so the wrapper atomically writes the PID,
+   `/proc` start ticks, and run root;
+6. when there is insufficient identity evidence, return blocked; never guess a process.
 
-普通自动重试最多一次，而且必须满足以下之一：
+An ordinary automatic retry happens at most once and must satisfy one of:
 
-- external evidence fingerprint 已变化；
-- runner 明确声明尚未产生外部副作用；
-- runner 的恢复协议证明前一次副作用不存在。
+- the external evidence fingerprint has changed;
+- the runner explicitly declares that no external side effect has yet occurred;
+- the runner's recovery protocol proves the previous side effect does not exist.
 
-## 9. `watch` 与 `run.monitor` 的唯一语义
+## 9. The Unique Semantics of `watch` and `run.monitor`
 
-`watch` 不是 `run.status` 的别名。它只执行已经 active 的 `run.monitor` Action：
+`watch` is not an alias for `run.status`. It only executes an already-active
+`run.monitor` Action:
 
 ```bash
 python3 entity_router_flow.py watch --case <uid> --action <monitor-action-id> \
   --flow-request-hash <sha256> --interval-seconds 60 --timeout-seconds 86400
 ```
 
-前置条件：
+Preconditions:
 
-- Action type 必须是 `run.monitor`；
-- request 中的 run ID/root、scheduler job ID 或 PID identity 完整；
-- Action flow hash 与 CLI 相同；
-- 当前 revision 和 active Action 匹配。
+- the Action type must be `run.monitor`;
+- the run ID/root and scheduler job ID or PID identity in the request are complete;
+- the Action flow hash matches the CLI's;
+- the current revision and active Action match.
 
-循环：
+Loop:
 
-1. 调用 `entity_router_status.py`，每轮每个 site 最多一次远端调用；
-2. 将 compact observation 写到 Action staging trace；
-3. 若 process identity 与上一轮相同且状态/进度/evidence hash 未变，只增加
-   `unchanged_polls_suppressed`，不产生模型事件；
-4. 运行中继续等待；
-5. terminal/anomaly/offline/timeout 时立即通过 state CLI 收口 Action，然后返回。
+1. calls `entity_router_status.py`, at most one remote call per site per round;
+2. writes the compact observation to the Action staging trace;
+3. if the process identity is identical to the previous round and status/progress/
+   evidence hash are unchanged, only increments `unchanged_polls_suppressed` and
+   produces no model event;
+4. while running, keeps waiting;
+5. on terminal/anomaly/offline/timeout, immediately closes the Action via the state CLI and then returns.
 
-终态映射：
+Terminal mapping:
 
-| 观察 | Action status | readiness | façade status |
+| Observation | Action status | readiness | façade status |
 |---|---|---|---|
-| exit 0 + terminal evidence + acceptance pass | completed | `run=completed`；quick inventory 只可设 data `absent/partial/unknown` | completed |
+| exit 0 + terminal evidence + acceptance pass | completed | `run=completed`; quick inventory may only set data to `absent/partial/unknown` | completed |
 | nonzero/fatal/identity mismatch | failed | `run=failed` | anomaly |
-| site offline/evidence 不足 | blocked | 不推进 positive readiness | blocked |
-| 用户授权 timeout | blocked | 保持最后已证实状态 | blocked |
+| site offline/insufficient evidence | blocked | no positive readiness advancement | blocked |
+| user-authorized timeout | blocked | keeps the last proven state | blocked |
 
-`watch` 在返回前必须完成 `finish-action`。唯一例外是 façade 自身被 kill/crash；此时
-active Action 保留，下一次相同 hash 的 `watch` 按第 8 节恢复。`check --live` 发现
-process 已 terminal 但 Action 仍 active 时返回 `MONITOR_TERMINAL_ACTIVE`，恢复入口
-必须优先收口它，不能新建第二个 Action。
+`watch` must complete `finish-action` before returning. The only exception is when the
+façade itself is killed/crashes; in that case the active Action is retained and the
+next `watch` with the same hash recovers per Section 8. When `check --live` finds the
+process already terminal but the Action still active, it returns
+`MONITOR_TERMINAL_ACTIVE`, and the recovery entry point must close it first rather
+than creating a second Action.
 
-`data=ready` 只能由后续 `data.inspect` 的 nt2py inventory 建立；field/checkpoint 的
-浅层文件计数不足以宣称数据可读。
+`data=ready` can only be established by the nt2py inventory of a subsequent
+`data.inspect`; shallow file counts of fields/checkpoints are insufficient to claim
+the data is readable.
 
-## 10. Data 与 analysis identity 流程
+## 10. Data and Analysis Identity Flow
 
 ### 10.1 `data.inspect`
 
-固定步骤：
+Fixed steps:
 
-1. 校验 current run ID/root 和 Action read envelope；
-2. 在 data site 执行 `inspect_nt2_data.py`；raw data 只读；
-3. inventory 必须写到 analysis/staging root，禁止写入 data root；
-4. Router reprobe inventory，并计算 sha256；
-5. 根据 `{run_id,data_root,inventory_sha256,nt2py_version}` 生成 data ID；
-6. `finish-action` 原子追加 data identity、设置 current ID/readiness，并把旧 current
-   analysis 标为 stale；
-7. nt2 probe error 只证明 data `corrupt/unknown`，不得被解释为物理失败。
+1. validates the current run ID/root and the Action read envelope;
+2. executes `inspect_nt2_data.py` at the data site; raw data is read-only;
+3. the inventory must be written to the analysis/staging root; writing into the data root is forbidden;
+4. the Router reprobes the inventory and computes its sha256;
+5. generates the data ID from `{run_id,data_root,inventory_sha256,nt2py_version}`;
+6. `finish-action` atomically appends the data identity, sets the current ID/readiness,
+   and marks the old current analysis as stale;
+7. an nt2 probe error only proves data `corrupt/unknown`; it must not be interpreted as a physical failure.
 
 ### 10.2 `analysis.run`
 
-这是 model-required Action，使用 `--prepare/--resume`：
+This is a model-required Action and uses `--prepare/--resume`:
 
-- request 必须包含 exact data ID、scientific question、analysis spec hash、code/output
-  roots 和 acceptance checks；
-- owner 模型只能在 analysis root 写代码、图和报告，不得写 raw data root；
-- resume 重新执行或检查必要代码并 probe outputs；
-- 成功后创建引用 exact data ID 的 analysis identity；
-- data current ID 改变时，analysis readiness 自动 stale，历史产物不删除。
+- the request must contain the exact data ID, scientific question, analysis spec hash,
+  code/output roots, and acceptance checks;
+- the owner model may only write code, plots, and reports under the analysis root, never the raw data root;
+- resume re-executes or checks the necessary code and probes the outputs;
+- on success, creates an analysis identity referencing the exact data ID;
+- when the data current ID changes, analysis readiness automatically goes stale; historical artifacts are not deleted.
 
-## 11. 审批与远端执行边界
+## 11. Approval and Remote Execution Boundaries
 
-审批分两类，不能混为一谈：
+Approvals fall into two categories that must not be conflated:
 
-1. **业务授权**：Router request 内的 authorization，例如 `data.purge`、dependency
-   source build、authority transfer；由 Case/Action contract 验证。
-2. **宿主执行审批**：Codex/sandbox 对实际命令或权限边界的审批；由宿主决定，
-   Router 不保存、不重放、不按 hash 自行放行。
+1. **Business authorization**: the authorization inside a Router request, e.g.
+   `data.purge`, dependency source builds, authority transfer; verified by the
+   Case/Action contract.
+2. **Host execution approval**: Codex/sandbox approvals of actual commands or
+   permission boundaries; decided by the host. The Router does not save, replay, or
+   self-authorize them by hash.
 
-runner 的价值是把多条零散 SSH/SCP 命令收敛到一个固定、可审查的入口，并减少
-宿主可能需要的审批次数，但“一 Action 一审批”只是观测指标，不是 Router 保证。
-若未来宿主提供 scoped approval API，必须单独评审 adapter；本期不实现 approval
-cache。
+The value of runners is to converge many scattered SSH/SCP commands into one fixed,
+auditable entry point and to reduce the number of approvals the host may need, but
+"one Action, one approval" is only an observability metric, not a Router guarantee. If
+a future host provides a scoped approval API, the adapter must be reviewed separately;
+no approval cache is implemented in this phase.
 
-远端 runner 必须：
+Remote runners must:
 
-- 使用 site profile 中的 transport/alias；
-- 发送固定 helper 和不可变 JSON request，不拼接调用方 shell；
-- 在远端再次验证 request hash、site ID、roots 和 protected paths；
-- 首个失败停止，保留 receipt/log，不猜测修复；
-- 返回结构化错误 `permission_denied/site_unreachable/envelope_violation/
-  runner_failed`。
+- use the transport/alias from the site profile;
+- send a fixed helper and immutable JSON request, never concatenating caller shell;
+- re-verify the request hash, site ID, roots, and protected paths on the remote side;
+- stop at the first failure, preserve receipt/log, and not guess at repairs;
+- return structured errors `permission_denied/site_unreachable/envelope_violation/
+  runner_failed`.
 
-## 12. Context 与 observability
+## 12. Context and Observability
 
-| 内容 | 正常上限 | 超限行为 |
+| Content | Normal limit | On overflow |
 |---|---:|---|
-| Case summary | 4 KiB | 只保留 current identity/readiness/issues |
-| Flow request summary | 4 KiB | 完整 request 留在 Locator |
-| Terminal result | 4 KiB | evidence 列表改为 artifact ref |
-| Failure result | 8 KiB | stdout/stderr 各保留脱敏尾部最多 2 KiB |
-| Worker envelope | 4 KiB | 输入文件仅给 Locator/hash |
-| 单个 owner reference | 一个 phase 一个 | 进入 phase 时延迟加载 |
+| Case summary | 4 KiB | keep only current identity/readiness/issues |
+| Flow request summary | 4 KiB | full request stays at its Locator |
+| Terminal result | 4 KiB | evidence list becomes artifact refs |
+| Failure result | 8 KiB | stdout/stderr each keep at most 2 KiB of redacted tail |
+| Worker envelope | 4 KiB | input files given only as Locator/hash |
+| Single owner reference | one per phase | lazily loaded when entering the phase |
 
-新增观测字段：
+New observability fields:
 
 ```json
 {
@@ -769,32 +811,35 @@ cache。
 }
 ```
 
-collector 只观察 façade、state/site/owner runner 和 artifact，不写 Case state。token
-字段只用平台原始值；没有 usage 时保持 `null`，不按字符数估算。
+The collector only observes the façade, state/site/owner runners, and artifacts; it
+does not write Case state. Token fields use only the platform's raw values; when usage
+is unavailable they stay `null` and are never estimated from character counts.
 
-## 13. 实施工作包
+## 13. Implementation Work Packages
 
-### WP0：合同和兼容层
+### WP0: Contracts and Compatibility Layer
 
-修改：
+Modified:
 
 - `templates/case-state.json`
 - `templates/action-request.json`
 - `templates/action-result.json`
-- 新增五个 flow schema
+- five new flow schemas
 - `scripts/entity_router_state.py`
 - `tests/test_router_state.py`
 - `tests/test_router_contracts.py`
 
-实现：结构化 target、criteria evaluator、增量 Action 字段、统一 identity record、
-`run.prepare` 原子激活、data/analysis identity transition。
+Implementation: structured target, criteria evaluator, incremental Action fields,
+unified identity record, `run.prepare` atomic activation, data/analysis identity
+transitions.
 
-完成门：旧 Case 仍可 show/verify；缺 target 的旧 Case flow-check 明确返回
-needs_decision；所有 mutation 有 revision conflict 和 active Action 测试。
+Completion gate: legacy Cases can still show/verify; a legacy Case without a target
+gets an explicit needs_decision from flow-check; all mutations have revision conflict
+and active Action tests.
 
-### WP1：inspect/check 与 batch probe
+### WP1: inspect/check and Batch Probe
 
-新增：
+Added:
 
 - `entity_router_flow.py inspect/check`
 - `entity_router_flow_common.py`
@@ -802,49 +847,52 @@ needs_decision；所有 mutation 有 revision conflict 和 active Action 测试�
 - `tests/test_router_flow_inspect.py`
 - `tests/test_router_flow_check.py`
 
-完成门：Case 0/1/N 候选、每 site 单调用、所有 invariant code、4 KiB 截断和离线
-site 行为均有测试。
+Completion gate: tests cover 0/1/N Case candidates, one call per site, all invariant
+codes, 4 KiB truncation, and offline-site behavior.
 
-### WP2：确定性 execute 与 owner adapters
+### WP2: Deterministic execute and Owner Adapters
 
-新增：
+Added:
 
 - `entity_router_flow.py execute`
 - `entity_router_flow_runners.py`
 - `tests/test_router_flow_execute.py`
 - `tests/test_router_flow_build_adapter.py`
 
-先支持 `source.materialize`、`build.plan`、`build.compile`、`run.prepare`。完成门：
-bundle 内每步独立 Action；错误 stop-first；无任意 shell 字段；build partial/compat
-fail 返回 needs_decision；崩溃恢复不重复副作用。
+First supports `source.materialize`, `build.plan`, `build.compile`, `run.prepare`.
+Completion gate: each bundle step is an independent Action; errors stop-first; no
+arbitrary shell fields; build partial/compat fail returns needs_decision; crash
+recovery does not repeat side effects.
 
-### WP3：launch/watch/monitor
+### WP3: launch/watch/monitor
 
-新增：
+Added:
 
-- `run.launch.v1` 和 `run.monitor.v1`
-- dispatch receipt 与 scheduler/PID recovery
+- `run.launch.v1` and `run.monitor.v1`
+- dispatch receipt and scheduler/PID recovery
 - `tests/test_router_flow_watch.py`
 - `tests/test_router_flow_launch_recovery.py`
 
-完成门：模拟“提交后写 receipt 前崩溃”、重复 job、PID 重用、offline、timeout、
-terminal active Action 和无限 unchanged poll；任何路径都不盲重提作业。
+Completion gate: simulated "crash after submission, before writing the receipt",
+duplicate jobs, PID reuse, offline, timeout, terminal active Action, and unbounded
+unchanged polls; no path blindly resubmits a job.
 
-### WP4：data/analysis 与 model Worker 两段式
+### WP4: data/analysis and the Two-Phase Model Worker
 
-新增：
+Added:
 
 - `data.inspect.v1`
 - `execute --prepare/--resume`
 - `tests/test_router_flow_data_identity.py`
 - `tests/test_router_flow_worker_resume.py`
 
-完成门：data ID 对 run/inventory 稳定；inventory 变化生成新 ID；analysis exact
-引用 data ID；Worker narrative 单独不能推进状态；错误输出 root 被拒绝。
+Completion gate: the data ID is stable for a run/inventory; an inventory change
+generates a new ID; analysis references the exact data ID; the Worker narrative alone
+cannot advance state; wrong output roots are rejected.
 
-### WP5：观测、评测与启用
+### WP5: Observability, Evaluation, and Rollout
 
-新增：
+Added:
 
 ```text
 evals/router-flow/
@@ -854,80 +902,87 @@ evals/router-flow/
 └── replay-fixtures/
 ```
 
-本地 replay 和 controller-local query canary 先执行；受管事务默认通过
-`entityctl flow`。旧 `list/show/verify/status/start-action/finish-action` 不删除，只用于
-精确恢复和诊断。m87 live canary 仍要求用户对该远端计算副作用单独明确授权。
+Local replay and the controller-local query canary run first; managed transactions go
+through `entityctl flow` by default. The legacy
+`list/show/verify/status/start-action/finish-action` are not deleted; they are used
+only for precise recovery and diagnosis. The m87 live canary still requires the user's
+separate explicit authorization for that remote compute side effect.
 
-## 14. 测试矩阵
+## 14. Test Matrix
 
-| 类别 | 必测场景 |
+| Category | Required scenarios |
 |---|---|
-| Case 选择 | exact UID、cwd 单候选、共享 checkout 多候选、registry stale |
-| Revision | base drift、step 间外部 mutation、同 Action 不同 hash |
-| Target | 缺失、hash drift、512 target 对 256 run、target 更新后 stale |
-| Envelope | wrong site、path escape、symlink escape、controller overlap |
-| Identity | source-build、build-run、run-data、data-analysis parent mismatch |
-| Bundle | 正常串行、第二步失败、model step stop、禁止 purge/authority transfer |
-| Build | partial requirements、compat fail、warning、dependency source build gate |
-| Launch | 提交前失败、提交后 crash、0/1/N scheduler match、PID reuse |
-| Watch | unchanged、progress、exit 0、nonzero、fatal、offline、timeout、resume |
-| Data | absent、partial、ready、corrupt、inventory 改变、output 写入 data root |
-| Context | 4/8 KiB 边界、脱敏、artifact ref、无完整 Case/log 泄漏 |
-| Compatibility | Python 3.6.8、旧 Case、旧 Action、现有 fast status |
+| Case selection | exact UID, single cwd candidate, shared checkout with multiple candidates, stale registry |
+| Revision | base drift, external mutation between steps, same Action with different hash |
+| Target | missing, hash drift, 512 target against a 256 run, stale after target update |
+| Envelope | wrong site, path escape, symlink escape, controller overlap |
+| Identity | source-build, build-run, run-data, data-analysis parent mismatch |
+| Bundle | normal serial, second step fails, model step stop, purge/authority transfer forbidden |
+| Build | partial requirements, compat fail, warnings, dependency source build gate |
+| Launch | failure before submission, crash after submission, 0/1/N scheduler matches, PID reuse |
+| Watch | unchanged, progress, exit 0, nonzero, fatal, offline, timeout, resume |
+| Data | absent, partial, ready, corrupt, inventory change, output written into data root |
+| Context | 4/8 KiB boundaries, redaction, artifact refs, no full Case/log leakage |
+| Compatibility | Python 3.6.8, legacy Case, legacy Action, existing fast status |
 
-单元测试不能访问真实 scheduler；通过 fake site transport 和固定 status fixture 验证。
-live m87 只用于 canary，不作为 CI 必要条件。
+Unit tests must not access a real scheduler; they verify via a fake site transport and
+fixed status fixtures. Live m87 is used only for the canary and is not a CI
+requirement.
 
-## 15. 端到端验收
+## 15. End-to-End Acceptance
 
-场景：
+Scenario:
 
 ```text
-修改 PGen
+modify PGen
   -> m87 source materialize
   -> build plan/compile
   -> new run prepare/launch
-  -> model 外 monitor
+  -> monitor outside the model
   -> data inspect
   -> scientific analysis
 ```
 
-正确性硬门：
+Hard correctness gates:
 
-- Case、Workflow、每个 Action、owner/domain/site/envelope 均符合 Router v3；
-- source -> build -> run -> data -> analysis identity chain 闭合；
-- 新 run 原子切换 roots，绝不继承旧 run 的 data/analysis current identity/readiness；
-- scheduler/PID 恢复不重复提交；
-- terminal monitor 在 façade 返回前收口；
-- Worker 结果必须经 controller reprobe 才能推进状态；
-- 任一硬门失败，效率指标即使达标也不接受。
+- Case, Workflow, every Action, and owner/domain/site/envelope all conform to Router v3;
+- the source -> build -> run -> data -> analysis identity chain closes;
+- a new run atomically switches roots and never inherits the old run's data/analysis current identity/readiness;
+- scheduler/PID recovery does not resubmit;
+- the terminal monitor is closed before the façade returns;
+- Worker results must be reprobed by the controller before advancing state;
+- if any hard gate fails, the change is not accepted even if the efficiency metrics pass.
 
-效率门：
+Efficiency gates:
 
-- `model_wakeups.total <= 6`；
-- `tool_roundtrips <= 30`；
-- `approval_reviews <= 10`，仅作为观测目标；
-- 注入模型的工具输出总量 `<= 64 KiB`；
-- 任意数量 unchanged polls 不增加模型上下文；
-- 相对固定 baseline 的工具往返和注入字节均降低至少 60%。
+- `model_wakeups.total <= 6`;
+- `tool_roundtrips <= 30`;
+- `approval_reviews <= 10`, as an observability target only;
+- total tool output injected into the model `<= 64 KiB`;
+- any number of unchanged polls adds nothing to the model context;
+- tool roundtrips and injected bytes both drop by at least 60% relative to the frozen baseline.
 
-token 门是条件式的：当 baseline 和 canary 都有平台原始 token usage 时，要求模型
-处理 token 降低至少 60%；任一侧 usage 为 `null` 时记录 `not_assessed`，不以字符数
-替代，最终结论由调用数、注入字节、wall time 和正确性硬门决定。
+The token gate is conditional: when both baseline and canary have platform-native token
+usage, model processing tokens must drop by at least 60%; when either side's usage is
+`null`, record `not_assessed`, do not substitute character counts, and let the final
+conclusion be decided by call counts, injected bytes, wall time, and the hard
+correctness gates.
 
-## 16. 开工顺序与停止条件
+## 16. Start Order and Stop Conditions
 
-严格顺序：`WP0 -> WP1 -> WP2 -> WP3 -> WP4 -> WP5`。WP0 未完成前不实现
-watch；WP2 的幂等基础未通过前不接 scheduler；WP3 未证明不重复提交前不做 live
-canary。
+Strict order: `WP0 -> WP1 -> WP2 -> WP3 -> WP4 -> WP5`. Do not implement watch before
+WP0 is complete; do not connect a scheduler before WP2's idempotence foundation
+passes; do not run a live canary before WP3 proves there is no resubmission.
 
-每个工作包结束时必须：
+At the end of each work package you must:
 
-1. 运行该包定向测试；
-2. 运行完整 `python3 -m unittest discover -s tests -v`；
-3. 运行 `git diff --check` 和 Router Python 3.6 兼容检查；
-4. 更新本文对应的已实现/未实现状态；
-5. 若发现需要第二写入者、降低证据强度或盲重放外部副作用，立即停止并重新评审。
+1. run that package's targeted tests;
+2. run the full `python3 -m unittest discover -s tests -v`;
+3. run `git diff --check` and the Router Python 3.6 compatibility check;
+4. update the implemented/not-implemented status in this document;
+5. if you find a need for a second writer, weaker evidence strength, or blind replay of
+   external side effects, stop immediately and re-review.
 
-当 WP0 的 schema/transition tests 全部通过后，本计划即具备进入代码实现阶段的
-条件；在此之前不得先写 façade 外壳来绕过缺失的状态语义。
+Once WP0's schema/transition tests all pass, this plan is ready to enter the code
+implementation phase; before that, do not write the façade shell first to bypass the
+missing state semantics.

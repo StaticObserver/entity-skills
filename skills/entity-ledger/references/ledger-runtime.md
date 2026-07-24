@@ -1,77 +1,91 @@
-# Ledger 运行时参考
+# Ledger Runtime Reference
 
-这是一份内部/调试参考。正常工作使用 `SKILL.md` 中记录的
-`entityctl status`、`record` 原语和 `show`。
+This is an internal/debugging reference. For normal work use the
+`entityctl status`, `record` primitives, and `show` documented in
+`SKILL.md`.
 
-## 控制器
+## Controller
 
-`$ENTITY_LEDGER_HOME/ledger.db`（默认 `~/.entity-ledger/ledger.db`）是
-唯一的结构化权威。schema v2 在 SQLite 中存储 Site、Case、项目绑定、
-identity、紧凑证据和事件（events 为被动审计）。大型
-产物和日志保留在其 owner Site。并发控制是 `BEGIN IMMEDIATE`
-文件锁；旧 plan/apply 协议的 Operation/Step 记录已随 v1→v2 迁移
-归档到 `<ledger_home>/archive/`。
+`$ENTITY_LEDGER_HOME/ledger.db` (default `~/.entity-ledger/ledger.db`) is
+the single structured authority. Schema v2 stores Sites, Cases, project
+bindings, identities, compact evidence, and events in SQLite (events are
+passive audit). Large artifacts and logs remain on their owner Site.
+Concurrency control is a `BEGIN IMMEDIATE` file lock; the Operation/Step
+records of the old plan/apply protocol were archived to
+`<ledger_home>/archive/` during the v1→v2 migration.
 
-在不改变控制器状态的情况下导出：
+Export without changing controller state:
 
 ```bash
 python3 scripts/entityctl.py export --output /absolute/ledger-export.json
 ```
 
-## record 落账与 receipt
+## record writes and receipts
 
-每个 record 原语先在控制器本地推导 identity（内容寻址哈希），再经
-`ExecutorClient` 把结构化 envelope 交给执行 Site 上的执行器。写入类
-原语自带证据探测：执行器重新读取并验证 receipt/输出 fingerprint，
-全部通过后原语才在一个 SQLite 事务中落账 identity、current 投影和
-审计事件。任何一步失败都是零写入，修复原因后重跑同一条原语即可。
+Each record primitive first derives the identity locally in the controller
+(content-addressed hash), then hands a structured envelope via
+`ExecutorClient` to the executor on the execution Site. Writing primitives
+carry their own evidence probes: the executor re-reads and verifies the
+receipt/output fingerprints, and only when everything passes does the
+primitive record the identity, the current projection, and the audit event
+in a single SQLite transaction. Any failed step means zero writes; fix the
+cause and rerun the same primitive.
 
-提交作业（`record run-launch`）是不可盲目重放的外部效果，执行器内部
-按 `intent_written → effect_observed → outputs_verified` 推进 receipt：
-重复执行命中已验证的 receipt 直接短路；进程在提交后、验证前中断时，
-按 launch comment 在 scheduler/进程表中找回唯一匹配的已提交效果并
-认领，绝不二次提交。多个匹配属于异常——采纳其中任何一个都不安全。
+Submitting a job (`record run-launch`) is an external effect that must not
+be blindly replayed; internally the executor advances the receipt through
+`intent_written → effect_observed → outputs_verified`: repeated execution
+short-circuits on an already-verified receipt; when the process is
+interrupted after submission but before verification, it finds the uniquely
+matching submitted effect by launch comment in the scheduler/process table
+and adopts it — it never submits twice. Multiple matches are an anomaly —
+adopting any one of them is unsafe.
 
-## 改名与存储迁移边界
+## Rename and storage migration boundaries
 
-entity-router → entity-ledger 改名带来三处兼容边界：
+The entity-router → entity-ledger rename introduces three compatibility
+boundaries:
 
-- **存储目录与数据库**：首次解析 Ledger home 时自动把
-  `~/.entity-router` 迁移为 `~/.entity-ledger`（home 内的
-  `router.db` 随之改名为 `ledger.db`）。迁移是惰性的，只在
-  命令真正解析 home 时发生，不会在 `--help` 等 parser 构建阶段
-  触发。`ENTITY_ROUTER_HOME` 环境变量仍被识别（在
-  `ENTITY_LEDGER_HOME` 未设置时）。
-- **receipt 身份**：改名前已 prepare/inventory 的 run，其 staging
-  receipts 里的 receipt 记录着旧的 `plan_hash`（其中嵌有旧 kind
-  字符串）。对同一个 run 重跑 prepare/data 会命中 "existing receipt
-  belongs to another Step"。修复办法：删除该 run 在
-  `<staging_root>/<case_uid>/<operation_id>/receipts/` 下的旧
-  receipt 后重跑原语。
-- **在途作业恢复**：改名前提交的在途作业带有
-  `entity-router:` 前缀的 launch comment。恢复匹配（Slurm 的
-  squeue/sacct 扫描与 direct 的 pgrep 扫描）同时接受
-  `entity-ledger:` 和 `entity-router:` 两种前缀，旧作业会被认领
-  而不是重复提交；新提交一律使用 `entity-ledger:` 前缀。
+- **Storage directory and database**: the first time the Ledger home is
+  resolved, `~/.entity-router` is automatically migrated to
+  `~/.entity-ledger` (the `router.db` inside the home is renamed to
+  `ledger.db` along with it). Migration is lazy — it only happens when a
+  command actually resolves the home, and is not triggered during parser
+  construction phases such as `--help`. The `ENTITY_ROUTER_HOME`
+  environment variable is still honored (when `ENTITY_LEDGER_HOME` is not
+  set).
+- **Receipt identity**: for runs that were prepared/inventoried before the
+  rename, the receipts in their staging receipts record the old
+  `plan_hash` (which embeds the old kind string). Rerunning prepare/data
+  for the same run hits "existing receipt belongs to another Step". Fix:
+  delete the run's old receipts under
+  `<staging_root>/<case_uid>/<operation_id>/receipts/` and rerun the
+  primitive.
+- **In-flight job recovery**: in-flight jobs submitted before the rename
+  carry a launch comment with the `entity-router:` prefix. Recovery
+  matching (the squeue/sacct scan for Slurm and the pgrep scan for direct)
+  accepts both the `entity-ledger:` and `entity-router:` prefixes, so old
+  jobs are adopted rather than resubmitted; new submissions always use the
+  `entity-ledger:` prefix.
 
-## 执行器 transport
+## Executor transport
 
-本地和 SSH 使用相同的 `entity_ledger_executor.py` 内容和请求 envelope。
-远端副本位于：
+Local and SSH use the same `entity_ledger_executor.py` content and request
+envelope. The remote copy lives at:
 
 ```text
 <staging_root>/.entity-ledger-executor/<sha256>/entity_ledger_executor.py
 ```
 
-Transport 只负责暂存精确的 payload/请求 JSON、调用白名单内的动作、
-并返回结构化结果。run 提交接受经过校验的 `run_spec`；
-执行器渲染由 Site profile 的 `scheduler.kind` 选定的提交
-脚本——`slurm` 对应 sbatch 脚本，`direct` 对应自包含的 `run.sh`。
-调用方提供的 shell、命令、前置命令或脚本文本都会被拒绝。
+The transport only stages the exact payload/request JSON, invokes actions
+on the whitelist, and returns structured results. Run submission accepts a
+validated `run_spec`; the executor renders the submission script selected
+by the Site profile's `scheduler.kind` — `slurm` corresponds to an sbatch
+script, `direct` to a self-contained `run.sh`. Caller-provided shell,
+commands, pre-commands, or script text are all rejected.
 
-launch 的 effect identity 因后端而异。Slurm 记录
-`{"scheduler": "slurm", "job_id": ..., "comment": ...}`；direct 后端
-（无 scheduler 的 Site）记录分离的进程：
+The launch effect identity varies by backend. Slurm records
+`{"scheduler": "slurm", "job_id": ..., "comment": ...}`; the direct backend
+(Sites without a scheduler) records a detached process:
 
 ```json
 {"scheduler": "direct", "pid": 418795, "pgid": 418795,
@@ -79,39 +93,42 @@ launch 的 effect identity 因后端而异。Slurm 记录
  "exit_file": "<run_root>/.entity-exit-code", "comment": "entity-ledger:..."}
 ```
 
-被启动的进程是会话首进程（`pid == pgid`）；walltime 由
-`run.sh` 内部的 `timeout`（或内嵌的 bash 等价物）强制执行，
-退出码——包括超时时的 124——被写入退出文件。
-恢复时通过 `pgrep -f` 扫描 launch comment 并匹配进程工作目录
-来认领一次被中断的 launch，且只采纳唯一匹配。
+The launched process is a session leader (`pid == pgid`); the walltime is
+enforced by `timeout` inside `run.sh` (or an inline bash equivalent), and
+the exit code — including 124 on timeout — is written to the exit file.
+Recovery claims an interrupted launch by scanning for the launch comment
+with `pgrep -f` and matching the process working directory, and only
+adopts a unique match.
 
 ## Site profile
 
-Site 直接注册进 store：
+Sites are registered directly into the store:
 
 ```bash
 python3 scripts/entityctl.py site add --profile /absolute/site-profile.json
 python3 scripts/entityctl.py site list
 ```
 
-必需的运行根目录是 `build_root`、`run_root` 和 `staging_root`；run
-Site 还要声明 transport 和 scheduler（`slurm`，或对无
-scheduler 的 Site 使用 `none`）。策略可以提供 `default_cpus_per_gpu`、
-`default_partition`、`default_qos`、`default_submit_user` 和
-`max_cpu_per_gpu`。direct 后端忽略 `default_partition` 和
-`default_qos`（它们归一化为空字符串），并将提交用户
-默认为当前用户。密钥和集群修复命令绝不应出现在
-profile 中。
+The required runtime roots are `build_root`, `run_root`, and
+`staging_root`; a run Site must also declare a transport and a scheduler
+(`slurm`, or `none` for Sites without a scheduler). A policy may provide
+`default_cpus_per_gpu`, `default_partition`, `default_qos`,
+`default_submit_user`, and `max_cpu_per_gpu`. The direct backend ignores
+`default_partition` and `default_qos` (they normalize to empty strings)
+and defaults the submit user to the current user. Secrets and cluster
+repair commands must never appear in a profile.
 
-## live status 探测
+## Live status probing
 
-默认 status 是控制器本地的，且绝不写状态；只有 `--live` 才接触
-执行 Site，且最多做三次有界的后端查询。在 Slurm Site 上：作业状态、
-作业离开队列后的 `sacct` 兜底查询，以及对 Case run root 的未跟踪
-作业扫描。在无 scheduler 的 Site 上：退出文件、`kill -0` 存活探测，
-以及外来进程扫描——当 Site 拒绝该扫描时降级为 `unknown`（绝不视为
-失败）。`--live` 还会报告 `divergences`，对带外变更分类：
-`job_gone`（后端对已记录的作业或进程没有记录）、`state_mismatch`
-（作业到达了 Ledger 从未观测到的终态），以及 `untracked_job`
-（一个外来的 scheduler 作业或进程正在 Case run root 中运行——
-这是绕过记录原语的证据）。
+The default status is controller-local and never writes state; only
+`--live` touches the execution Site, and it makes at most three bounded
+backend queries. On a Slurm Site: job status, an `sacct` fallback query
+after the job leaves the queue, and an untracked-job scan of the Case run
+root. On a Site without a scheduler: the exit file, a `kill -0` liveness
+probe, and a foreign-process scan — when the Site refuses that scan, the
+result degrades to `unknown` (never treated as a failure). `--live` also
+reports `divergences`, classifying out-of-band changes: `job_gone` (the
+backend has no record of a recorded job or process), `state_mismatch` (the
+job reached a terminal state the Ledger never observed), and
+`untracked_job` (a foreign scheduler job or process is running in the Case
+run root — evidence that the record primitives were bypassed).

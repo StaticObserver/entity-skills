@@ -1,10 +1,10 @@
-# HDF5 构建笔记
+# HDF5 Build Notes
 
-## 版本策略
+## Version Policy
 
-所有 profile 的 HDF5 版本都是 **1.14.6**。可通过 `requirements.environment.dependency_versions.hdf5` 覆盖。
+The HDF5 version is **1.14.6** for all profiles. It can be overridden via `requirements.environment.dependency_versions.hdf5`.
 
-## CMake 选项
+## CMake Options
 
 ```
 -DCMAKE_INSTALL_PREFIX="$PREFIX"
@@ -13,23 +13,23 @@
 -DHDF5_ENABLE_PARALLEL=OFF    # when MPI=OFF
 ```
 
-HDF5 是三个源码构建依赖中最简单的。很少出问题。
+HDF5 is the simplest of the three source-built dependencies. It rarely causes problems.
 
-## 已知问题
+## Known Issues
 
-### MPI/串行模式不匹配
-- 症状：ADIOS2 期望 MPI HDF5 但 HDF5 是串行构建时的链接错误
-- 触发：HDF5 构建之后 `requirements.environment.mpi` 发生了变化
-- 修复：用正确的 `HDF5_ENABLE_PARALLEL` 设置重新构建 HDF5。HDF5 不重新构建就无法切换 MPI 模式。
+### MPI/serial mode mismatch
+- Symptom: link errors when ADIOS2 expects an MPI HDF5 but HDF5 was built serial
+- Trigger: `requirements.environment.mpi` changed after HDF5 was built
+- Fix: rebuild HDF5 with the correct `HDF5_ENABLE_PARALLEL` setting. HDF5 cannot switch MPI mode without a rebuild.
 
-### HDF5 版本标签格式
-- 症状：git clone 失败，报 "branch not found"
-- 触发：HDF5 使用 `hdf5_X.Y.Z` 标签格式（如 `hdf5_1.14.6`）
-- 修复：生成的构建脚本已经处理了这一点。
+### HDF5 version tag format
+- Symptom: git clone fails with "branch not found"
+- Trigger: HDF5 uses the `hdf5_X.Y.Z` tag format (e.g., `hdf5_1.14.6`)
+- Fix: the generated build scripts already handle this.
 
-## 构建后验证
+## Post-Build Verification
 
-预期安装结构：
+Expected install structure:
 ```
 <prefix>/
 ├── bin/
@@ -40,7 +40,7 @@ HDF5 是三个源码构建依赖中最简单的。很少出问题。
 └── cmake/hdf5-config.cmake     ← Must exist
 ```
 
-验证：
+Verification:
 ```bash
 ls <prefix>/cmake/hdf5-config.cmake
 ls <prefix>/include/hdf5.h

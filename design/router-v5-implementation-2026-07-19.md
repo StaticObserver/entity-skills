@@ -1,21 +1,22 @@
-# Entity Router v5 实现说明
+# Entity Router v5 Implementation Notes
 
-日期：2026-07-19
-范围：GoalSpec `kind=run` 的完整闭环
+Date: 2026-07-19
+Scope: the complete closed loop for GoalSpec `kind=run`
 
-## 结果
+## Results
 
-Router 的普通路径已经从 v3/v4 的 Case、Workflow、Action、Worker、flow request 和
-writer lease 驾驶，收敛为三个命令：
+The Router's normal path has converged from the v3/v4 model driven by Case, Workflow,
+Action, Worker, flow request, and writer lease down to three commands:
 
 ```text
 entityctl plan → entityctl apply → entityctl status
 ```
 
-用户和主 Agent 只写运行目标与资源承诺。Case UID、Operation/run ID、source/input hash、
-Site/path Locator、staging/run root、Step、claim、receipt 和恢复判断全部由程序派生。
+The user and the main Agent only write run goals and resource commitments. Case UID,
+Operation/run ID, source/input hash, Site/path Locator, staging/run root, Step, claim,
+receipt, and recovery decisions are all derived by the program.
 
-## 当前架构
+## Current Architecture
 
 ```mermaid
 flowchart LR
@@ -30,94 +31,116 @@ flowchart LR
     S --> L["Optional one-call live probe"]
 ```
 
-Controller 只保存小型控制事实。源码、build、run、raw data 和 analysis artifact 仍由各自
-Site 权威保存。
+The Controller stores only small control facts. Source code, builds, runs, raw data, and
+analysis artifacts remain authoritatively stored on their respective Sites.
 
-## 实现映射
+## Implementation Mapping
 
-| 模块 | 职责 |
+| Module | Responsibility |
 |---|---|
-| `entity_router_planner.py` | 校验最小 GoalSpec，固定完整源码内容身份，派生不可变 Plan |
-| `entity_router_store.py` | SQLite schema、事务、Operation/Step journal、identity/current、v3 import/export |
-| `entity_router_operation.py` | Apply、内部 claim heartbeat、Local/SSH staging、恢复、status |
-| `entity_router_executor.py` | 站点侧 allowlisted preflight/prepare/launch、receipt、独立 verify |
-| `entityctl.py` | 公开 `plan/apply/status` 与管理面 `doctor/install/migrate` |
+| `entity_router_planner.py` | Validate the minimal GoalSpec, pin the full source content identity, derive the immutable Plan |
+| `entity_router_store.py` | SQLite schema, transactions, Operation/Step journal, identity/current, v3 import/export |
+| `entity_router_operation.py` | Apply, internal claim heartbeat, Local/SSH staging, recovery, status |
+| `entity_router_executor.py` | Site-side allowlisted preflight/prepare/launch, receipt, standalone verify |
+| `entityctl.py` | Public `plan/apply/status` plus management-plane `doctor/install/migrate` |
 
-公共 `--help` 只展示这六个入口。旧 flow、writer、project、inspect 和 run-status 仍可作为
-兼容实现运行，但不再出现在普通接口或 SKILL 上下文。
+The public `--help` shows only these six entry points. The old flow, writer, project,
+inspect, and run-status commands still run as compatibility implementations, but no
+longer appear in the normal interface or the SKILL context.
 
-## 简化后的运行语义
+## Simplified Run Semantics
 
-1. `plan` 读取 Goal、Site、项目源码和 input，缺少真正决策时只返回
-   `needs_decision`；不创建 Case/Operation。
-2. `apply` 重新验证 Plan hash、源码、Site profile 以及全部派生路径和边界，然后创建或
-   复用 Operation。
-3. 每个 Step 在外部效果前写 intent；Site receipt 绑定 Operation、Plan 和 Step。
-4. Executor 完成后，Controller 再调用 verify 读取 receipt 并核对输出 fingerprint，随后
-   用一个 SQLite 事务提交 Step、identity、current pointer 和 event。
-5. 中断后再次 Apply 同一 Plan。已存在的 receipt 被验证和复用；没有独立 recover 命令。
-6. `status` 默认只读 `router.db`。`--live` 只对当前 job 做一次 scheduler 调用。
+1. `plan` reads the Goal, Site, project source, and input; when a genuine decision is
+   missing it returns only `needs_decision`; it does not create a Case/Operation.
+2. `apply` re-validates the Plan hash, source, Site profile, and all derived paths and
+   boundaries, then creates or reuses an Operation.
+3. Each Step writes an intent before its external effect; the Site receipt binds the
+   Operation, Plan, and Step.
+4. After the Executor finishes, the Controller calls verify to read the receipt and
+   check the output fingerprint, then commits the Step, identity, current pointer, and
+   event in a single SQLite transaction.
+5. After an interruption, Apply the same Plan again. Existing receipts are verified and
+   reused; there is no separate recover command.
+6. `status` by default reads only `router.db`. `--live` makes at most one scheduler call
+   for the current job.
 
-## 安全边界
+## Security Boundaries
 
-- GoalSpec 禁止 ID、hash、Locator、binding、owner/domain、lease 和命令字段。
-- Executor 不接收 caller script/shell；只接收严格 `run_spec` 并自行渲染 sbatch。
-- 显式 executable 必须位于 Site `build_root`。
-- Plan 即使被编辑并重新计算 hash，也不能扩大 allowed root、改变 payload/receipt/run path
-  或伪造派生 identity。
-- 源码身份包含 tracked、modified、untracked 文件的内容 hash；`dirty=true` 不再充当身份。
-- Plan artifact 位于项目内时只排除它自己，不能用排除列表隐藏其他源码变化。
-- 同一 launch intent 若匹配多个 Slurm job，Operation 终结为 anomaly，不猜测采用哪个。
+- GoalSpec forbids ID, hash, Locator, binding, owner/domain, lease, and command fields.
+- The Executor accepts no caller script/shell; it accepts only a strict `run_spec` and
+  renders the sbatch itself.
+- An explicit executable must be located under the Site `build_root`.
+- Even if a Plan is edited and its hash recomputed, it cannot widen the allowed root,
+  change payload/receipt/run paths, or forge derived identity.
+- Source identity includes content hashes of tracked, modified, and untracked files;
+  `dirty=true` no longer serves as identity.
+- A Plan artifact located inside the project excludes only itself; exclusion lists cannot
+  be used to hide other source changes.
+- If a launch intent matches multiple Slurm jobs, the Operation terminates as an anomaly
+  rather than guessing which one to adopt.
 
-## 迁移
+## Migration
 
-`entityctl migrate --from-v3` 一次性导入 v3 site、registry、project binding、Case、identity
-与遗留异常线索。数据库记录 `v3_imported_at`；后续调用不重放、不覆盖 v5 状态，也不回写
-旧 JSON。`migrate --export` 提供可审计 JSON 导出。
+`entityctl migrate --from-v3` performs a one-time import of v3 sites, registry, project
+bindings, Cases, identities, and legacy anomaly clues. The database records
+`v3_imported_at`; later calls do not replay, do not overwrite v5 state, and do not write
+back to the old JSON. `migrate --export` provides an auditable JSON export.
 
-当前真实 controller 尚未执行迁移：`bh-reconnection` 和 `axion-pic` 仍是活跃 v3 Case。
-在它们静止且旧客户端会话重启前迁移会有事实分叉风险，因此本次只验证迁移代码和临时
-controller，不触碰 live 状态。
+The real controller has not yet executed the migration: `bh-reconnection` and
+`axion-pic` are still active v3 Cases. Migrating before they go quiet and old client
+sessions restart would risk fact divergence, so this round only validated the migration
+code against a temporary controller without touching live state.
 
-## 验收
+## Acceptance
 
-- Router：101 tests passed。
-- `entity-pgen`：3 tests passed。
-- `entity-env-build`：18 tests passed。
-- v5 专项：15 tests，覆盖 CLI、确定性 Plan、项目根与源码权威根分离、Site policy 决策、重复 Apply 不重复 `sbatch`、三个 Step 的
-  effect-before-commit 崩溃恢复、暂时性 SQLite commit 失败、Local/SSH 同构、一次 live call、
-  v3 单次迁移和重算 hash 后扩大写根的篡改拒绝。
-- 新增运行文件通过 Python 3.6 grammar 解析与当前 Python bytecode compile。
-- `git diff --check` 通过。
-- 真实 SSH canary：`pi2-v100`，Python 3.12.2，Slurm；内容寻址 executor 成功远端执行并
-  verify `run.preflight.v1`。最终 executor SHA-256 为
-  `eb29e74306890c70848824e4d63d2e3d20cb2aa26494216344ba5a1138da9a3a`。使用确认的
-  `dgx2` partition，仅调用 `sbatch --test-only`，没有提交作业。receipt 位于
-  `/lustre/home/acct-tdlmzn/tdlmzn-yangyangcai/entity/axion-pic/_router-stage/.v5-canary/2026-07-19-final/`。
+- Router: 101 tests passed.
+- `entity-pgen`: 3 tests passed.
+- `entity-env-build`: 18 tests passed.
+- v5-specific: 15 tests, covering the CLI, deterministic Plans, separation of project
+  root and source authority root, Site policy decisions, repeated Apply not repeating
+  `sbatch`, effect-before-commit crash recovery at all three Steps, transient SQLite
+  commit failure, Local/SSH isomorphism, a single live call, one-time v3 migration, and
+  rejection of tampering that widens the write root after recomputing the hash.
+- Newly added run files pass Python 3.6 grammar parsing and current Python bytecode
+  compilation.
+- `git diff --check` passes.
+- Real SSH canary: `pi2-v100`, Python 3.12.2, Slurm; the content-addressed executor
+  executed remotely and verified `run.preflight.v1`. Final executor SHA-256:
+  `eb29e74306890c70848824e4d63d2e3d20cb2aa26494216344ba5a1138da9a3a`. Used the confirmed
+  `dgx2` partition, invoked only `sbatch --test-only`, and submitted no jobs. The receipt
+  is located at
+  `/lustre/home/acct-tdlmzn/tdlmzn-yangyangcai/entity/axion-pic/_router-stage/.v5-canary/2026-07-19-final/`.
 
-真实 canary 同时发现现有 `pi2-v100` profile 缺少 `policy.default_partition` 和
-`policy.default_submit_user`。`doctor` 现在会显式报告这两项；Planner 在 Site/Goal 都没有
-给出时返回 `needs_decision`，不会把错误推迟到 Apply。
+The real canary also revealed that the existing `pi2-v100` profile lacks
+`policy.default_partition` and `policy.default_submit_user`. `doctor` now reports both
+explicitly; the Planner returns `needs_decision` when neither the Site nor the Goal
+provides them, instead of deferring the error to Apply.
 
-## 明确边界
+## Explicit Boundaries
 
-v5 当前完整执行的 Goal kind 是 `run`。PGen、build、data、analysis 继续由三个 owner skill
-承担领域工作，并遵循“自由探索，严格收束”；把它们全部纳入同一 GoalSpec 外层合同是后续
-扩展，不应通过重新暴露 Action/flow 细节来实现。
+The only Goal kind v5 currently executes end to end is `run`. PGen, build, data, and
+analysis remain the domain work of the three owner skills, following "explore freely,
+converge strictly"; bringing them all under the same GoalSpec outer contract is a later
+extension and must not be achieved by re-exposing Action/flow details.
 
-## 退役记录（2026-07-21）
+## Retirement Record (2026-07-21)
 
-v3/v4 代码面已全部删除：`entity_router_state.py`、`entity_router_flow*.py`、
-`entity_router_status.py`、`entity_router_project.py`、`entity_router_site.py`，
-entityctl 兼容命令（`flow`、`writer`、`project`、`inspect`、`run-status`、
-`migrate --from-v3`），v3/v4 模板与全部 playbooks，以及 `evals/router-flow/`
-v4 评测脚手架。`migrate --export` 由 `entityctl export --output` 取代；Site 注册由
-`entityctl site add/list`（直写 v5 store）取代 `entity_router_site.py`。
+The v3/v4 code surface has been fully deleted: `entity_router_state.py`,
+`entity_router_flow*.py`, `entity_router_status.py`, `entity_router_project.py`,
+`entity_router_site.py`, the entityctl compatibility commands (`flow`, `writer`,
+`project`, `inspect`, `run-status`, `migrate --from-v3`), the v3/v4 templates and all
+playbooks, and the `evals/router-flow/` v4 evaluation scaffolding. `migrate --export` was
+replaced by `entityctl export --output`; Site registration is now handled by
+`entityctl site add/list` (writing directly to the v5 store), replacing
+`entity_router_site.py`.
 
-线上控制器 `~/.entity-router` 的 v3 导入已于 2026-07-19 完成（4 Cases、2 Projects、
-7 Sites），2026-07-21 复核 `doctor` 与两个活跃项目的 `status` 均正常；备份位于
-`~/.entity-router.backup-20260721-132112/`（含 `v5-export.json` 快照）。v3 旧文件
-按迁移语义原地保留为只读证据，v5 不再读取。
+The v3 import into the production controller `~/.entity-router` completed on 2026-07-19
+(4 Cases, 2 Projects, 7 Sites); a 2026-07-21 re-check of `doctor` and `status` for the
+two active projects showed everything normal; the backup is at
+`~/.entity-router.backup-20260721-132112/` (including the `v5-export.json` snapshot).
+The old v3 files are retained in place as read-only evidence per the migration semantics;
+v5 no longer reads them.
 
-`entity-pgen` preflight 改为查询 v5 store；受管写入在 v5 pgen Goal 落地前一律
-fail-closed（`router-required`），只读与 standalone 路径不变。
+`entity-pgen` preflight now queries the v5 store; managed writes are fail-closed
+(`router-required`) until the v5 pgen Goal lands, while read-only and standalone paths
+are unchanged.

@@ -1,32 +1,31 @@
 # Backlog
 
-## 高优先级
+## High Priority
 
-- 把这个 vault 设计转换成实际 skill-pack 文件。
-- 编写 `core/source-of-truth.md`。
-- 编写 `core/code-map.md`。
-- 实现 router `SKILL.md`。
-- 将 TOML 指导同步到当前 `input.example.toml`。
-- 将 PGen 指导同步到当前 `src/global/traits/pgen.h`。
+- Turn this vault design into actual skill-pack files.
+- Write `core/source-of-truth.md`.
+- Write `core/code-map.md`.
+- Implement the router `SKILL.md`.
+- Sync TOML guidance to the current `input.example.toml`.
+- Sync PGen guidance to the current `src/global/traits/pgen.h`.
 
-## 中优先级
+## Medium Priority
 
-- 增加 nt2py CLI 指导。
-- 增加 output quantity 语义和证据强度规则。
-- 增加 cluster/HPC run script templates。
-- 增加 checkpoint/restart workflow。
-- 增加 StaticObserver Entity fork 的 local overlay。
+- Add nt2py CLI guidance.
+- Add output quantity semantics and evidence strength rules.
+- Add cluster/HPC run script templates.
+- Add checkpoint/restart workflow.
+- Add a local overlay for the StaticObserver Entity fork.
 
-## 低优先级
+## Low Priority
 
-- 增加源码架构图。
-- 增加 run manifest 示例。
-- 增加 development design note 示例。
-- 增加 GitHub PR 发布工作流。
+- Add a source code architecture diagram.
+- Add a run manifest example.
+- Add a development design note example.
+- Add a GitHub PR publishing workflow.
 
-## 开放问题
+## Open Questions
 
-- 最终 skill pack 应该放在 repo 根目录，还是放在一个子目录？
-- local overlays 应该是私有笔记、可选模块，还是单独 skill？
-- simulation 和 analysis 是否从第一天就拆成不同 skill，还是 analysis 先作为 simulation 下的 playbook？
-
+- Should the final skill pack live at the repo root, or in a subdirectory?
+- Should local overlays be private notes, optional modules, or a separate skill?
+- Should simulation and analysis be split into different skills from day one, or should analysis start as a playbook under simulation?

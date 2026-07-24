@@ -1,14 +1,14 @@
 # entity-env-build Optimization Plan
 
-日期：2026-06-22
+Date: 2026-06-22
 
-依据：`design/entity-env-build-harness-review-2026-06-22.md`
+Basis: `design/entity-env-build-harness-review-2026-06-22.md`
 
-目标：把 `entity-env-build` 从“已经可用但控制面偏宽的 Harness 原型”收束成“小而硬、简洁优雅、可恢复”的 build harness。优化重点不是继续堆新能力，而是减少分支、统一状态、让主链路更可信。
+Goal: narrow `entity-env-build` from "a usable Harness prototype with an overly wide control surface" into "a small, hard, simple, elegant, recoverable" build harness. The optimization focus is not piling on new capabilities, but reducing branches, unifying state, and making the main chain more trustworthy.
 
-## 1. 当前基线
+## 1. Current Baseline
 
-当前已经稳定下来的主链路是：
+The main chain that has stabilized is:
 
 ```text
 requirements.json
@@ -19,39 +19,39 @@ requirements.json
   -> entity_run.py build result
 ```
 
-已完成且应保留：
+Completed and to be kept:
 
-- `entity_checkpoint.py validate` 默认阻塞 invalid/partial requirements。
-- `entity_generate.py env/build` 默认只接受 `compatibility.status=pass`。
-- `entity_checkpoint.py record-install` 已能结构化记录依赖安装证据。
-- `entity_run.py build` 已能执行生成脚本并写回 `requirements.json.build_result`。
-- `tests/test_hard_gates.py` 已覆盖 hard gates、warn gate、stale env、record-install、requirements drift、runner 成功/失败。
+- `entity_checkpoint.py validate` blocks invalid/partial requirements by default.
+- `entity_generate.py env/build` only accepts `compatibility.status=pass` by default.
+- `entity_checkpoint.py record-install` can already record dependency install evidence in a structured way.
+- `entity_run.py build` can already execute the generated script and write back `requirements.json.build_result`.
+- `tests/test_hard_gates.py` already covers hard gates, the warn gate, stale env, record-install, requirements drift, and runner success/failure.
 
-当前真正需要优化的不是再补更多边角功能，而是：
+What truly needs optimization now is not more corner features, but:
 
-- `SKILL.md` 偏重，主流程和长诊断材料混在一起。
-- `.entity-session.json` 的位置和初始化方式不统一。
-- session/log/compat archive/site notes helper 存在，但没有形成简洁状态模型。
-- source-build sub-agent 权限描述和实际构建动作矛盾。
-- compat pass 的覆盖范围还没有被显式建模。
-- cluster configure/build policy 需要更精确，但不能扩成远程编排框架。
+- `SKILL.md` is heavy, mixing the main flow with long diagnostic material.
+- The location and initialization of `.entity-session.json` are not unified.
+- session/log/compat archive/site notes helpers exist, but have not formed a clean state model.
+- The source-build sub-agent permission description contradicts the actual build actions.
+- The coverage of a compat pass has not been explicitly modeled.
+- Cluster configure/build policy needs to be more precise, but must not grow into a remote orchestration framework.
 
-## 2. 设计原则
+## 2. Design Principles
 
-### 2.1 先减法，再硬化
+### 2.1 Subtract first, then harden
 
-不要用“每个问题一个补丁”的方式演进。后续任何改动都必须满足至少一个条件：
+Do not evolve with a "one patch per problem" approach. Every future change must satisfy at least one of these conditions:
 
-- 删除一个概念分支；
-- 统一一类状态迁移；
-- 把人工判断变成确定性 artifact；
-- 让 `pass/fail` 的含义更可信。
+- removes a conceptual branch;
+- unifies a class of state transitions;
+- turns manual judgment into a deterministic artifact;
+- makes the meaning of `pass/fail` more trustworthy.
 
-不满足这些条件的功能，暂缓。
+Features that satisfy none of these are deferred.
 
-### 2.2 主链路只有少数核心 artifact
+### 2.2 The main chain has only a few core artifacts
 
-核心 artifact 限定为：
+Core artifacts are limited to:
 
 ```text
 requirements.json
@@ -61,7 +61,7 @@ entity-build.sh
 requirements.json.build_result
 ```
 
-辅助 artifact 可以存在，但不进入完成条件：
+Auxiliary artifacts may exist, but do not enter the completion criteria:
 
 ```text
 .entity-session.json
@@ -70,11 +70,11 @@ requirements.json.build_result
 ~/.entity-env-build/site-notes/<hostname>.md
 ```
 
-只有当辅助 artifact 由统一状态层维护后，才允许进入 hard requirement。
+Auxiliary artifacts may only become hard requirements once they are maintained by the unified state layer.
 
-### 2.3 少数入口，统一状态
+### 2.3 Few entry points, unified state
 
-保留少数核心入口：
+Keep a few core entry points:
 
 ```text
 entity_checkpoint.py validate/create/record-install
@@ -83,11 +83,11 @@ entity_generate.py deps/env/build
 entity_run.py build
 ```
 
-不要给每个脚本临时加一套 session/log/report 逻辑。需要状态时，先抽一个小的共享状态转移层。
+Do not bolt a one-off session/log/report mechanism onto each script. When state is needed, first extract a small shared state-transition layer.
 
-## 3. 目标形态
+## 3. Target Shape
 
-目标不是大型 orchestrator，而是一条清楚的最小流水线：
+The target is not a large orchestrator, but a clear minimal pipeline:
 
 ```text
 validate requirements
@@ -99,94 +99,94 @@ validate requirements
   -> record result
 ```
 
-每一步都应满足：
+Each step should satisfy:
 
-- 输入是前一步的 validated artifact；
-- 输出是确定性文件或结构化 JSON 字段；
-- 失败时返回非零退出码；
-- 用户/Agent 能从 artifact 看出下一步是什么。
+- its input is the previous step's validated artifact;
+- its output is a deterministic file or structured JSON field;
+- failure returns a non-zero exit code;
+- the user/Agent can tell from the artifacts what the next step is.
 
 ## 4. Phase Plan
 
-## Phase 0: 文档减法和边界收束
+## Phase 0: Documentation subtraction and boundary narrowing
 
-目标：先降低 Agent 入口复杂度，不改主代码。
+Goal: reduce Agent entry complexity first, without changing the main code.
 
-修改：
+Changes:
 
-1. 精简 `SKILL.md` 主体，只保留：
-   - mission；
-   - boundaries；
-   - hard rules；
-   - minimal phase workflow；
-   - 每步运行哪个脚本；
-   - completion criteria；
-   - reference routing。
+1. Slim the `SKILL.md` body to keep only:
+   - mission;
+   - boundaries;
+   - hard rules;
+   - the minimal phase workflow;
+   - which script to run at each step;
+   - completion criteria;
+   - reference routing.
 
-2. 下沉或降级：
-   - long failure diagnosis -> references；
-   - network-unavailable scenarios -> references；
-   - remote/sub-agent prompt details -> references；
-   - site-notes 自动维护 -> optional；
-   - compat archive -> optional；
-   - session state -> optional until ownership is fixed。
+2. Move down or demote:
+   - long failure diagnosis -> references;
+   - network-unavailable scenarios -> references;
+   - remote/sub-agent prompt details -> references;
+   - site-notes automatic maintenance -> optional;
+   - compat archive -> optional;
+   - session state -> optional until ownership is fixed.
 
-3. README/CLAUDE 只保留入口索引，不复述独立 policy。
+3. README/CLAUDE keep only an entry index and do not restate policy independently.
 
-验收：
+Acceptance:
 
-- `SKILL.md` 主流程能在 150-220 行内读完。
-- `SKILL.md` 不再要求运行当前不可直接运行的 `python3 -c` session 初始化片段。
-- 未脚本托管的能力不再写成 hard requirement。
+- The `SKILL.md` main flow can be read within 150-220 lines.
+- `SKILL.md` no longer requires running the currently non-runnable `python3 -c` session initialization snippet.
+- Capabilities not custodied by scripts are no longer written as hard requirements.
 
-## Phase 1: 统一 artifact ownership
+## Phase 1: Unify artifact ownership
 
-目标：解决 `.entity-session.json` 和 artifact 路径的边界混乱。
+Goal: resolve the boundary confusion between `.entity-session.json` and the artifact paths.
 
-决策：
+Decision:
 
-优先采用 pgen/build-run 级 session：
+Prefer a pgen/build-run-level session:
 
 ```text
 $PGEN_DIR/_build/.entity-session.json
 ```
 
-理由：
+Rationale:
 
-- 一次 Entity build 实际绑定一个 pgen/backend/dependency set。
-- `requirements.json`、`entity-deps.local.json`、`env.sh`、`entity-build.sh` 都在 `_build/` 下最自然。
-- root-level session 容易混入多 pgen 状态，恢复边界不清。
+- One Entity build actually binds one pgen/backend/dependency set.
+- `requirements.json`, `entity-deps.local.json`, `env.sh`, and `entity-build.sh` all most naturally live under `_build/`.
+- A root-level session easily mixes multiple pgen states, making recovery boundaries unclear.
 
-修改：
+Changes:
 
-- `references/json-contracts.md` 明确 artifact ownership。
-- `SKILL.md` 示例统一指向 `$PGEN_DIR/_build/`。
-- 如保留 root-level `$ENTITY_WORKDIR/.entity-session.json`，只能作为 workspace index，不作为 build-run state。
+- `references/json-contracts.md` clarifies artifact ownership.
+- `SKILL.md` examples uniformly point to `$PGEN_DIR/_build/`.
+- If the root-level `$ENTITY_WORKDIR/.entity-session.json` is kept, it can only serve as a workspace index, not as build-run state.
 
-验收：
+Acceptance:
 
-- 文档中只出现一种 build-run session 位置。
-- 所有 artifact path examples 与 `entity_generate.py` 的默认路径一致。
-- 恢复说明不依赖聊天记录。
+- Only one build-run session location appears in the docs.
+- All artifact path examples match the default paths of `entity_generate.py`.
+- Recovery instructions do not rely on chat history.
 
-## Phase 2: 抽最小状态转移层
+## Phase 2: Extract a minimal state-transition layer
 
-目标：避免到处给 CLI 打补丁，用一个小接口统一记录主链路进度。
+Goal: avoid patching CLIs everywhere; use one small interface to uniformly record main-chain progress.
 
-新增或重构：
+Add or refactor:
 
 ```text
 scripts/entity_state.py
 ```
 
-建议接口：
+Suggested interface:
 
 ```python
 record_step(artifacts_dir, step, status, inputs=None, outputs=None, run_id=None, message="")
 load_state(artifacts_dir)
 ```
 
-只记录主链路关键状态：
+Record only the key main-chain states:
 
 ```text
 requirements_validated
@@ -197,9 +197,9 @@ build_script_generated
 build_executed
 ```
 
-不要第一版就接入 site-notes、remote、multi-machine memory。
+Do not wire in site-notes, remote, or multi-machine memory in the first version.
 
-接入顺序：
+Integration order:
 
 1. `entity_checkpoint.py validate/create/record-install`
 2. `entity_compat.py`
@@ -207,38 +207,38 @@ build_executed
 4. `entity_run.py build`
 5. `entity_generate.py deps`
 
-验收：
+Acceptance:
 
-- 每个主链路 CLI 成功后，`.entity-session.json` 有对应 step。
-- 失败不破坏已有 state。
-- 测试只验证少数 step，不复制每个脚本的内部细节。
+- After each main-chain CLI succeeds, `.entity-session.json` has the corresponding step.
+- Failures do not corrupt existing state.
+- Tests verify only a few steps and do not replicate each script's internal details.
 
-## Phase 3: 修正 sub-agent contract
+## Phase 3: Fix the sub-agent contract
 
-目标：让 source-build 子代理 contract 与实际写入行为一致。
+Goal: make the source-build sub-agent contract consistent with actual write behavior.
 
-修改：
+Changes:
 
-- 将 `Read only — no write access` 改为：
-  - 可以写入指定 build tree、install prefix、log dir；
-  - 禁止修改 `requirements.json`；
-  - 禁止修改 `entity-deps.local.json`；
-  - 只能返回结构化 result。
-- `SKILL.md` 和 source-build prompt 都写明允许写入目录。
-- 主 Agent 只通过 `entity_checkpoint.py record-install` 写回 checkpoint。
+- Change `Read only — no write access` to:
+  - may write to the designated build tree, install prefix, and log dir;
+  - forbidden to modify `requirements.json`;
+  - forbidden to modify `entity-deps.local.json`;
+  - may only return a structured result.
+- Both `SKILL.md` and the source-build prompt state the allowed write directories.
+- The main Agent writes back to the checkpoint only via `entity_checkpoint.py record-install`.
 
-验收：
+Acceptance:
 
-- 文档不再出现“执行 build script”与“no write access”矛盾。
-- source-build result handoff 的唯一 checkpoint 写入口是 `record-install`。
+- The docs no longer contain the contradiction between "execute the build script" and "no write access."
+- The only checkpoint write entry for a source-build result handoff is `record-install`.
 
-## Phase 4: 明确 compatibility coverage
+## Phase 4: Make compatibility coverage explicit
 
-目标：让 `compatibility.status=pass` 的含义和实现范围一致。
+Goal: make the meaning of `compatibility.status=pass` consistent with the implemented scope.
 
-修改：
+Changes:
 
-`entity_compat.py` 输出增加 coverage metadata：
+Add coverage metadata to the `entity_compat.py` output:
 
 ```json
 {
@@ -257,42 +257,42 @@ build_executed
 }
 ```
 
-规则：
+Rules:
 
-- `not_implemented` 不能悄悄算进完整 pass contract。
-- 如果某项是当前 build 必需但尚未实现，应给 `warn` 或 `fail`，由默认 gate 阻塞。
-- coverage 是解释 pass 可信度的手段，不是增加新放行路径。
+- `not_implemented` must not silently count toward the full pass contract.
+- If an item is required for the current build but not yet implemented, it should yield `warn` or `fail`, blocked by the default gate.
+- Coverage is a means of explaining pass credibility, not a new approval path.
 
-优先补齐检查：
+Priority checks to fill in:
 
-1. compiler signature：realpath、family、version、wrapper relation。
-2. `PATH` / `CMAKE_PREFIX_PATH` / `LD_LIBRARY_PATH` existence。
-3. `cmake_config` 所属 prefix 是否进入 `CMAKE_PREFIX_PATH`。
-4. 最小 CMake package probe。
-5. MPI on/off 与 ADIOS2/HDF5 serial/MPI mode consistency。
+1. Compiler signature: realpath, family, version, wrapper relation.
+2. `PATH` / `CMAKE_PREFIX_PATH` / `LD_LIBRARY_PATH` existence.
+3. Whether the prefix owning `cmake_config` enters `CMAKE_PREFIX_PATH`.
+4. A minimal CMake package probe.
+5. MPI on/off and ADIOS2/HDF5 serial/MPI mode consistency.
 
-验收：
+Acceptance:
 
-- coverage metadata 出现在 compat result 中。
-- 未覆盖 required check 不会被误认为完整 pass。
-- 现有 hard gate tests 继续通过。
+- Coverage metadata appears in the compat result.
+- Uncovered required checks are not mistaken for a complete pass.
+- Existing hard gate tests keep passing.
 
-## Phase 5: 精确化 cluster policy，不扩成 remote framework
+## Phase 5: Make cluster policy precise without growing into a remote framework
 
-目标：解决 login node / compute node 规则歧义，但保持实现轻量。
+Goal: resolve the login node / compute node rule ambiguity while keeping the implementation lightweight.
 
-文档拆分四类动作：
+The documentation splits actions into four classes:
 
-| 动作 | login node | compute node | 说明 |
+| Action | login node | compute node | Notes |
 | --- | --- | --- | --- |
-| download/materialize | 可允许 | 可允许 | 取决于网络；记录来源 |
-| configure | 可在特定条件下允许 | 推荐 | GPU/tool-linked configure 需谨慎 |
-| compile/link | 默认禁止 | 推荐/必须 | cluster 上默认走 scheduler |
-| run/test | 默认禁止 | 推荐/必须 | 依赖 GPU/MPI runtime |
+| download/materialize | may allow | may allow | depends on the network; record the source |
+| configure | may allow under specific conditions | recommended | be careful with GPU/tool-linked configure |
+| compile/link | forbidden by default | recommended/required | goes through the scheduler by default on clusters |
+| run/test | forbidden by default | recommended/required | depends on the GPU/MPI runtime |
 
-第一版只做文档和 build-plan 字段，不做自动 scheduler abstraction。
+The first version only does documentation and a build-plan field; no automatic scheduler abstraction.
 
-可选 artifact：
+Optional artifact:
 
 ```json
 {
@@ -305,38 +305,38 @@ build_executed
 }
 ```
 
-验收：
+Acceptance:
 
-- `SKILL.md` 不再同时给出含糊的 “NEVER compile on login nodes” 和未定义的 login configure 例外。
-- 不引入自动远程执行框架。
+- `SKILL.md` no longer gives both the vague "NEVER compile on login nodes" and an undefined login configure exception.
+- No automatic remote execution framework is introduced.
 
-## Phase 6: 清理 prompt 和 remote 语义
+## Phase 6: Clean up prompt and remote semantics
 
-目标：让独立验证真的验证当前 artifact。
+Goal: make independent verification actually verify the current artifact.
 
-修改：
+Changes:
 
-- compat sub-agent prompt 以文件路径和 hash 为主。
-- 内联 JSON 只作为摘要，不作为验证对象。
-- remote prompt 标注 experimental。
-- 远程验证要求脚本版本一致：同一 commit/hash，或显式上传本次 scripts。
+- The compat sub-agent prompt is based primarily on file paths and hashes.
+- Inline JSON serves only as a summary, not as the object of verification.
+- The remote prompt is labeled experimental.
+- Remote verification requires script version consistency: the same commit/hash, or explicitly uploading this session's scripts.
 
-验收：
+Acceptance:
 
-- prompt 不再写 “no file reads needed”。
-- sub-agent verdict 记录 requirements/checkpoint hash。
-- remote 不是主链路完成条件。
+- Prompts no longer say "no file reads needed."
+- Sub-agent verdicts record the requirements/checkpoint hashes.
+- Remote is not a completion condition of the main chain.
 
-## 5. 最小测试矩阵
+## 5. Minimal Test Matrix
 
-每次代码优化至少运行：
+Run at least the following for every code optimization:
 
 ```bash
 python3 -m py_compile scripts/*.py
 python3 -m unittest tests/test_hard_gates.py
 ```
 
-新增测试按阶段补，不一次铺满：
+Add new tests phase by phase, not all at once:
 
 | Phase | Test | Expected |
 | --- | --- | --- |
@@ -350,41 +350,41 @@ python3 -m unittest tests/test_hard_gates.py
 | Phase 5 | cluster plan separates configure/build context | execution_plan explicit |
 | Phase 6 | compat prompt includes file hashes | no stale inline-only validation |
 
-## 6. 推荐执行顺序
+## 6. Recommended Execution Order
 
-按收益和复杂度排序：
+Ordered by benefit and complexity:
 
-1. Phase 0：文档减法。先把 hard requirement 和 optional note 分开。
-2. Phase 1：统一 artifact ownership。这个不做，状态层会继续混乱。
-3. Phase 3：修 source-build sub-agent contract。成本低，能消除直接矛盾。
-4. Phase 6：修 compat prompt fresh-read 语义。成本低，提升验证可信度。
-5. Phase 4：增加 compatibility coverage metadata，再逐步补高价值检查。
-6. Phase 2：抽最小状态转移层。等 artifact ownership 稳定后再接主 CLI。
-7. Phase 5：精确化 cluster policy。先文档化，不做远程框架。
+1. Phase 0: documentation subtraction. First separate hard requirements from optional notes.
+2. Phase 1: unify artifact ownership. Without this, the state layer stays chaotic.
+3. Phase 3: fix the source-build sub-agent contract. Low cost, removes a direct contradiction.
+4. Phase 6: fix compat prompt fresh-read semantics. Low cost, improves verification credibility.
+5. Phase 4: add compatibility coverage metadata, then gradually fill in high-value checks.
+6. Phase 2: extract the minimal state-transition layer. Wire it into the main CLIs after artifact ownership stabilizes.
+7. Phase 5: make cluster policy precise. Document it first; do not build a remote framework.
 
-注意：Phase 2 不应变成大 orchestrator。它只是统一记录主链路状态，不负责替 Agent 做所有决策。
+Note: Phase 2 must not turn into a big orchestrator. It only records main-chain state uniformly; it does not make all decisions for the Agent.
 
-## 7. 暂缓事项
+## 7. Deferred Items
 
-短期不做：
+Not done in the short term:
 
-- 自动 dependency discovery 全覆盖；
-- 自动 remote build orchestration；
-- 自动 scheduler submission abstraction；
-- 多 sub-agent 并行构建；
-- site-notes 自动归纳；
-- 完整 machine memory database；
-- GUI/dashboard；
-- 大型 `entity_env_build.py run-all` 总控命令。
+- full automatic dependency discovery coverage;
+- automatic remote build orchestration;
+- automatic scheduler submission abstraction;
+- parallel multi-sub-agent builds;
+- automatic site-notes summarization;
+- a complete machine memory database;
+- GUI/dashboard;
+- a large `entity_env_build.py run-all` master command.
 
-这些都可能有价值，但会把项目重新推向复杂控制面。当前目标是让最小主链路稳定可信。
+All of these may have value, but they would push the project back toward a complex control surface. The current goal is to make the minimal main chain stable and trustworthy.
 
-## 8. 完成标准
+## 8. Completion Criteria
 
-优化完成后，应能回答三个问题：
+After the optimization, it should be possible to answer three questions:
 
-1. 如果某个 CLI 返回 success，下一步是否真的可以信任它的输出 artifact？
-2. 如果失败，是否能从 JSON/state/log 看出失败在哪一步，而不是回聊天记录里找？
-3. 如果 Agent 中断，是否能从 `_build/` 下的 artifact chain 恢复？
+1. If a CLI returns success, can its output artifact really be trusted for the next step?
+2. If it fails, can you see from the JSON/state/log which step failed, instead of digging through chat history?
+3. If the Agent is interrupted, can you recover from the artifact chain under `_build/`?
 
-如果答案都是“是”，这个 skill 就已经足够好。后续优化应以删除复杂度为优先，而不是扩大功能面。
+If all answers are "yes," the skill is already good enough. Further optimization should prioritize deleting complexity over expanding the feature surface.

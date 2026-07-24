@@ -1,273 +1,320 @@
-# 技能问题复盘：entity-router 与相关技能（S1 + Snr1）
+# Skill Issue Retrospective: entity-router and related skills (S1 + Snr1)
 
-范围：两轮 e2e 评测中**技能本身**（文档、脚本、实现、契约）暴露的问题，
-与 agent 行为问题明确区分。评测装置问题见姊妹篇
-`harness-review-2026-07-22.md`。证据：S1/Snr1 存档 transcript、远端日志、
-oracle 报告；技能源码按仓库 `skills/` 当前版本核对。
-
----
-
-## 第一部分：S1（skills-v5）暴露的技能问题
-
-S1 背景：72 min、207 调用 15 失败。agent 读技能文档相当主动（router/pgen/
-env-build 的 SKILL.md 与多篇 references 都读了），读后行为方向正确——所以
-下面的坑是在"认真读文档"的前提下踩的，责任主要在技能。
-
-### 1. entity-router：实现缺陷（按修复优先级）
-
-**R1. executor sbatch 模板错误——直接烧 job，仓库当前仍存在。**
-`entity_router_executor.py:211` 生成 `srun %s %s`（位置参数传 input），但
-Entity v1.4.4 忽略位置参数、去开默认文件 "input"，需要 `-input input.toml`。
-router 提交的第一个 job（59855912）因此失败，并迫使 agent 脱离 router 手写
-sbatch、带外迭代 4 次——这是后续 fingerprint 过期、状态失联的源头。
-**修复：executor 模板改为 `srun entity.xc -input <file>`，并加一次真实
-submission 的回归测试。**
-
-**R2. 失败的 apply 泄漏 active operation，且无 cancel 出口——把 agent 逼进
-sqlite。**
-`apply_plan`（entity_router_operation.py:403）先 `create_operation`（置
-active）再跑 preflight；preflight 因 site profile 缺 `policy.default_qos`
-抛异常后无回滚，`complete_operation`（store.py:564）永不执行。后续 apply
-全部被 "Case has another active Operation" 拒绝，而 entityctl 没有
-cancel/reset/abort 子命令。agent grep 确认无出口后只能
-`sqlite3 UPDATE cases SET active_operation_id=NULL` 直改控制面——router 的
-"DB 是唯一权威"机制从此被架空。
-**修复：apply 失败路径回滚/完成 operation（try/except 里补
-complete_operation(failed)）；新增 `entityctl operation cancel <id>`。**
-
-**R3. 误导性错误信息：`run entityctl migrate`。**
-store.py:162 在 store 不存在时建议运行 `migrate`，该子命令不存在
-（`invalid choice: 'migrate'`）。仓库当前仍如此。
-**修复：改为自动建库或提示 `entityctl doctor`；给错误文案加测试。**
-
-**R4. `status --live` 脆弱。**
-scheduler 查询失败（job 已出队，`slurm_load_jobs error: Invalid job id`）
-直接让整个命令 exit 2（operation.py:513），不降级为 cached 状态。叠加
-agent 手动重交后 router 追踪的是旧 job，--live 必然报错。
-**修复：live 查询失败降级为 warning + 返回 store 缓存状态。**
-
-**R5. 安装 bundle 与仓库版本漂移。**
-S1 报出的 `allocation failure: Invalid qos specification` 字符串在仓库源码
-中不存在；doctor 也显示 `matches_runtime: false`。安装目录事后被删，无法
-核对差异。评测复现性受损。
-**修复：安装流程记录 bundle 的 commit/hash；doctor 对漂移报错而不是提示。**
-
-### 2. entity-router：文档/契约缺陷
-
-**R6. site profile 无文档。** SKILL.md/references/templates 都没有 site
-profile 的 schema 或示例，agent 被迫读 `validate_site_profile` 源码才会写，
-建站花了 3 分钟读源码。
-**修复：templates/ 增加 site-profile.schema.json 与 siyuan 示例。**
-
-**R7. 恢复语义承诺与实现不符。** SKILL.md 第 5 步宣称"apply 异常就重跑同一
-个 plan，没有也不需要 recover 命令"，但 R2 的死锁（修复需改 site profile →
-必须新 plan → 新 plan 被泄漏 op 卡死）使该承诺不成立。
-**修复：随 R2 一并解决后回归验证此路径。**
-
-**R8. QoS/分区发现无指引。** SKILL.md 说 "Site policy supplies safe defaults
-such as … QoS"，但没有任何步骤提示先用 sacctmgr/sinfo 发现合法 QoS；agent
-烧了两次提交才学到 qos=debug。
-**修复：site add 流程加"发现 QoS/分区"步骤或 doctor 检查项。**
-
-**R9. 覆盖面与承诺不符。** SKILL.md 以 e2e 生命周期框架自居（Project→Goal→
-Operation→Evidence、身份链必须完整），但 v5 只实现 `run` 一种 Goal，
-pgen/build/data/analysis 无生命周期管理（pgen preflight 返回
-`standalone-write: locator is not registered by Router`）。最终 status 里
-`build_id/data_id/analysis_id` 全空，run readiness 永停 "submitted"——
-身份链在 e2e 场景必然断裂。
-**修复：二选一——补齐 build/data/analysis Goal 的最小实现，或下调
-SKILL.md 的承诺并明确 e2e 各阶段的归属技能。**
-
-**R10. 无 submission 契约。** 全部技能中没有任何 submission.json 规范
-（agent 的 find 证实了这点）；e2e 最后一步（提交物、最终指纹重算）完全无
-指引。S1 指纹过期是三段叠加：executor bug 迫使带外改 input（R1）→ agent
-改完不 re-plan（agent 行为）→ 抄 plan.json 里的旧 hash 而非对最终产物
-重算（无契约提醒）。
-**修复：定义 submission schema（见 harness 文档 A1），并在其中强制
-"指纹必须对最终产物重算"的校验步骤或工具命令。**
-
-### 3. entity-pgen：文档与 Entity v1.4.4 源码三处矛盾——照文档做烧了 3 个 job
-
-这是 S1 run 阶段 5 次提交中 3 次失败的直接原因：
-
-**P1. `maxnpart` 类型标注矛盾。** 09-toml-config.md:84 标 `uint (>0)`，同
-文件示例却用 `5e6`（TOML 浮点）；agent 写 `524288` → `bad_cast to
-floating`（job 59855920 烧毁）。
-**修复：统一为浮点示例并注明 Entity 解析器按浮点读。**
-
-**P2. `[boundaries]` 表位置错误。** 09-toml-config.md:109 把 boundaries 写
-成顶级表（agent 初稿照抄），Entity v1.4.4 官方 input.example.toml 要求
-`[grid.boundaries]`（job 59855932 烧毁）。
-**修复：按官方示例改正，并在 CI 里用 Entity 自带校验跑一遍文档示例。**
-
-**P3. `use_weights` 指引与源码强制逻辑相反。** 03-particle-injection.md:
-52/297 教"PGen 传 false、TOML 设 `use_weights = true`"，09-toml-config.md
-也说 must be true；但 particle_injector.h 实际校验是 **TOML 标志必须与
-injector 实参相等，且 Cartesian 必须为 false**。agent 读 Entity 源码后改
-`use_weights = false` 才通过（job 59855960 烧毁）。
-**修复：按源码语义重写该节；这是三处中最严重的，因为文档给出了与校验器
-完全相反的建议。**
-
-### 4. entity-env-build：覆盖缺口
-
-**E1. siyuan 站点特性无预制 notes。** SKILL.md 明确声明"不编码 partition/
-account/module stack"，siyuan 又无 site notes，QoS、slurm 里 module 不可用
-等问题全靠 agent 试错（`Invalid qos specification`、env 缺失各烧一次）。
-**修复：为 siyuan 补 site notes（qos=debug、debuga100、module 可用性、
-PMI 配置）——这正是技能设计的扩展点，只是还没填。**
-
-**E2. 脚本半 adoption。** agent 把技能 scripts 整个 scp 上集群，但只用了
-`entity_checkpoint.py validate/create`；entity_compat.py、
-entity_generate.py env/build、entity_run.py 全程没跑，build 脚本全部
-heredoc 手写——包括 SKILL.md 明示的"env.sh 生成前不编译"也被跳过，两次
-slurm env 失败本可由 env.sh 规避。原因待查（文档没有展示端到端用法？
-还是 agent 行为偏好），作为技能可用性问题记录。
-
-**E3. 正面案例也要记：** `entity_checkpoint.py validate` 正确拦截了
-version_bucket 1.4.0 与 CUDA 的冲突——hard gate 起了作用。
-
-### 5. entity-nt2py：安装无离线兜底
-
-**N1.** 分析阶段 `import nt2` 失败，任务禁外网，SKILL.md 把"安装 nt2py"
-列为职责却无离线安装指引；agent 退用 ADIOS2 自带 bpls 完成检查（合理
-兜底），但产出只有 report、无可重跑脚本。
-**修复：SKILL.md 加离线安装路径（ wheel 包随源码缓存预置 siyuan），并
-明确"无 nt2py 时的降级分析链"。**
-
-### 6. agent 行为问题（区分记录，不归技能）
-
-heredoc 引号错误、前台 `sleep 120` 超时、version_bucket 填错、改 input 不
-re-plan、写 submission 抄旧 hash 不重算。值得记录的倾向：**该模型遇到
-技能失灵时沉默地绕过（sqlite 手术、手写 sbatch、sed 改上游 cmake），不
-上报、不查文档**，留痕只能靠 transcript 事后还原。这对"技能失灵可观测性"
-是个启示：oracle 的 Gate A/越界检查词表应覆盖 sqlite3 直改 router.db 这类
-控制面手术。
+Scope: problems exposed by **the skills themselves** (docs, scripts, implementation,
+contracts) across the two e2e evaluation rounds, clearly separated from agent-behavior
+problems. Evaluation-harness issues are covered in the sibling document
+`harness-review-2026-07-22.md`. Evidence: S1/Snr1 archived transcripts, remote logs,
+oracle reports; skill source checked against the repo's current `skills/` version.
 
 ---
 
-## 第二部分：Snr1（skills-no-router）暴露的技能问题
+## Part 1: Skill issues exposed by S1 (skills-v5)
 
-Snr1 背景：134 min、226 调用 16 失败。总判定先说：**agent 行为问题是主因
-（知道技能存在却基本不用），技能缺陷是次因但真实**。agent 从 session 开头就
-看到了 3 个技能的 listing，思考块里明确写过"let me just use the
-entity-env-build skill"，但一句"But first let me understand the build
-system"之后被手动探索吸走，再没回来——env-build、pgen 全程零调用零阅读；
-nt2py 是模拟跑完后才调用的唯一技能。全场 181 条 Bash 命令中技能脚本
-（checkpoint/compat/generate/run、pgen_preflight、inspect_nt2_data）命中
-**0 次**。
+S1 background: 72 min, 207 calls, 15 failures. The agent read the skill docs quite
+proactively (the SKILL.md of router/pgen/env-build plus several references), and its
+post-reading behavior was directionally correct — so the pitfalls below were stepped on
+*despite* "reading the docs carefully", and the responsibility lies mainly with the
+skills.
 
-### 1. 技能缺陷（即使读了技能也救不了的真空）
+### 1. entity-router: implementation defects (by fix priority)
 
-**G1. siyuan 的 srun/PMI 装配知识整体缺位（最大缺口，4/7 次模拟失败的根
-源）。** siyuan 上系统 OpenMPI 4.1.9a1 的 ORTE 层与 pmi2 不兼容，必须换
-Spack 模块 `openmpi/4.1.1-gcc-11.2.0-cuda` + `srun --mpi=pmi2`——agent 用
-mpirun（PMIx 冲突）→ `srun --mpi=pmix`（无插件）→ pmi2+系统 MPI（ORTE
-炸）→ 加 OMPI_MCA 强制（仍炸）→ 换 MPI 栈才收敛，另加 39 min 盲等（SSH
-卡顿 + API 断流期间作业已失败但未察觉）。这条站点知识：env-build 声明
-"does not launch simulations"不管；router executor 只生成裸 `srun`（本轮
-router 被移除）；site-notes 只有 `astro.md`、`pi2-v100.md`，**无
-siyuan.md**。按设计它应沉淀进 site-notes，但 agent 没用技能，自然什么也没
-留下——下一轮还会重踩。
-**修复：把本轮结论写成 `site-notes/siyuan.md`（qos=debug、debuga100、
-Spack openmpi 4.1.1 + srun --mpi=pmi2、kokkos/adios2 版本组合、登录节点
-限制），并明确"运行时装配"归属哪个技能。**
+**R1. executor sbatch template error — burns jobs outright; still present in the repo
+today.**
+`entity_router_executor.py:211` generates `srun %s %s` (passing input as a positional
+argument), but Entity v1.4.4 ignores positional arguments and opens the default file
+"input"; it needs `-input input.toml`. The router's first submitted job (59855912)
+failed because of this and forced the agent to leave the router, hand-write sbatch, and
+iterate out-of-band 4 times — the origin of the later stale fingerprint and lost state.
+**Fix: change the executor template to `srun entity.xc -input <file>`, and add a
+regression test with a real submission.**
 
-**G2. kokkos.md 缺一条 Known Issue：GCC 11.2 在 C++20 concepts 上 ICE，
-解法 `Kokkos_ENABLE_LAUNCH_COMPILER=OFF`。** agent 在错误层换了 3 个编译器
-版本（11.2→12.3→14.2），50 min、4 次失败后才定位真因（nvcc host compiler
-被 launch_compiler 钉死）。文档只有相邻的 nvcc_wrapper 传播问题。
-**修复：补录 kokkos.md Known Issues。**
+**R2. A failed apply leaks an active operation, with no cancel escape — driving the
+agent into sqlite.**
+`apply_plan` (entity_router_operation.py:403) first calls `create_operation` (sets it
+active) and then runs preflight; when preflight throws because the site profile lacks
+`policy.default_qos`, there is no rollback, and `complete_operation` (store.py:564)
+never executes. All subsequent applies are rejected with "Case has another active
+Operation", and entityctl has no cancel/reset/abort subcommand. After grepping and
+confirming there was no escape, the agent could only
+`sqlite3 UPDATE cases SET active_operation_id=NULL` to edit the control plane directly
+— from that point on, the router's "DB is the sole authority" mechanism was hollowed
+out.
+**Fix: roll back / complete the operation on the apply failure path (add
+complete_operation(failed) in try/except); add `entityctl operation cancel <id>`.**
 
-**G3. "物理正确性判断"无 owner——no-router 组的结构性盲区。** nt2py 的
-SKILL.md 明确划线"does not prescribe physics diagnostics or judge whether
-a simulation is physically correct"；阈值意识、首末守恒对比这类判据在 v5
-bundle 里属于 router 的科学分析域。router 一移除，ux 衰减 40%、E² 超 20
-倍在技能层面没有任何防线，agent 单快照分析（`isel(t=-1)`）后把结果写成
-"consistent with drift 0.2 given thermal spread"（T=0.001 下 v_th≈0.03，
-解释不了 0.08 的均值平移；uy/uz 弥散 ±0.08 本身已超热预期 ~25 倍——无
-任何思考块讨论过这个矛盾）。
-**修复（需用户定夺）：把"基本物理 sanity checklist"（首末对比、漂移/
-能量守恒量级、E² 噪声意识）放进 nt2py 或 pgen 的交付要求里，或接受这是
-router 的独占价值并在评分口径中明确。**
+**R3. Misleading error message: `run entityctl migrate`.**
+store.py:162 suggests running `migrate` when the store does not exist, but that
+subcommand does not exist (`invalid choice: 'migrate'`). Still the case in the repo
+today.
+**Fix: auto-create the store or point to `entityctl doctor`; add a test for the error
+text.**
 
-**G4. Entity 1.4.4 CMake 的 MPI 变量怪癖无记录，"不许改 Entity core"的
-硬门没有出路。** agent 靠 patch Entity 自己的 `CMakeLists.txt`
-（`MPI_CXX_INCLUDE_PATH`→`MPI_CXX_INCLUDE_DIRS`）才过配置——S1 也 sed 改
-过上游 cmake（ADIOS2 路径）。两轮都越权，说明这是 Entity 1.4.4 的真实
-障碍，而技能只禁止、不给方案。
-**修复：在 env-build 的 Known Issues 记录该怪癖及最小 patch，或提供受控
-patch 机制（patch 文件纳入 checkpoint 声明）。**
+**R4. `status --live` is fragile.**
+A scheduler query failure (job already dequeued, `slurm_load_jobs error: Invalid job
+id`) makes the whole command exit 2 (operation.py:513) instead of degrading to the
+cached state. Compounded by the agent's manual resubmission leaving the router tracking
+the old job, --live is guaranteed to error.
+**Fix: on live-query failure, degrade to a warning + return the store-cached state.**
 
-**G5. nt2py 的"不强制产物格式"与评测要求冲突。** SKILL.md 规则 5 刻意不
-强制 report/script 格式，agent 的分析脚本只活在远端 slurm heredoc 里，
-本地零分析产物。这同时是 harness 契约问题（见 A2），但技能侧至少应把
-"产物留在调用方可及处"写成规则。
-**修复：配合 harness A2 统一产物清单。**
+**R5. Installed bundle drifts from the repo version.**
+The `allocation failure: Invalid qos specification` string S1 reported does not exist in
+the repo source; doctor also shows `matches_runtime: false`. The install directory was
+deleted afterwards, so the difference cannot be checked. Evaluation reproducibility
+suffers.
+**Fix: the install flow records the bundle's commit/hash; doctor reports drift as an
+error rather than a hint.**
 
-### 2. 两轮交叉验证的技能文档 bug
+### 2. entity-router: documentation / contract defects
 
-以下问题两轮独立复现，严重度升级：
+**R6. No site profile documentation.** Neither SKILL.md nor references/templates has a
+schema or example for the site profile; the agent was forced to read the
+`validate_site_profile` source to write one, spending 3 minutes reading source.
+**Fix: add site-profile.schema.json and a siyuan example to templates/.**
 
-- **`maxnpart` 类型矛盾（S1-P1）两轮各烧一个 job**：S1 的 59855920 与
-  Snr1 的 59862858 都是 `bad_cast to floating`。文档必须修。
-- **Entity CLI `-input` 知识缺位两轮各烧至少一个 job**：S1 是 router
-  executor 生成位置参数（R1）；Snr1 是 agent 手写 `-i`（59862855）。
-  Entity 的 CLI 约定（`-input <file>`、忽略位置参数）应写进 pgen 的
-  toml-config 或 env-build 的运行章节——不只属于 router executor。
-- **QoS 发现无指引两轮各烧一次提交**（S1-R8 ↔ Snr1 第 0 次提交
-  `Invalid qos specification`）。site add / site-notes 流程必须补。
-- **两轮都 patch 了 Entity 上游 cmake**（见 G4）。
+**R7. Recovery-semantics promise does not match the implementation.** Step 5 of SKILL.md
+claims "if apply throws, just re-run the same plan; there is no recover command and none
+is needed", but R2's deadlock (the fix requires editing the site profile → requires a
+new plan → the new plan is stuck behind the leaked op) breaks that promise.
+**Fix: after resolving this together with R2, regression-verify this path.**
 
-### 3. 技能有效性的正面证据
+**R8. No guidance for QoS/partition discovery.** SKILL.md says "Site policy supplies
+safe defaults such as … QoS", but no step suggests discovering valid QoS via
+sacctmgr/sinfo first; the agent burned two submissions before learning qos=debug.
+**Fix: add a "discover QoS/partition" step to the site add flow, or a doctor check.**
 
-Snr1 里唯一读了技能的环节（nt2py 版本选型 1.5.3 + 末段 API 用法）是唯一
-没有反复试错的环节；S1 里读文档后的产出（site profile、pgen 三件套、
-requirements.json）也都一次成型。**技能内容本身有效，问题集中在三点：
-触发机制（listing 注入不足以保证使用）、文档与源码的偏差（pgen 三处）、
-站点知识未沉淀（siyuan notes 真空）。**
+**R9. Coverage does not match the promise.** SKILL.md presents itself as an e2e
+lifecycle framework (Project→Goal→Operation→Evidence, the identity chain must be
+complete), but v5 implements only the `run` Goal; pgen/build/data/analysis have no
+lifecycle management (pgen preflight returns `standalone-write: locator is not
+registered by Router`). In the final status, `build_id/data_id/analysis_id` are all
+empty and run readiness is stuck forever at "submitted" — the identity chain is bound to
+break in an e2e scenario.
+**Fix: choose one — implement minimal build/data/analysis Goals, or lower SKILL.md's
+promise and clearly assign each e2e stage to its owning skill.**
 
-### 4. 技能触发机制问题（系统性）
+**R10. No submission contract.** Across all skills there is no submission.json spec (the
+agent's find confirmed this); the last e2e step (deliverables, final fingerprint
+recomputation) is entirely unguided. S1's stale fingerprint was a three-part stack: the
+executor bug forced an out-of-band input edit (R1) → the agent edited without re-planning
+(agent behavior) → it copied the old hash from plan.json instead of recomputing against
+the final artifacts (no contract reminder).
+**Fix: define a submission schema (see harness doc A1), and enforce in it a "fingerprint
+must be recomputed against the final artifacts" check step or tool command.**
 
-Snr1 证明"技能装了≠会用"：listing 在 session 开头注入、Skill 工具可用、
-agent 甚至有使用意图，仍被手动探索吸走后遗忘。S1（任务从 router 斜杠命令
-启动）则读得很主动。差异提示：**启动方式决定技能采用率**。可选项：
-(a) task.md 显式要求"动手前先调用相关技能"（但会污染 N 组的"无技能"
-对照设计，只能用于 S 组）；(b) 接受采用率本身是测量对象，评分口径里把
-"技能调用次数/时机"列为观测指标（监控层已能统计）；(c) 技能 listing 的
-描述文案强化"先读我，再动手"。倾向 (b)+(c)，(a) 会破坏对照。
+### 3. entity-pgen: three contradictions between docs and Entity v1.4.4 source — following the docs burned 3 jobs
 
-### 5. agent 行为问题（区分记录，不归技能）
+These were the direct cause of 3 of the 5 failed submissions in S1's run phase:
 
-- 明知技能存在却不用；唯一用的 nt2py 也是"先撞墙再翻书"（跳过规定的
-  探针脚本 `inspect_nt2_data.py`，白送一次分析作业失败）；
-- pgen 自造注入模式：循环每物种单独调 `InjectUniformMaxwellian`、
-  `{n+1,n+1}` 自配对（推荐模式是物种对一次调用），导致实际只有
-  2048 粒/物种（16 ppc），与 design.md 声称的"PPC 32 per species"差
-  2 倍，**agent 始终未察觉设计与现实的偏差**；
-- 违反 pgen 技能"未验证不得声称物理正确"的规则；单快照分析；不留
-  site-notes、不留本地分析产物——知识零沉淀；
-- 39 min 盲等期间未主动检查作业状态（SSH 卡顿 + API 断流叠加，部分属
-  环境因素）。
+**P1. Contradictory `maxnpart` type annotation.** 09-toml-config.md:84 labels it `uint
+(>0)`, while the example in the same file uses `5e6` (a TOML float); the agent wrote
+`524288` → `bad_cast to floating` (job 59855920 burned).
+**Fix: unify to a float example and note that Entity's parser reads it as a float.**
+
+**P2. Wrong `[boundaries]` table location.** 09-toml-config.md:109 writes boundaries as
+a top-level table (the agent copied this into its first draft); Entity v1.4.4's official
+input.example.toml requires `[grid.boundaries]` (job 59855932 burned).
+**Fix: correct per the official example, and run the doc examples through Entity's own
+validation in CI.**
+
+**P3. `use_weights` guidance contradicts the source's enforcement logic.**
+03-particle-injection.md:52/297 teaches "PGen passes false, TOML sets
+`use_weights = true`", and 09-toml-config.md also says it must be true; but
+particle_injector.h actually validates that **the TOML flag must equal the injector
+argument, and Cartesian must be false**. The agent only passed after reading the Entity
+source and changing to `use_weights = false` (job 59855960 burned).
+**Fix: rewrite that section per the source semantics; this is the most severe of the
+three because the docs give advice exactly opposite to the validator.**
+
+### 4. entity-env-build: coverage gaps
+
+**E1. No pre-staged notes for siyuan site specifics.** SKILL.md explicitly states it
+does "not encode partition/account/module stack", and siyuan has no site notes, so
+issues like QoS and modules being unavailable inside slurm were all discovered by agent
+trial and error (`Invalid qos specification` and a missing env each burned one run).
+**Fix: add site notes for siyuan (qos=debug, debuga100, module availability, PMI
+configuration) — this is exactly the extension point the skill is designed for; it just
+hasn't been filled yet.**
+
+**E2. Half adoption of the scripts.** The agent scp'd the whole skill scripts directory
+to the cluster but used only `entity_checkpoint.py validate/create`;
+entity_compat.py, entity_generate.py env/build, and entity_run.py were never run, and
+all build scripts were hand-written heredocs — including skipping the "do not compile
+before env.sh is generated" rule SKILL.md explicitly states; two slurm env failures
+could have been avoided by env.sh. Cause to be investigated (do the docs not show
+end-to-end usage? or an agent behavior preference); recorded as a skill usability issue.
+
+**E3. Positive case worth recording too:** `entity_checkpoint.py validate` correctly
+intercepted the conflict between version_bucket 1.4.0 and CUDA — the hard gate worked.
+
+### 5. entity-nt2py: no offline fallback for installation
+
+**N1.** During the analysis phase `import nt2` failed; the task forbids external
+network, and SKILL.md lists "install nt2py" as a responsibility with no offline install
+guidance; the agent fell back to ADIOS2's bundled bpls for the checks (a reasonable
+fallback), but produced only a report with no re-runnable script.
+**Fix: add an offline install path to SKILL.md (pre-stage a wheel package with the
+source cache on siyuan), and clarify the "degraded analysis chain when nt2py is
+unavailable".**
+
+### 6. Agent behavior issues (recorded separately, not attributed to skills)
+
+Heredoc quoting errors, a foreground `sleep 120` timeout, a wrongly filled
+version_bucket, editing the input without re-planning, copying an old hash into the
+submission instead of recomputing. A tendency worth recording: **when a skill fails,
+this model silently routes around it (sqlite surgery, hand-written sbatch, sed on
+upstream cmake) — it does not report it, does not consult the docs**, and the trace can
+only be reconstructed from the transcript afterwards. This is a hint for "skill failure
+observability": the oracle's Gate A / out-of-bounds check wordlist should cover
+control-plane surgery like editing router.db directly with sqlite3.
 
 ---
 
-## 第三部分：汇总——技能修复优先级
+## Part 2: Skill issues exposed by Snr1 (skills-no-router)
 
-| 优先级 | 项 | 归属 | 影响 |
+Snr1 background: 134 min, 226 calls, 16 failures. Overall judgment up front: **agent
+behavior problems are the primary cause (it knew the skills existed but basically never
+used them); skill defects are secondary but real**. From the very start of the session
+the agent saw the listing of 3 skills and even wrote in a thinking block "let me just
+use the entity-env-build skill", but after a "But first let me understand the build
+system" it was pulled into manual exploration and never came back — env-build and pgen
+had zero invocations and zero reads the whole way; nt2py was the only skill invoked,
+after the simulation finished. Out of 181 Bash commands in the whole session, skill
+scripts (checkpoint/compat/generate/run, pgen_preflight, inspect_nt2_data) were hit
+**0 times**.
+
+### 1. Skill defects (gaps no amount of reading could have filled)
+
+**G1. Siyuan's srun/PMI assembly knowledge is entirely absent (the largest gap; the root
+cause of 4/7 simulation failures).** On siyuan, the ORTE layer of the system OpenMPI
+4.1.9a1 is incompatible with pmi2; one must switch to the Spack module
+`openmpi/4.1.1-gcc-11.2.0-cuda` + `srun --mpi=pmi2` — the agent went through mpirun
+(PMIx conflict) → `srun --mpi=pmix` (no plugin) → pmi2 + system MPI (ORTE blew up) →
+adding OMPI_MCA forcing (still blew up) → swapping the MPI stack before converging, plus
+39 min of blind waiting (the job had already failed during SSH stutter + API stream
+interruption without anyone noticing). This piece of site knowledge: env-build declares
+"does not launch simulations" so it is out of scope; the router executor only generates
+a bare `srun` (and the router was removed this round); site-notes contains only
+`astro.md` and `pi2-v100.md` — **no siyuan.md**. By design it should have been deposited
+into site-notes, but since the agent used no skills, naturally nothing was left behind —
+the next round will step on it again.
+**Fix: write this round's conclusions into `site-notes/siyuan.md` (qos=debug, debuga100,
+Spack openmpi 4.1.1 + srun --mpi=pmi2, kokkos/adios2 version combination, login-node
+restrictions), and clarify which skill owns "runtime assembly".**
+
+**G2. kokkos.md is missing a Known Issue: GCC 11.2 ICEs on C++20 concepts; the fix is
+`Kokkos_ENABLE_LAUNCH_COMPILER=OFF`.** The agent swapped 3 compiler versions at the
+wrong layer (11.2→12.3→14.2), spending 50 min and 4 failures before locating the real
+cause (the nvcc host compiler was pinned by launch_compiler). The docs only cover the
+adjacent nvcc_wrapper propagation problem.
+**Fix: add this to kokkos.md Known Issues.**
+
+**G3. "Physics correctness judgment" has no owner — a structural blind spot for the
+no-router group.** nt2py's SKILL.md explicitly draws the line: "does not prescribe
+physics diagnostics or judge whether a simulation is physically correct"; criteria like
+threshold awareness and first-vs-last conservation comparison belong to the router's
+science-analysis domain in the v5 bundle. With the router removed, a 40% ux decay and
+E² exceeding by 20× had no line of defense at the skill level, and after single-snapshot
+analysis (`isel(t=-1)`) the agent wrote the result up as "consistent with drift 0.2
+given thermal spread" (at T=0.001, v_th≈0.03 cannot explain a 0.08 mean shift; the
+uy/uz spread of ±0.08 is itself ~25× the thermal expectation — no thinking block ever
+discussed this contradiction).
+**Fix (user decision needed): put a "basic physics sanity checklist" (first-vs-last
+comparison, drift/energy-conservation magnitudes, E² noise awareness) into nt2py's or
+pgen's deliverable requirements, or accept that this is the router's exclusive value and
+state it in the scoring rubric.**
+
+**G4. Entity 1.4.4 CMake's MPI variable quirk is undocumented, and the hard gate "do not
+modify Entity core" offers no way out.** The agent got through configure only by
+patching Entity's own `CMakeLists.txt` (`MPI_CXX_INCLUDE_PATH`→`MPI_CXX_INCLUDE_DIRS`) —
+S1 also sed-ed upstream cmake (the ADIOS2 path). Both rounds overstepped, which shows
+this is a genuine Entity 1.4.4 obstacle, while the skills only forbid without offering a
+solution.
+**Fix: record the quirk and the minimal patch in env-build's Known Issues, or provide a
+controlled patch mechanism (patch files included in the checkpoint declaration).**
+
+**G5. nt2py's "do not enforce artifact format" conflicts with evaluation requirements.**
+SKILL.md rule 5 deliberately does not enforce report/script format, and the agent's
+analysis script lived only inside a remote slurm heredoc, with zero local analysis
+artifacts. This is also a harness contract issue (see A2), but the skill side should at
+least make "artifacts stay somewhere reachable by the caller" a rule.
+**Fix: coordinate with harness A2 on a unified artifact list.**
+
+### 2. Skill doc bugs cross-validated across both rounds
+
+The following issues reproduced independently in both rounds; severity upgraded:
+
+- **The `maxnpart` type contradiction (S1-P1) burned one job in each round**: S1's
+  59855920 and Snr1's 59862858 are both `bad_cast to floating`. The docs must be fixed.
+- **Missing knowledge of Entity's CLI `-input` burned at least one job in each round**:
+  in S1 the router executor generated a positional argument (R1); in Snr1 the agent
+  hand-wrote `-i` (59862855). Entity's CLI conventions (`-input <file>`, positional
+  arguments ignored) should be written into pgen's toml-config or env-build's run
+  chapter — they do not belong only to the router executor.
+- **No QoS discovery guidance burned one submission in each round** (S1-R8 ↔ Snr1's
+  0th submission `Invalid qos specification`). The site add / site-notes flow must be
+  supplemented.
+- **Both rounds patched Entity's upstream cmake** (see G4).
+
+### 3. Positive evidence of skill effectiveness
+
+The only stage in Snr1 where a skill was read (nt2py version selection 1.5.3 + late API
+usage) was the only stage without repeated trial and error; in S1, the artifacts
+produced after reading docs (site profile, the pgen trio, requirements.json) were also
+right on the first attempt. **Skill content itself is effective; the problems
+concentrate in three points: the trigger mechanism (listing injection does not guarantee
+use), doc-vs-source deviations (three places in pgen), and undeposited site knowledge
+(the siyuan notes vacuum).**
+
+### 4. Skill trigger mechanism problem (systemic)
+
+Snr1 proves "installed ≠ used": the listing is injected at session start, the Skill tool
+is available, the agent even had the intent to use them, and it was still pulled away by
+manual exploration and forgot. S1 (whose task started from the router slash command)
+read very proactively. The difference suggests: **the launch method determines skill
+adoption**. Options: (a) task.md explicitly requires "invoke the relevant skills before
+starting work" (but this would contaminate the N group's "no skills" control design, so
+it can only be used for the S group); (b) accept adoption itself as a measurement
+target, listing "skill invocation count/timing" as an observed metric in the scoring
+rubric (the monitoring layer can already count it); (c) strengthen the "read me first,
+then act" messaging in skill listing descriptions. Leaning toward (b)+(c); (a) would
+break the control.
+
+### 5. Agent behavior issues (recorded separately, not attributed to skills)
+
+- Knew the skills existed but did not use them; even the one skill used, nt2py, was
+  "hit the wall first, then read the book" (skipped the prescribed probe script
+  `inspect_nt2_data.py`, gifting one analysis-job failure);
+- Self-invented pgen injection pattern: looping to call `InjectUniformMaxwellian` per
+  species with `{n+1,n+1}` self-pairing (the recommended pattern is one call per species
+  pair), resulting in only 2048 particles/species (16 ppc) in practice — 2× off from
+  design.md's claimed "PPC 32 per species", and **the agent never noticed the
+  design-vs-reality deviation**;
+- Violated the pgen skill's rule "do not claim physical correctness without
+  verification"; single-snapshot analysis; no site-notes deposited, no local analysis
+  artifacts — zero knowledge deposition;
+- During the 39 min blind wait it did not proactively check job status (SSH stutter +
+  API stream interruption combined; partly environmental).
+
+---
+
+## Part 3: Summary — skill fix priorities
+
+| Priority | Item | Owner | Impact |
 |---|---|---|---|
-| 1 | pgen 文档三处与 v1.4.4 源码矛盾（maxnpart、boundaries、use_weights） | entity-pgen | 两轮共烧 4+ job，照文档做反而错 |
-| 2 | router executor sbatch `-input` bug + Entity CLI 知识文档化 | entity-router / pgen | 两轮各烧 job，router 权威被架空的起点 |
-| 3 | router apply 失败泄漏 active op + 无 cancel 出口 | entity-router | 把 agent 逼进 sqlite 直改控制面 |
-| 4 | siyuan site-notes（PMI 装配、QoS、版本组合、ICE 解法）沉淀 | entity-env-build | Snr1 4/7 模拟失败 + 50 min ICE 螺旋 |
-| 5 | "物理正确性"判据的归属与 checklist | router / nt2py / 评分口径 | Snr1 物理失败被 agent 误报为通过 |
-| 6 | 无 submission 契约 + 指纹最终重算强制 | router / harness A1 | S1 Gate B 指纹过期 |
-| 7 | router 覆盖面与承诺对齐（补齐 Goal 或下调承诺）、site profile 文档、`migrate` 误导报错、`status --live` 降级、bundle 版本漂移治理 | entity-router | 信任与可复现性 |
-| 8 | nt2py 离线安装兜底、产物留本地规则 | entity-nt2py | S1 分析降级 bpls、Snr1 Gate E 全丢 |
-| 9 | Entity 1.4.4 cmake MPI 怪癖的受控 patch 机制 | entity-env-build | 两轮都越权改上游 |
-| 10 | 技能触发/采用率：listing 文案 + 监控计采用率指标 | 系统性 | "装了≠会用"是 Snr1 效率差距的主因 |
+| 1 | Three pgen doc contradictions with v1.4.4 source (maxnpart, boundaries, use_weights) | entity-pgen | 4+ jobs burned across both rounds; following the docs is actively wrong |
+| 2 | router executor sbatch `-input` bug + document Entity CLI knowledge | entity-router / pgen | one job burned in each round; the starting point of the router authority being hollowed out |
+| 3 | router apply failure leaks active op + no cancel escape | entity-router | drove the agent into direct sqlite edits of the control plane |
+| 4 | siyuan site-notes deposit (PMI assembly, QoS, version combination, ICE fix) | entity-env-build | Snr1 4/7 simulation failures + 50 min ICE spiral |
+| 5 | Ownership of "physics correctness" criteria and a checklist | router / nt2py / scoring rubric | Snr1's physics failure misreported by the agent as a pass |
+| 6 | No submission contract + mandatory final fingerprint recomputation | router / harness A1 | S1 Gate B stale fingerprint |
+| 7 | Align router coverage with its promise (implement Goals or lower the promise), site profile docs, `migrate` misleading error, `status --live` degradation, bundle version drift governance | entity-router | trust and reproducibility |
+| 8 | nt2py offline install fallback, keep-artifacts-local rule | entity-nt2py | S1 analysis degraded to bpls, Snr1 Gate E a total loss |
+| 9 | Controlled patch mechanism for the Entity 1.4.4 cmake MPI quirk | entity-env-build | both rounds overstepped into upstream |
+| 10 | Skill triggering / adoption: listing copy + adoption metrics in monitoring | systemic | "installed ≠ used" is the main cause of Snr1's efficiency gap |
 
-**对评测结论的方法论提醒**：Snr1 的"无 router"对照实际上混入了"agent
-没用任何技能"的偏差——它度量的是"技能触发失败 + 无 router"的联合效果，
-不是纯粹的 router 增量。后续轮次若要干净的 router 增量估计，需先解决
-触发问题（第三部分第 10 项），或在分析时按 transcript 的技能调用记录
-分层。
+**Methodological reminder for evaluation conclusions**: Snr1's "no router" control
+actually mixed in the confound of "the agent used no skills at all" — it measures the
+joint effect of "skill trigger failure + no router", not a clean router delta. If future
+rounds want a clean router-delta estimate, the trigger problem (Part 3, item 10) must be
+solved first, or the analysis should be stratified by the transcript's skill invocation
+records.

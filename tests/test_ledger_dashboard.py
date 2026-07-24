@@ -76,11 +76,11 @@ class DashboardTest(unittest.TestCase):
         self.assertEqual(board["build"]["state"], "missing")
         self.assertEqual(board["run"]["state"], "none")
         self.assertEqual(board["data"]["state"], "missing")
-        self.assertEqual(dashboard["intent"], "未记录")
+        self.assertEqual(dashboard["intent"], "not recorded")
         self.assertFalse(dashboard["state_mutated"])
         self.assertEqual(dashboard["remote_calls"], 0)
         steps = " ".join(dashboard["next_steps"])
-        self.assertIn("构建", steps)
+        self.assertIn("build", steps)
 
     def test_pgen_cell_tracks_confirmation_bytes(self):
         path = self._write_toml()
@@ -90,7 +90,7 @@ class DashboardTest(unittest.TestCase):
         self._write_toml(body="[simulation]\nsteps = 3\n")
         dashboard = self._dashboard()
         self.assertEqual(dashboard["board"]["pgen"]["state"], "unconfirmed")
-        self.assertTrue(any("未确认" in item for item in dashboard["pending"]))
+        self.assertTrue(any("unconfirmed" in item for item in dashboard["pending"]))
 
     def test_run_ledger_and_deriver(self):
         self.store.add_identity(
@@ -116,9 +116,9 @@ class DashboardTest(unittest.TestCase):
         dashboard = self._dashboard(live_status)
         self.assertEqual(dashboard["board"]["run"]["state"], "exited")
         self.assertIn("exit 0", dashboard["board"]["run"]["detail"])
-        self.assertTrue(any("盘点" in step for step in dashboard["next_steps"]))
+        self.assertTrue(any("inventory" in step for step in dashboard["next_steps"]))
         self.assertEqual(dashboard["remote_calls"], 2)
-        self.assertTrue(any("带外变更" in item for item in dashboard["pending"]))
+        self.assertTrue(any("out-of-band" in item for item in dashboard["pending"]))
 
     def test_live_exited_nonzero_maps_to_failed(self):
         self.store.add_identity(
@@ -138,8 +138,8 @@ class DashboardTest(unittest.TestCase):
         dashboard = self._dashboard(live_status)
         self.assertEqual(dashboard["board"]["run"]["state"], "failed")
         steps = " ".join(dashboard["next_steps"])
-        self.assertIn("失败", steps)
-        self.assertNotIn("盘点", steps)
+        self.assertIn("failed", steps)
+        self.assertNotIn("inventory", steps)
 
     def test_upsert_case_updates_in_place_and_preserves_identities(self):
         self.store.add_identity(
@@ -173,11 +173,13 @@ class DashboardTest(unittest.TestCase):
         from entity_ledger_record import record_intent
         from entity_ledger_facts import PlanError
         result = record_intent(
-            self.store, self.project, "验证极冠重联的加热率", {"run_id": "t"})
+            self.store, self.project, "verify the heating rate of polar-cap reconnection",
+            {"run_id": "t"})
         self.assertTrue(result["state_mutated"])
         dashboard = self._dashboard()
-        self.assertIn("验证极冠重联的加热率", dashboard["intent"])
-        self.assertIn("记录于", dashboard["intent"])
+        self.assertIn("verify the heating rate of polar-cap reconnection",
+                      dashboard["intent"])
+        self.assertIn("recorded at", dashboard["intent"])
         with self.assertRaises(PlanError):
             record_intent(self.store, self.project, "  ", {})
 
@@ -189,7 +191,8 @@ class DashboardTest(unittest.TestCase):
              "scheduler": {}}, True)
         text = render_text(self._dashboard())
         self.assertLess(len(text.encode("utf-8")), 4096)
-        for marker in ["就绪板", "Run 台账", "建议下一步", "source", "pgen"]:
+        for marker in ["Readiness board", "Run ledger", "Suggested next steps",
+                       "source", "pgen"]:
             self.assertIn(marker, text)
 
     def test_cli_status_defaults_to_text_and_json_is_preserved(self):
@@ -200,7 +203,7 @@ class DashboardTest(unittest.TestCase):
             universal_newlines=True)
         stdout, stderr = process.communicate()
         self.assertEqual(process.returncode, 0, stderr)
-        self.assertIn("就绪板", stdout)
+        self.assertIn("Readiness board", stdout)
         self.assertRaises(ValueError, json.loads, stdout)
         process = subprocess.Popen(
             [sys.executable, ENTITYCTL, "--ledger-home", self.home,

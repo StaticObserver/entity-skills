@@ -1,19 +1,20 @@
-# Entity Skills Package 架构 v3
+# Entity Skills Package Architecture v3
 
-日期：2026-07-14
-状态：当前设计与 runtime 基准
+Date: 2026-07-14
+Status: current design and runtime baseline
 
-## 目标
+## Goals
 
-`entity-skills` 支持跨机器、跨 filesystem 的 Entity simulation：PGen 设计、
-精确 source materialization、环境/build、不可变 run、数据访问和分析，同时
-保证可恢复、可验证和 owner 隔离。
+`entity-skills` supports cross-machine, cross-filesystem Entity simulations: PGen
+design, exact source materialization, environment/build, immutable runs, data
+access, and analysis, while guaranteeing recoverability, verifiability, and owner
+isolation.
 
-## 结构
+## Structure
 
 ```text
-用户
-  -> Entity Router（controller single writer）
+User
+  -> Entity Router (controller single writer)
        -> site profiles + Locator probes
        -> Case v3 / Workflow / Action v2
        -> immutable staged Worker request
@@ -25,11 +26,12 @@
        -> state transition and stale propagation
 ```
 
-Router 只掌握控制信息。专业源码、长日志、raw data 和分析产物留在 owner
-site。Case 是资源图，而非 workspace 目录。详细路径/状态协议见
-`workspace-and-state.md`，Action/Worker 协议见 `router.md`。
+The Router only holds control information. Specialized source code, long logs,
+raw data, and analysis artifacts stay at the owner site. A Case is a resource
+graph, not a workspace directory. See `workspace-and-state.md` for the detailed
+path/state protocol, and `router.md` for the Action/Worker protocol.
 
-## Skill 边界
+## Skill Boundaries
 
 | Skill/domain | Owns |
 |---|---|
