@@ -33,7 +33,6 @@ from tools.skill_observability.evidence import (  # noqa: E402
     validate_nt2py_inventory,
     validate_pgen_preflight,
     validate_router_action,
-    validate_router_operation,
 )
 from tools.skill_observability.adapters.codex_rollout import import_codex_rollout  # noqa: E402
 from tools.skill_observability.adapters.claude_transcript import import_claude_transcript  # noqa: E402
@@ -964,52 +963,6 @@ class SkillObservabilityTest(unittest.TestCase):
         check = next(c for c in outcome["checks"] if c["name"] == "result.acceptance-evidence")
         self.assertTrue(check["passed"], outcome)
         self.assertIn("count-only", check["detail"])
-
-    def test_router_operation_malformed_documents_fail_without_traceback(self):
-        run_dir, _ = self.start()
-        plan_path = self.root / "plan.json"
-        self.write_json(plan_path, {
-            "schema_version": 1,
-            "kind": "entity-router.plan",
-            "status": "ready",
-            "state_mutated": False,
-            "goal": {"schema_version": 1, "kind": "run"},
-            "plan": {
-                "operation_id": "op-1",
-                "case_uid": "case-1",
-                "run_id": "run-1",
-                "plan_hash": "sha256:notreal",
-                "steps": [
-                    {"kind": "run.preflight.v1", "step_id": "s0"},
-                    {"kind": "run.prepare.v2", "step_id": "s1", "identity": "not-a-dict"},
-                    {"kind": "run.launch.v2", "step_id": "s2"},
-                ],
-            },
-        })
-        operation_path = self.root / "operation.json"
-        self.write_json(operation_path, {"operation_id": "op-1", "steps": ["not-a-dict"]})
-        scheduler_path = self.root / "scheduler.json"
-        self.write_json(scheduler_path, {
-            "schema_version": 1, "scheduler": "slurm", "jobs": ["not-a-dict"], "query": {},
-        })
-        status_path = self.root / "status.json"
-        self.write_json(status_path, {
-            "schema_version": 1,
-            "kind": "entity-router.status",
-            "state_mutated": False,
-            "run": {"scheduler": None},
-        })
-        outcome = validate_router_operation(
-            run_dir,
-            plan_path=plan_path,
-            operation_path=operation_path,
-            receipt_paths=[],
-            status_path=status_path,
-            scheduler_path=scheduler_path,
-        )
-        self.assertEqual(outcome["status"], "fail")
-        failed = {c["name"] for c in outcome["checks"] if not c["passed"]}
-        self.assertIn("status.scheduler", failed)
 
     def test_codex_adapter_reuses_shared_tool_trace_helpers(self):
         from tools.skill_observability.adapters import codex_rollout, tool_trace

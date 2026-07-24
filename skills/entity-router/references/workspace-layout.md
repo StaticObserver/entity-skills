@@ -48,5 +48,5 @@ receipt 保留在 Operation 的暂存根目录下，以便 Apply 在
 控制器进程丢失后能够恢复。
 
 Site 本地的 module 配置或策略应放在受信任的 Site 适配器中，
-而不是 GoalSpec 或通用 Router 核心中。密码、令牌、私钥、可变
+而不是 record 原语参数或通用 Router 核心中。密码、令牌、私钥、可变
 会话记忆以及完整的 skill 副本都不应进入项目或控制器状态。

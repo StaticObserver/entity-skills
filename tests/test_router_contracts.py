@@ -1,6 +1,5 @@
 from __future__ import print_function
 
-import json
 import os
 import re
 import sys
@@ -13,10 +12,6 @@ sys.path.insert(0, os.path.join(ROUTER_ROOT, "scripts"))
 
 
 class RouterContractTest(unittest.TestCase):
-    def read_json(self, relative):
-        with open(os.path.join(ROUTER_ROOT, relative), "r") as handle:
-            return json.load(handle)
-
     def test_runtime_entrypoints_exist(self):
         required = [
             "SKILL.md",
@@ -24,12 +19,13 @@ class RouterContractTest(unittest.TestCase):
             "scripts/entity_router_purge.py",
             "scripts/entity_router_remote.py",
             "scripts/entity_router_store.py",
-            "scripts/entity_router_planner.py",
+            "scripts/entity_router_facts.py",
+            "scripts/entity_router_record.py",
+            "scripts/entity_router_dashboard.py",
             "scripts/entity_router_operation.py",
             "scripts/entity_router_executor.py",
             "scripts/entityctl.py",
-            "templates/goal.schema.json",
-            "templates/operation-plan.schema.json",
+            "templates/site-profile.schema.json",
             "references/workspace-layout.md",
             "references/router-runtime.md",
             "../entity-pgen/SKILL.md",
@@ -58,30 +54,6 @@ class RouterContractTest(unittest.TestCase):
         ]
         for relative in forbidden:
             self.assertFalse(os.path.exists(os.path.join(ROOT, relative)), relative)
-
-    def test_v5_goal_schema_excludes_controller_mechanics(self):
-        goal = self.read_json("templates/goal.schema.json")
-        plan = self.read_json("templates/operation-plan.schema.json")
-        self.assertFalse(goal["additionalProperties"])
-        self.assertEqual(goal["properties"]["kind"]["enum"], ["run", "build", "data"])
-        for field in ["operation_id", "case_uid", "locator", "owner", "lease", "plan_hash"]:
-            self.assertNotIn(field, goal["properties"])
-        self.assertEqual(plan["properties"]["kind"]["const"], "entity-router.plan")
-
-    def test_goal_schema_declares_kind_specific_requirements(self):
-        goal = self.read_json("templates/goal.schema.json")
-        requirements = {}
-        for clause in goal.get("allOf", []):
-            kind = clause.get("if", {}).get("properties", {}).get("kind", {}).get("const")
-            if kind:
-                requirements[kind] = clause.get("then", {}).get("required", [])
-        # mirrors validate_goal in entity_router_planner.py
-        self.assertEqual(requirements.get("run"), ["input", "site", "compute"])
-        self.assertEqual(requirements.get("build"), ["site", "checkpoint", "executable"])
-        # data Goals take an optional run reference and no required fields
-        self.assertNotIn("data", requirements)
-        self.assertIn("run", goal["properties"])
-        self.assertIn("checkpoint", goal["properties"])
 
     def test_router_declares_all_execution_domains(self):
         with open(os.path.join(ROUTER_ROOT, "SKILL.md"), "r") as handle:

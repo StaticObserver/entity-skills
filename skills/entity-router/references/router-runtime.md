@@ -1,7 +1,7 @@
 # Router 运行时参考
 
 这是一份内部/调试参考。正常工作使用 `SKILL.md` 中记录的
-`entityctl plan`、`apply` 和 `status`。
+`entityctl status`、`record` 原语和 `show`。
 
 ## 控制器
 
@@ -17,6 +17,10 @@ python3 scripts/entityctl.py export --output /absolute/router-export.json
 ```
 
 ## Operation 日志
+
+> 注意：本节描述的 plan/apply 协议（GoalSpec、Operation Plan、Step
+> 推进与重新 Apply 恢复）已退役，仅用于解读旧 store 中导出的
+> Operation 记录。当前写入路径是 `entityctl record` 原语。
 
 每个 Operation 都有不可变的 Goal 和 Plan 哈希。内部 Step 依次推进：
 

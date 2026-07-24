@@ -1,6 +1,6 @@
 ---
 name: entity-pgen
-description: 设计、实现、解释、评审和修改 Entity problem generator（PGen），以及配套的 TOML 配置与 docs/design.md。适用于目标明确、边界清晰的 PGen 领域工作，可直接使用，包括独立的新建或既有 PGen、初始场或粒子、边界、自定义行为、输出、归一化以及 PGen-TOML 一致性。当前拒绝在 Router 管理的 Case 内写入（v5 pgen Goal 尚未实现）；Case 生命周期、跨领域工作、构建、运行、未归类的故障、Entity 核心改动以及科学分析，请路由给对应的负责技能。
+description: 设计、实现、解释、评审和修改 Entity problem generator（PGen），以及配套的 TOML 配置与 docs/design.md。适用于目标明确、边界清晰的 PGen 领域工作，可直接使用，包括独立的新建或既有 PGen、初始场或粒子、边界、自定义行为、输出、归一化以及 PGen-TOML 一致性。当前拒绝在 Router 管理的 Case 内写入（受管写入须由 Router 的 record 原语登记）；Case 生命周期、跨领域工作、构建、运行、未归类的故障、Entity 核心改动以及科学分析，请路由给对应的负责技能。
 ---
 
 # Entity PGen
@@ -20,8 +20,8 @@ description: 设计、实现、解释、评审和修改 Entity problem generator
 - **独立写入**：仅修改 PGen 所属的产物，且目标位置确切、不在 Router 管理的
   Case 之内。可直接执行。
 - **受管写入**：修改已在 Router v5 store 中注册的源 Locator。当前一律拒绝：
-  受管写入需要 v5 pgen Goal，而该 Goal 尚未实现。请将请求路由给
-  `entity-router`。
+  受管写入须由 Router 的 record 原语登记，pgen skill 不直接落账。请将请求
+  路由给 `entity-router`。
 
 每次写入前，运行：
 
@@ -79,7 +79,7 @@ python3 <entity-pgen-skill>/scripts/pgen_preflight.py \
 5. 对实质性改变物理模型、归一化或实现方向的决定，要先确认。当未决问题不构成阻塞时，继续安全的局部工作。
 6. 在可行时，以当前活动的源码检出为准核实 Entity 版本、API 签名、归一化与坐标基约定。随附 references 针对 Entity v1.4.4，其效力次于当前源码证据。
 7. 当变更影响 PGen 与 TOML 的共同契约时，两者须一起修改，然后更新对应的设计章节与当前状态。
-8. 在任何运行提交之前，向用户展示参数卡，并用 `python3 <entity-pgen-skill>/scripts/pgen_preflight.py confirm <input.toml> --by <actor>` 记录确认（未逐项审查而接受默认值时加 `--confirm-defaults`）。该命令会写出 `<input.toml>.decisions.json`；当记录缺失或其 `input_sha256` 与 TOML 不再匹配时，Router 的 plan 门禁会拒绝签发 plan。任何 TOML 编辑后都要重新运行 `confirm`。
+8. 在任何运行提交之前，向用户展示参数卡，并用 `python3 <entity-pgen-skill>/scripts/pgen_preflight.py confirm <input.toml> --by <actor>` 记录确认（未逐项审查而接受默认值时加 `--confirm-defaults`）。该命令会写出 `<input.toml>.decisions.json`；当记录缺失或其 `input_sha256` 与 TOML 不再匹配时，Router 的 record run-prepare 门禁会拒绝登记。任何 TOML 编辑后都要重新运行 `confirm`。
 
 ## 工作方法
 

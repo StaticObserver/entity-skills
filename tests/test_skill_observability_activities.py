@@ -337,7 +337,7 @@ class JobLifecycleTest(unittest.TestCase):
     def test_entityctl_submit_and_monitor_categories(self):
         records = [
             assistant("2026-07-21T08:00:00Z",
-                      [("t1", "Bash", {"command": "python3 scripts/entityctl.py apply --plan plan.json"})]),
+                      [("t1", "Bash", {"command": "python3 scripts/entityctl.py record run-launch --project-root ."})]),
             assistant("2026-07-21T08:01:00Z",
                       [("t2", "Bash", {"command": "python3 scripts/entityctl.py status op-1"})]),
         ]
@@ -360,7 +360,7 @@ class ActivitiesSkillAdoptionTest(unittest.TestCase):
     def test_mixed_skill_and_raw_share(self):
         records = [
             assistant("2026-07-21T08:00:00Z",
-                      [("t1", "Bash", {"command": "python3 scripts/entityctl.py apply --plan plan.json"})]),
+                      [("t1", "Bash", {"command": "python3 scripts/entityctl.py record run-launch --project-root ."})]),
             assistant("2026-07-21T08:01:00Z",
                       [("t2", "Bash", {"command": "ssh siyuan 'sbatch run.sbatch'"})]),
             assistant("2026-07-21T08:02:00Z",

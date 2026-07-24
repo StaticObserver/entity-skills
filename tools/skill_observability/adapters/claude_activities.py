@@ -63,7 +63,7 @@ CATEGORIES = [
 # submissions count as ``build``, the rest as ``job-submit``).
 DEFAULT_RULES: Sequence[Tuple[str, str]] = (
     ("pgen-authoring", r"pgen\.hpp|input[^\s]*\.toml|design\.md"),
-    ("job-submit", r"\bscancel\b|\bentityctl\b.*\b(plan|apply)\b"),
+    ("job-submit", r"\bscancel\b|\bentityctl\b.*\brecord\b"),
     ("job-monitor", r"\bsqueue\b|\bsacct\b|\bscontrol\b|\bentityctl\b.*\bstatus\b"),
     ("build", r"\bcmake\b|\bmake\b|\bnvcc\b|\bspack\b|\bninja\b"),
     ("data-analysis", r"\bnt2\b|\bnt2py\b|nt2\.Data|inspect_nt2_data"),

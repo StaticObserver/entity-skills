@@ -27,8 +27,19 @@ from entity_router_common import (
     sha256_file,
     validate_site_profile,
 )
-from entity_router_operation import apply_plan, status_for_project
-from entity_router_planner import PlanError, load_goal, plan_goal
+from entity_router_dashboard import build_dashboard, render_text
+from entity_router_facts import PlanError
+from entity_router_operation import status_for_project
+from entity_router_record import (
+    record_build,
+    record_data,
+    record_run_exit,
+    record_run_launch,
+    record_run_prepare,
+    render_run,
+    show_case,
+    snapshot_source,
+)
 from entity_router_store import OperationStore, STORE_SCHEMA_VERSION, canonical_hash, store_path
 
 
@@ -309,12 +320,12 @@ def doctor(args):
         operation = operations.get(active_id) or (
             active if isinstance(active, dict) else {})
         warnings.append(
-            "Case %s has an active Operation %s (status %s, updated %s); if no "
-            "apply is currently running this is a leaked Operation — clear it "
-            "with entityctl operation cancel %s"
+            "Case %s has an active Operation %s (status %s, updated %s); it is "
+            "a leftover of the retired plan/apply protocol and no longer "
+            "blocks the record primitives"
             % (case.get("case_uid", "?"), active_id,
                operation.get("status", "unknown"),
-               operation.get("updated_at", "unknown"), active_id)
+               operation.get("updated_at", "unknown"))
         )
     installs = []
     for provider, path in installed_bundle_roots():
@@ -562,37 +573,71 @@ def _direct_site_discover(profile):
 DISCOVER_BACKENDS["none"] = _direct_site_discover
 
 
-def plan_operation(args):
+def show_command(args):
     store = OperationStore(args.router_home, create=False)
-    goal = load_goal(args.goal)
-    result = plan_goal(store, args.project_root, goal, [args.output])
-    atomic_write_json(args.output, result)
-    result["output"] = absolute(args.output)
-    result["artifact_written"] = True
-    return result
+    return show_case(store, args.project_root)
 
 
-def apply_operation(args):
-    envelope = load_json(args.plan, "Operation Plan")
-    if (envelope.get("kind") != "entity-router.plan"
-            or not isinstance(envelope.get("goal"), dict)
-            or not isinstance(envelope.get("plan"), dict)):
-        raise EntityCtlError("--plan must be an entity-router.plan envelope")
+def render_run_command(args):
+    store = OperationStore(args.router_home, create=False)
+    return render_run(
+        store, args.project_root, args.toml, args.site, args.gpus,
+        args.walltime, args.precision, args.executable)
+
+
+def record_run_prepare_command(args):
     actor = require_attributed_actor(actor_identity(args))
     store = OperationStore(args.router_home, create=False)
-    operation = apply_plan(
-        store, envelope["goal"], envelope["plan"], actor, plan_path=args.plan,
-        refresh=args.refresh,
-    )
-    return {
-        "schema_version": 1, "kind": "entity-router.apply", "ok": True,
-        "state_mutated": True, "operation": operation,
-    }
+    return record_run_prepare(
+        store, args.project_root, args.toml, args.site, args.gpus,
+        args.walltime, args.precision, args.executable, actor)
+
+
+def record_run_launch_command(args):
+    actor = require_attributed_actor(actor_identity(args))
+    store = OperationStore(args.router_home, create=False)
+    return record_run_launch(
+        store, args.project_root, args.run_id, args.adopt_job, args.adopt_pid,
+        actor)
+
+
+def record_run_exit_command(args):
+    actor = require_attributed_actor(actor_identity(args))
+    store = OperationStore(args.router_home, create=False)
+    return record_run_exit(store, args.project_root, args.run_id, actor)
+
+
+def record_build_command(args):
+    actor = require_attributed_actor(actor_identity(args))
+    store = OperationStore(args.router_home, create=False)
+    return record_build(
+        store, args.project_root, args.site, args.checkpoint, args.executable, actor)
+
+
+def record_data_command(args):
+    actor = require_attributed_actor(actor_identity(args))
+    store = OperationStore(args.router_home, create=False)
+    return record_data(store, args.project_root, args.run_id, actor)
+
+
+def snapshot_source_command(args):
+    actor = require_attributed_actor(actor_identity(args))
+    store = OperationStore(args.router_home, create=False)
+    return snapshot_source(store, args.project_root, actor)
 
 
 def project_status(args):
     store = OperationStore(args.router_home, create=False)
-    return status_for_project(store, args.project_root, args.live)
+    result = status_for_project(store, args.project_root, args.live)
+    if args.json:
+        return result
+    dashboard = build_dashboard(store, args.project_root, result)
+    return {
+        "schema_version": 1, "kind": "entity-router.status", "ok": True,
+        "state_mutated": False,
+        "remote_calls": dashboard["remote_calls"],
+        "_entityctl_text": render_text(dashboard),
+    }
 
 
 def export_store(args):
@@ -603,18 +648,6 @@ def export_store(args):
         "schema_version": 1, "kind": "entity-router.export", "ok": True,
         "state_mutated": False, "output": absolute(args.output),
         "cases": len(payload["cases"]), "operations": len(payload["operations"]),
-    }
-
-
-def operation_cancel(args):
-    actor = require_attributed_actor(actor_identity(args))
-    store = OperationStore(args.router_home, create=False)
-    store.cancel_operation(args.operation_id, actor, reason=args.reason or "")
-    operation = store.get_operation(args.operation_id)
-    return {
-        "schema_version": 1, "kind": "entity-router.operation.cancel", "ok": True,
-        "state_mutated": True, "operation_id": args.operation_id,
-        "operation_status": operation["status"],
     }
 
 
@@ -735,33 +768,83 @@ def add_actor_arguments(parser):
     parser.add_argument("--actor-bundle-hash")
 
 
+def add_run_compute_arguments(parser):
+    parser.add_argument("--gpus", type=int, default=1)
+    parser.add_argument("--walltime", default="01:00:00",
+                        help="HH:MM:SS or D-HH:MM:SS")
+    parser.add_argument("--precision", default="double",
+                        choices=["single", "double"])
+    parser.add_argument("--executable", default="",
+                        help="absolute path on the execution Site; defaults to "
+                             "the current verified build identity")
+
+
 def build_parser():
     parser = argparse.ArgumentParser(description="Entity public control-plane CLI")
     parser.add_argument("--router-home", default=router_home())
     add_actor_arguments(parser)
     sub = parser.add_subparsers(
         dest="command",
-        metavar="{doctor,plan,apply,status,site,operation,store,submission,export,install}"
+        metavar="{doctor,status,show,render-run,snapshot-source,record,site,store,submission,export,install}"
     )
     doctor_parser = sub.add_parser("doctor")
     doctor_parser.set_defaults(func=doctor)
 
-    plan = sub.add_parser("plan")
-    plan.add_argument("--project-root", required=True)
-    plan.add_argument("--goal", required=True)
-    plan.add_argument("--output", required=True)
-    plan.set_defaults(func=plan_operation)
-
-    apply = sub.add_parser("apply")
-    apply.add_argument("--plan", required=True)
-    apply.add_argument("--refresh", action="store_true",
-                       help="re-execute a completed data Goal plan (inventory refresh)")
-    apply.set_defaults(func=apply_operation)
+    snapshot = sub.add_parser("snapshot-source")
+    snapshot.add_argument("--project-root", required=True)
+    snapshot.set_defaults(func=snapshot_source_command)
 
     current_status = sub.add_parser("status")
     current_status.add_argument("--project-root", required=True)
     current_status.add_argument("--live", action="store_true")
+    current_status.add_argument(
+        "--json", action="store_true",
+        help="emit the machine-readable controller facts instead of the "
+             "human-readable dashboard")
     current_status.set_defaults(func=project_status)
+
+    show = sub.add_parser("show")
+    show.add_argument("--project-root", required=True)
+    show.set_defaults(func=show_command)
+
+    render = sub.add_parser("render-run")
+    render.add_argument("--project-root", required=True)
+    render.add_argument("--toml", required=True)
+    render.add_argument("--site", required=True)
+    add_run_compute_arguments(render)
+    render.set_defaults(func=render_run_command)
+
+    record = sub.add_parser("record")
+    record_sub = record.add_subparsers(dest="record_command")
+    record_build_parser = record_sub.add_parser("build")
+    record_build_parser.add_argument("--project-root", required=True)
+    record_build_parser.add_argument("--site", required=True)
+    record_build_parser.add_argument("--checkpoint", required=True)
+    record_build_parser.add_argument("--executable", required=True)
+    record_build_parser.set_defaults(func=record_build_command)
+    record_data_parser = record_sub.add_parser("data")
+    record_data_parser.add_argument("--project-root", required=True)
+    record_data_parser.add_argument("--run-id", default="")
+    record_data_parser.set_defaults(func=record_data_command)
+    record_run_prepare_parser = record_sub.add_parser("run-prepare")
+    record_run_prepare_parser.add_argument("--project-root", required=True)
+    record_run_prepare_parser.add_argument("--toml", required=True)
+    record_run_prepare_parser.add_argument("--site", required=True)
+    add_run_compute_arguments(record_run_prepare_parser)
+    record_run_prepare_parser.set_defaults(func=record_run_prepare_command)
+    record_run_launch_parser = record_sub.add_parser("run-launch")
+    record_run_launch_parser.add_argument("--project-root", required=True)
+    record_run_launch_parser.add_argument("--run-id", default="")
+    adopt = record_run_launch_parser.add_mutually_exclusive_group()
+    adopt.add_argument("--adopt-job", default="",
+                       help="adopt an out-of-band Slurm job id into the ledger")
+    adopt.add_argument("--adopt-pid", default="",
+                       help="adopt an out-of-band process id into the ledger")
+    record_run_launch_parser.set_defaults(func=record_run_launch_command)
+    record_run_exit_parser = record_sub.add_parser("run-exit")
+    record_run_exit_parser.add_argument("--project-root", required=True)
+    record_run_exit_parser.add_argument("--run-id", default="")
+    record_run_exit_parser.set_defaults(func=record_run_exit_command)
 
     site = sub.add_parser("site")
     site_sub = site.add_subparsers(dest="site_command")
@@ -773,13 +856,6 @@ def build_parser():
     site_discover_parser = site_sub.add_parser("discover")
     site_discover_parser.add_argument("site_id")
     site_discover_parser.set_defaults(func=site_discover)
-
-    operation = sub.add_parser("operation")
-    operation_sub = operation.add_subparsers(dest="operation_command")
-    cancel = operation_sub.add_parser("cancel")
-    cancel.add_argument("operation_id")
-    cancel.add_argument("--reason", default="")
-    cancel.set_defaults(func=operation_cancel)
 
     store_cmd = sub.add_parser("store")
     store_sub = store_cmd.add_subparsers(dest="store_command")
@@ -822,7 +898,11 @@ def main(argv=None):
     try:
         payload = args.func(args)
         exit_code = payload.pop("_entityctl_exit_code", None)
-        emit(payload)
+        text = payload.pop("_entityctl_text", None)
+        if text is not None:
+            print(text)
+        else:
+            emit(payload)
         if exit_code is not None:
             return exit_code
         return 0 if payload.get("ok", True) else 2

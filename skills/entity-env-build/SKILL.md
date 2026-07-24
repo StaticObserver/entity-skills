@@ -6,7 +6,8 @@ description: 在一个明确的执行站点配置、验证并执行 Entity 依�
 # Entity 环境构建
 
 负责构建站点的环境与 Entity 编译。本技能可以携带精确路径独立运行，也可以
-作为 Router 的 `build.*` Worker 运行。它不选择 PGen 物理内容、不启动模拟、
+配合 Router 使用：构建验证通过后由 `entityctl record build` 把 checkpoint
+登记进 Case 台账。它不选择 PGen 物理内容、不启动模拟、
 不分析输出，也不修改 Entity 核心代码。
 
 ## 必需的构建站点契约

@@ -17,7 +17,7 @@
 | U1 | 新模拟全链路 | A/B | 否 | 全链路能不能走通、重复提交 |
 | U2 | 参数变更重跑（ux 0.2→0.3） | 仅 S | 否 | 旧数据被改、新旧 run 混淆、决策链断裂 |
 | U3 | 作业带外被杀 | A/B | 是（scancel 后 followup） | 谎称成功、不会用 divergence 视图 |
-| U4 | apply 中断恢复 | 仅 S | 是（kill agent 后重启） | 重复 sbatch、悬挂 anomaly |
+| U4 | run-launch 中断恢复 | 仅 S | 是（kill agent 后重启） | 重复 sbatch、悬挂 anomaly |
 | U5 | 可核验交付 + 篡改复核 | 仅 S | 是（tamper 后 followup） | 凭记忆回答、篡改后仍称"完整无误" |
 | U6 | 存量数据分析 | A/B | 否 | 编造数值、写脏数据根 |
 

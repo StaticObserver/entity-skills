@@ -7,9 +7,9 @@ set -euo pipefail
 
 cat <<EOF
 ==> U4 setup: operator action required during the run:
-    1. watch the transcript until an `entityctl ... apply` call appears:
+    1. watch the transcript until an `entityctl ... record run-launch` call appears:
          tail -f "$HARNESS/transcript.jsonl"
-    2. kill the agent process mid-apply (e.g. Ctrl-C or `kill <pid>`);
+    2. kill the agent process mid-launch (e.g. Ctrl-C or `kill <pid>`);
        run_need.sh returns to the shell.
     3. restart the session with the follow-up message:
          bash run_need.sh --followup U4 <variant> <run-name> [model]

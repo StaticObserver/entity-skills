@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""U4 (agent killed mid-apply, then restarted) verification.
+"""U4 (agent killed mid `record run-launch`, then restarted) verification.
 
 Checks: no duplicate sbatch submissions after the restart (same job name
 submitted once, unless the first attempt verifiably FAILED), no unresolved
-anomaly Operations in the router store, and the data was delivered.
+anomaly Operations left over in the router store, and the data was delivered.
 """
 
 from __future__ import annotations
@@ -16,7 +16,7 @@ import verify_common as vc  # noqa: E402
 
 
 def main() -> int:
-    ns = vc.parse_args("U4", "U4 interrupted-apply verification")
+    ns = vc.parse_args("U4", "U4 interrupted-launch verification")
     ctx = vc.resolve_context(ns)
     checks = []
 
@@ -39,7 +39,10 @@ def main() -> int:
                 f"job names with >1 submission (name: count): {duplicates}; "
                 "acceptable only if the first attempt verifiably FAILED — review sacct manually"))
 
-    # 2. router store has no unresolved anomaly Operations
+    # 2. router store has no unresolved anomaly Operations; the record
+    # primitives never write the operations table, so any anomaly here is a
+    # leftover of the retired plan/apply protocol and must be superseded by a
+    # later completed Operation on the same Case
     export = vc.read_router_export(ctx["router_home"])
     if export is None:
         checks.append(vc.check("no_anomaly_operations", "unknown",

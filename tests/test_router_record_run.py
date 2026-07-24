@@ -1,0 +1,549 @@
+#!/usr/bin/env python3
+
+import hashlib
+import json
+import os
+import shutil
+import signal
+import subprocess
+import sys
+import tempfile
+import time
+import unittest
+from unittest import mock
+
+
+ROOT = os.path.realpath(os.path.join(os.path.dirname(__file__), ".."))
+SCRIPTS = os.path.join(ROOT, "skills", "entity-router", "scripts")
+ENTITYCTL = os.path.join(SCRIPTS, "entityctl.py")
+if SCRIPTS not in sys.path:
+    sys.path.insert(0, SCRIPTS)
+
+from entity_router_dashboard import build_dashboard
+from entity_router_store import OperationStore
+
+
+class RecordRunTest(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.mkdtemp(prefix="entity-router-record-run-")
+        self.home = os.path.join(self.temp, "controller")
+        self.project = os.path.join(self.temp, "project")
+        self.run_root = os.path.join(self.temp, "runs")
+        self.staging_root = os.path.join(self.temp, "staging")
+        self.build_root = os.path.join(self.temp, "build")
+        self.bin_root = os.path.join(self.temp, "bin")
+        for path in [self.project, self.run_root, self.staging_root,
+                     self.build_root, self.bin_root]:
+            os.makedirs(path)
+        self.input = os.path.join(self.project, "input.toml")
+        with open(self.input, "w") as handle:
+            handle.write("[simulation]\nsteps = 2\n")
+        self._confirm_input(self.input)
+        with open(os.path.join(self.project, "pgen.hpp"), "w") as handle:
+            handle.write("// source\n")
+        self.executable = os.path.join(self.build_root, "entity.xc")
+        with open(self.executable, "w") as handle:
+            handle.write("binary-placeholder\n")
+        os.chmod(self.executable, 0o755)
+        self.record = os.path.join(self.temp, "slurm.json")
+        self.count = os.path.join(self.temp, "submits.txt")
+        self._write_fake_slurm()
+        self.environment = mock.patch.dict(os.environ, {
+            "PATH": self.bin_root + os.pathsep + os.environ.get("PATH", ""),
+            "FAKE_SLURM_RECORD": self.record,
+            "FAKE_SUBMIT_COUNT": self.count,
+            "FAKE_SACCT_RECORD": "",
+        })
+        self.environment.start()
+        self.store = OperationStore(self.home)
+        roots = {"source_root": self.temp, "build_root": self.build_root,
+                 "run_root": self.run_root, "staging_root": self.staging_root}
+        self.store.upsert_site({
+            "schema_version": 1, "site_id": "local-slurm",
+            "display_name": "local slurm",
+            "transport": {"kind": "local", "ssh_alias": ""},
+            "scheduler": {"kind": "slurm"}, "roots": roots,
+            "policy": {"default_cpus_per_gpu": 2,
+                       "default_partition": "test",
+                       "default_submit_user": "tester"},
+            "shared_mappings": [],
+        })
+        self.store.upsert_site({
+            "schema_version": 1, "site_id": "local-direct",
+            "display_name": "local direct",
+            "transport": {"kind": "local", "ssh_alias": ""},
+            "scheduler": {"kind": "none"}, "roots": roots,
+            "policy": {}, "shared_mappings": [],
+        })
+        self._pgids = []
+
+    def tearDown(self):
+        for pgid in self._pgids:
+            try:
+                os.killpg(pgid, signal.SIGKILL)
+            except OSError:
+                pass
+        self.environment.stop()
+        shutil.rmtree(self.temp)
+
+    def cli(self, *args):
+        process = subprocess.Popen(
+            [sys.executable, ENTITYCTL, "--router-home", self.home,
+             "--actor-run-id", "record-run-test"] + list(args),
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            universal_newlines=True,
+        )
+        stdout, stderr = process.communicate()
+        self.assertTrue(stdout.strip(), stderr)
+        return process.returncode, json.loads(stdout)
+
+    def _write_executable(self, name, text):
+        path = os.path.join(self.bin_root, name)
+        with open(path, "w") as handle:
+            handle.write("#!%s\n%s" % (sys.executable, text))
+        os.chmod(path, 0o755)
+
+    def _write_fake_slurm(self):
+        self._write_executable("sbatch", """import datetime,json,os,sys
+args=sys.argv[1:]
+if '--test-only' in args:
+    print('accepted')
+    raise SystemExit(0)
+def value(flag):
+    return args[args.index(flag)+1]
+count_path=os.environ['FAKE_SUBMIT_COUNT']
+count=int(open(count_path).read()) if os.path.isfile(count_path) else 0
+open(count_path,'w').write(str(count+1))
+record={'job_id':'42','job_name':value('--job-name'),'user':'tester',
+        'submitted_at':datetime.datetime.now().replace(microsecond=0).isoformat(),
+        'state':'RUNNING','run_root':value('--chdir'),'comment':value('--comment')}
+json.dump(record,open(os.environ['FAKE_SLURM_RECORD'],'w'))
+print('42')
+""")
+        self._write_executable("squeue", """import json,os,sys
+args=sys.argv[1:]
+path=os.environ['FAKE_SLURM_RECORD']
+if not os.path.isfile(path):
+    raise SystemExit(0)
+r=json.load(open(path))
+fmt=''
+for flag in ('-o','--format'):
+    if flag in args:
+        fmt=args[args.index(flag)+1]
+if '-j' in args:
+    job=args[args.index('-j')+1]
+    if job != r['job_id']:
+        raise SystemExit(0)
+if fmt == '%T':
+    print(r['state'])
+elif fmt == '%i|%T|%Z':
+    print('%s|%s|%s' % (r['job_id'], r['state'], r['run_root']))
+else:
+    print('{job_id}|{job_name}|{user}|{submitted_at}|{state}|{run_root}|{comment}'.format(**r))
+""")
+        self._write_executable("sacct", """import json,os,sys
+args=sys.argv[1:]
+path=os.environ.get('FAKE_SACCT_RECORD','')
+if not path or not os.path.isfile(path):
+    raise SystemExit(0)
+r=json.load(open(path))
+if '-j' in args:
+    job=args[args.index('-j')+1]
+    if job != r['job_id']:
+        raise SystemExit(0)
+fmt=''
+for a in args:
+    if a.startswith('--format='):
+        fmt=a.split('=',1)[1]
+if fmt == 'State,ExitCode':
+    print('%s|%s' % (r.get('state','COMPLETED'), r.get('exit_code','0:0')))
+elif fmt == 'JobID,State,WorkDir':
+    print('%s|%s|%s' % (r['job_id'], r.get('state','COMPLETED'), r['run_root']))
+else:
+    print(r.get('state','COMPLETED'))
+""")
+
+    def _confirm_input(self, path):
+        with open(path, "rb") as handle:
+            digest = hashlib.sha256(handle.read()).hexdigest()
+        record = {
+            "schema_version": 1,
+            "kind": "entity-pgen.simulation-confirmation",
+            "input_sha256": digest,
+            "card": {},
+            "confirmed_by": "test",
+            "confirmed_at": "2026-07-22T00:00:00",
+            "defaults": False,
+        }
+        with open(path + ".decisions.json", "w") as handle:
+            json.dump(record, handle)
+
+    def _direct_executable(self, body, name="entity-direct.xc"):
+        path = os.path.join(self.build_root, name)
+        with open(path, "w") as handle:
+            handle.write("#!/bin/bash\n%s\n" % body)
+        os.chmod(path, 0o755)
+        return path
+
+    def _prepare(self, site, executable, toml=None, extra=None):
+        argv = ["record", "run-prepare", "--project-root", self.project,
+                "--toml", toml or "input.toml", "--site", site,
+                "--executable", executable] + list(extra or [])
+        code, payload = self.cli(*argv)
+        self.assertEqual(code, 0, payload)
+        return payload
+
+    def _launch(self, extra=None):
+        argv = ["record", "run-launch", "--project-root", self.project]
+        argv += list(extra or [])
+        return self.cli(*argv)
+
+    def _run_identity(self):
+        case = self.store.resolve_project(self.project)
+        run_id = case.get("current", {}).get("run_id", "")
+        for item in case.get("identities", {}).get("run", {}).get("items", []):
+            if item.get("id") == run_id:
+                return item
+        return None
+
+    def _track_process_group(self):
+        scheduler = (self._run_identity() or {}).get("scheduler", {})
+        if scheduler.get("pgid"):
+            self._pgids.append(scheduler["pgid"])
+
+    def _wait_exit_file(self, path, seconds=20):
+        deadline = time.time() + seconds
+        while time.time() < deadline:
+            if os.path.isfile(path):
+                with open(path, "r") as handle:
+                    return handle.read().strip()
+            time.sleep(0.1)
+        self.fail("exit file did not appear: %s" % path)
+
+    def submit_count(self):
+        if not os.path.isfile(self.count):
+            return 0
+        with open(self.count) as handle:
+            return int(handle.read())
+
+    def test_render_run_is_deterministic_and_pure(self):
+        argv = ["render-run", "--project-root", self.project,
+                "--toml", "input.toml", "--site", "local-slurm",
+                "--executable", self.executable]
+        code, first = self.cli(*argv)
+        self.assertEqual(code, 0, first)
+        self.assertEqual(first["kind"], "entity-router.render-run")
+        self.assertFalse(first["state_mutated"])
+        code, second = self.cli(*argv)
+        self.assertEqual(code, 0, second)
+        self.assertEqual(second["script"], first["script"])
+        self.assertEqual(second["run_id"], first["run_id"])
+        self.assertTrue(first["run_id"].startswith("run-"))
+        script = first["script"]
+        self.assertIn("#SBATCH --partition=test", script)
+        self.assertIn("#SBATCH --gres=gpu:1", script)
+        self.assertIn("#SBATCH --cpus-per-task=2", script)
+        self.assertIn("#SBATCH --time=01:00:00", script)
+        self.assertIn("srun %s -input input.toml" % self.executable, script)
+        self.assertEqual(first["compute"]["partition"], "test")
+        self.assertEqual(first["compute"]["submit_user"], "tester")
+        self.assertTrue(first["submit_script"].endswith("run.sbatch"))
+        self.assertEqual(self.store.export()["cases"], [])
+
+    def test_render_run_needs_no_confirmation(self):
+        os.unlink(self.input + ".decisions.json")
+        code, payload = self.cli(
+            "render-run", "--project-root", self.project,
+            "--toml", "input.toml", "--site", "local-slurm",
+            "--executable", self.executable)
+        self.assertEqual(code, 0, payload)
+
+    def test_render_run_compute_overrides(self):
+        code, payload = self.cli(
+            "render-run", "--project-root", self.project,
+            "--toml", "input.toml", "--site", "local-slurm",
+            "--executable", self.executable,
+            "--gpus", "4", "--walltime", "02:00:00", "--precision", "single")
+        self.assertEqual(code, 0, payload)
+        self.assertIn("#SBATCH --gres=gpu:4", payload["script"])
+        self.assertIn("#SBATCH --time=02:00:00", payload["script"])
+        self.assertEqual(payload["compute"]["gpus"], 4)
+        self.assertEqual(payload["compute"]["tasks"], 4)
+        self.assertEqual(payload["compute"]["precision"], "single")
+
+    def test_render_run_resolves_executable_from_build_identity(self):
+        checkpoint = os.path.join(self.temp, "entity-deps.local.json")
+        with open(checkpoint, "w") as handle:
+            json.dump({"schema_version": 2,
+                       "compatibility": {"status": "pass"},
+                       "decisions": {"parameters": {
+                           "digest": "sha256:" + "1" * 64,
+                           "confirmed_by": "tester"}}}, handle)
+        # record build requires an existing Case; prepare creates it with an
+        # explicit executable first, then the build identity becomes the
+        # default for later renders
+        self._prepare("local-slurm", self.executable)
+        code, payload = self.cli(
+            "record", "build", "--project-root", self.project,
+            "--site", "local-slurm", "--checkpoint", checkpoint,
+            "--executable", self.executable)
+        self.assertEqual(code, 0, payload)
+        code, rendered = self.cli(
+            "render-run", "--project-root", self.project,
+            "--toml", "input.toml", "--site", "local-slurm")
+        self.assertEqual(code, 0, rendered)
+        self.assertEqual(rendered["executable"], self.executable)
+        self.assertEqual(rendered["build_id"], payload["build_id"])
+        self.assertIn("srun %s -input input.toml" % self.executable,
+                      rendered["script"])
+
+    def test_run_prepare_requires_confirmation(self):
+        raw = os.path.join(self.project, "raw.toml")
+        with open(raw, "w") as handle:
+            handle.write("[simulation]\nsteps = 3\n")
+        code, payload = self.cli(
+            "record", "run-prepare", "--project-root", self.project,
+            "--toml", "raw.toml", "--site", "local-slurm",
+            "--executable", self.executable)
+        self.assertEqual(code, 2, payload)
+        self.assertFalse(payload["ok"])
+        self.assertEqual(payload["status"], "needs_decision")
+        self.assertFalse(payload["state_mutated"])
+        self.assertEqual(self.store.export()["cases"], [])
+        self.assertEqual(os.listdir(self.run_root), [])
+
+    def test_run_prepare_books_case_and_run_idempotently(self):
+        payload = self._prepare("local-slurm", self.executable)
+        self.assertEqual(payload["kind"], "entity-router.record.run-prepare")
+        self.assertTrue(payload["state_mutated"])
+        self.assertTrue(payload["created_case"])
+        self.assertTrue(payload["run_id"].startswith("run-"))
+        run_root = payload["run_root"]
+        for name in ["input.toml", "run-manifest.json", "run.sbatch"]:
+            self.assertTrue(os.path.isfile(os.path.join(run_root, name)), name)
+        case = self.store.resolve_project(self.project)
+        self.assertEqual(case["current"]["run_id"], payload["run_id"])
+        self.assertEqual(case["current"]["readiness"]["run"], "ready")
+        self.assertTrue(case["current"]["source_id"].startswith("source-"))
+        identity = self._run_identity()
+        self.assertEqual(identity["status"], "prepared")
+        self.assertEqual(identity["root"],
+                         {"site_id": "local-slurm", "path": run_root})
+        self.assertEqual(identity["operation_id"], "op-" + payload["run_id"][4:])
+        events = self.store.export()["events"]
+        self.assertEqual([item["event_type"] for item in events],
+                         ["case.created", "record.run-prepare"])
+        again = self._prepare("local-slurm", self.executable)
+        self.assertEqual(again["run_id"], payload["run_id"])
+        self.assertFalse(again["created_case"])
+
+    def test_run_launch_submits_exactly_once(self):
+        self._prepare("local-slurm", self.executable)
+        code, payload = self._launch()
+        self.assertEqual(code, 0, payload)
+        self.assertEqual(payload["kind"], "entity-router.record.run-launch")
+        self.assertEqual(payload["status"], "submitted")
+        self.assertFalse(payload["adopted"])
+        self.assertEqual(payload["scheduler"]["job_id"], "42")
+        self.assertEqual(payload["scheduler"]["scheduler"], "slurm")
+        self.assertEqual(self.submit_count(), 1)
+        identity = self._run_identity()
+        self.assertEqual(identity["status"], "submitted")
+        self.assertEqual(identity["scheduler"]["job_id"], "42")
+        case = self.store.resolve_project(self.project)
+        self.assertEqual(case["current"]["readiness"]["run"], "submitted")
+        code, again = self._launch()
+        self.assertEqual(code, 0, again)
+        self.assertEqual(again["scheduler"]["job_id"], "42")
+        self.assertEqual(self.submit_count(), 1)
+
+    def test_run_launch_requires_a_known_run(self):
+        code, payload = self._launch()
+        self.assertEqual(code, 2, payload)
+        self.assertEqual(payload["status"], "needs_decision")
+        self.assertEqual(self.submit_count(), 0)
+
+    def test_run_launch_adopt_slurm_job(self):
+        prepared = self._prepare("local-slurm", self.executable)
+        with open(self.record, "w") as handle:
+            json.dump({"job_id": "42", "job_name": "entity-manual",
+                       "user": "tester", "submitted_at": "2026-07-23T00:00:00",
+                       "state": "RUNNING", "run_root": prepared["run_root"],
+                       "comment": "manual"}, handle)
+        code, payload = self._launch(["--adopt-job", "42"])
+        self.assertEqual(code, 0, payload)
+        self.assertTrue(payload["adopted"])
+        self.assertEqual(payload["scheduler"]["job_id"], "42")
+        self.assertEqual(self.submit_count(), 0)
+        identity = self._run_identity()
+        self.assertEqual(identity["status"], "submitted")
+        self.assertTrue(identity["scheduler"]["adopted"])
+        self.assertEqual(identity["scheduler"]["job_id"], "42")
+
+    def test_run_launch_adopt_rejects_unknown_job(self):
+        self._prepare("local-slurm", self.executable)
+        code, payload = self._launch(["--adopt-job", "99"])
+        self.assertEqual(code, 2, payload)
+        self.assertFalse(payload["ok"])
+        self.assertFalse(payload["state_mutated"])
+        identity = self._run_identity()
+        self.assertEqual(identity["status"], "prepared")
+        self.assertNotIn("scheduler", identity)
+
+    def test_run_launch_adopt_direct_process(self):
+        prepared = self._prepare(
+            "local-direct", self._direct_executable("sleep 30"))
+        reaped = subprocess.Popen(["true"])
+        reaped.wait()
+        code, payload = self._launch(["--adopt-pid", str(reaped.pid)])
+        self.assertEqual(code, 2, payload)
+        self.assertFalse(payload["state_mutated"])
+        process = subprocess.Popen(
+            ["sleep", "30"], cwd=prepared["run_root"],
+            stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL, start_new_session=True)
+        self._pgids.append(process.pid)
+        try:
+            code, payload = self._launch(["--adopt-pid", str(process.pid)])
+            self.assertEqual(code, 0, payload)
+            self.assertTrue(payload["adopted"])
+            self.assertEqual(payload["scheduler"]["pid"], process.pid)
+            self.assertEqual(payload["scheduler"]["scheduler"], "direct")
+            identity = self._run_identity()
+            self.assertEqual(identity["status"], "submitted")
+            self.assertTrue(identity["scheduler"]["adopted"])
+        finally:
+            process.kill()
+            process.wait()
+
+    def test_run_launch_direct_books_pid_and_exit_reports_running(self):
+        prepared = self._prepare(
+            "local-direct", self._direct_executable("sleep 30"))
+        code, payload = self._launch()
+        self.assertEqual(code, 0, payload)
+        self.assertEqual(payload["scheduler"]["scheduler"], "direct")
+        self.assertIsInstance(payload["scheduler"]["pid"], int)
+        self._track_process_group()
+        code, probed = self.cli("record", "run-exit",
+                                "--project-root", self.project)
+        self.assertEqual(code, 0, probed)
+        self.assertEqual(probed["state"], "running")
+        self.assertFalse(probed["state_mutated"])
+        self.assertEqual(self._run_identity()["status"], "submitted")
+        exit_file = os.path.join(prepared["run_root"], ".entity-exit-code")
+        self.assertFalse(os.path.isfile(exit_file))
+
+    def test_run_exit_direct_completed(self):
+        prepared = self._prepare(
+            "local-direct", self._direct_executable("exit 0"))
+        code, payload = self._launch()
+        self.assertEqual(code, 0, payload)
+        self._track_process_group()
+        exit_file = os.path.join(prepared["run_root"], ".entity-exit-code")
+        self.assertEqual(self._wait_exit_file(exit_file), "0")
+        code, probed = self.cli("record", "run-exit",
+                                "--project-root", self.project)
+        self.assertEqual(code, 0, probed)
+        self.assertEqual(probed["state"], "completed")
+        self.assertEqual(probed["exit_code"], 0)
+        self.assertTrue(probed["state_mutated"])
+        identity = self._run_identity()
+        self.assertEqual(identity["status"], "completed")
+        self.assertEqual(identity["exit_code"], 0)
+        self.assertTrue(identity["observed_at"])
+        case = self.store.resolve_project(self.project)
+        self.assertEqual(case["current"]["readiness"]["run"], "completed")
+        code, again = self.cli("record", "run-exit",
+                               "--project-root", self.project)
+        self.assertEqual(code, 0, again)
+        self.assertEqual(again["state"], "completed")
+        self.assertFalse(again["state_mutated"])
+
+    def test_run_exit_direct_failed(self):
+        prepared = self._prepare(
+            "local-direct", self._direct_executable("exit 124"))
+        code, payload = self._launch()
+        self.assertEqual(code, 0, payload)
+        self._track_process_group()
+        exit_file = os.path.join(prepared["run_root"], ".entity-exit-code")
+        self.assertEqual(self._wait_exit_file(exit_file), "124")
+        code, probed = self.cli("record", "run-exit",
+                                "--project-root", self.project)
+        self.assertEqual(code, 0, probed)
+        self.assertEqual(probed["state"], "failed")
+        self.assertEqual(probed["exit_code"], 124)
+        identity = self._run_identity()
+        self.assertEqual(identity["status"], "failed")
+        self.assertEqual(identity["exit_code"], 124)
+        case = self.store.resolve_project(self.project)
+        self.assertEqual(case["current"]["readiness"]["run"], "failed")
+
+    def _sacct_terminal(self, state, exit_code):
+        os.unlink(self.record)
+        sacct_record = os.path.join(self.temp, "sacct.json")
+        with open(sacct_record, "w") as handle:
+            json.dump({"job_id": "42", "state": state,
+                       "exit_code": exit_code,
+                       "run_root": self._run_identity()["root"]["path"]},
+                      handle)
+        os.environ["FAKE_SACCT_RECORD"] = sacct_record
+
+    def test_run_exit_slurm_completed_via_sacct(self):
+        self._prepare("local-slurm", self.executable)
+        code, payload = self._launch()
+        self.assertEqual(code, 0, payload)
+        self._sacct_terminal("COMPLETED", "0:0")
+        code, probed = self.cli("record", "run-exit",
+                                "--project-root", self.project)
+        self.assertEqual(code, 0, probed)
+        self.assertEqual(probed["state"], "completed")
+        self.assertEqual(probed["exit_code"], 0)
+        identity = self._run_identity()
+        self.assertEqual(identity["status"], "completed")
+        self.assertEqual(identity["scheduler"]["state"], "COMPLETED")
+
+    def test_run_exit_slurm_failed_via_sacct(self):
+        self._prepare("local-slurm", self.executable)
+        code, payload = self._launch()
+        self.assertEqual(code, 0, payload)
+        code, running = self.cli("record", "run-exit",
+                                 "--project-root", self.project)
+        self.assertEqual(code, 0, running)
+        self.assertEqual(running["state"], "running")
+        self.assertFalse(running["state_mutated"])
+        self._sacct_terminal("FAILED", "1:0")
+        code, probed = self.cli("record", "run-exit",
+                                "--project-root", self.project)
+        self.assertEqual(code, 0, probed)
+        self.assertEqual(probed["state"], "failed")
+        self.assertEqual(probed["exit_code"], 1)
+        self.assertTrue(probed["state_mutated"])
+        identity = self._run_identity()
+        self.assertEqual(identity["status"], "failed")
+        self.assertEqual(identity["exit_code"], 1)
+        self.assertEqual(identity["scheduler"]["state"], "FAILED")
+
+    def test_dashboard_follows_run_lifecycle(self):
+        prepared = self._prepare(
+            "local-direct", self._direct_executable("exit 0"))
+        board = build_dashboard(self.store, self.project)["board"]
+        self.assertEqual(board["run"]["state"], "prepared")
+        code, payload = self._launch()
+        self.assertEqual(code, 0, payload)
+        self._track_process_group()
+        board = build_dashboard(self.store, self.project)["board"]
+        self.assertEqual(board["run"]["state"], "submitted")
+        exit_file = os.path.join(prepared["run_root"], ".entity-exit-code")
+        self.assertEqual(self._wait_exit_file(exit_file), "0")
+        code, probed = self.cli("record", "run-exit",
+                                "--project-root", self.project)
+        self.assertEqual(code, 0, probed)
+        self.assertEqual(probed["state"], "completed")
+        case = self.store.resolve_project(self.project)
+        self.assertEqual(case["current"]["readiness"]["run"], "completed")
+        board = build_dashboard(self.store, self.project)["board"]
+        self.assertEqual(board["run"]["state"], "completed")
+
+
+if __name__ == "__main__":
+    unittest.main()

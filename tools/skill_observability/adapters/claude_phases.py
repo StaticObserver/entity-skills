@@ -53,7 +53,7 @@ PHASE_ORDER = ["discover", "pgen", "env-build", "run", "analysis", "submission"]
 DEFAULT_RULES: Sequence[Tuple[str, str]] = (
     ("submission", r"submission\.json"),
     ("analysis", r"\bnt2\b|nt2\.Data|inspect_nt2_data"),
-    ("run", r"entityctl\b.*\b(plan|apply)\b|\bsbatch\b"),
+    ("run", r"entityctl\b.*\brecord\b|\bsbatch\b"),
     ("env-build", r"\bcmake\b|\bmake\b|\bnvcc\b|\bspack\b|entity[-_](build|generate|run|state|compat|checkpoint)"),
     ("pgen", r"pgen\.hpp|pgen_preflight|design\.md"),
     ("discover", r"\bssh\b|\bsinfo\b|\bsqueue\b|\bscontrol\b|\bls\b|\bfind\b|module (list|avail|load)|\bwhich\b|\benv\b"),

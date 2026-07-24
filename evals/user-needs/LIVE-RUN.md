@@ -96,7 +96,7 @@ prompt-followup.md 续同一会话（`claude -c`）。带外动作的具体步�
 ### U4（中断恢复）
 
 1. `run_need.sh U4 skills-v5 <run>` 启动 stage 1。
-2. 盯 transcript，出现 `entityctl apply` 调用后 **30 秒内** kill 本地
+2. 盯 transcript，出现 `entityctl record run-launch` 调用后 **30 秒内** kill 本地
    agent 进程（`pkill -f "claude.*<run-name>"`）。远端此时有/无作业都算
    有效工况。
 3. `run_need.sh --followup U4 skills-v5 <run>` 续会话，只发"继续"。

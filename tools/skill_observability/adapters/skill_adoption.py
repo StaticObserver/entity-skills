@@ -12,7 +12,7 @@ Attribution model (deterministic):
 - Tool targets under an installed skill directory (SKILL_DOC_RE) are
   orientation reads and are skipped entirely.
 - Each remaining tool_use counts in at most ONE adoption category: the
-  first matching rule in ADOPTION_RULES wins, so ``entityctl apply`` is
+  first matching rule in ADOPTION_RULES wins, so ``entityctl record`` is
   skill.router only and ``entity-build.sh`` is skill.env_build only.
 
 Stdlib only, consistent with the rest of this package.

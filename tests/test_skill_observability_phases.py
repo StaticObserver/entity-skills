@@ -85,7 +85,7 @@ class PhaseSegmentationTest(unittest.TestCase):
             user_result("2026-07-21T08:10:30Z", "t3", is_error=True),
             assistant(
                 "2026-07-21T08:20:00Z",
-                [("t4", "Bash", {"command": "python3 scripts/entityctl.py apply --plan plan.json"})],
+                [("t4", "Bash", {"command": "python3 scripts/entityctl.py record run-launch --project-root ."})],
                 {"input_tokens": 6, "output_tokens": 3},
             ),
             user_result("2026-07-21T08:20:10Z", "t4"),
@@ -276,7 +276,7 @@ class SkillAdoptionTest(unittest.TestCase):
     def test_skill_and_raw_calls_counted(self):
         records = [
             assistant("2026-07-21T08:00:00Z",
-                      [("t1", "Bash", {"command": "python3 scripts/entityctl.py apply --plan plan.json"})]),
+                      [("t1", "Bash", {"command": "python3 scripts/entityctl.py record run-launch --project-root ."})]),
             assistant("2026-07-21T08:01:00Z",
                       [("t2", "Bash", {"command": "bash entity-build.sh --deps"})]),
             assistant("2026-07-21T08:02:00Z",

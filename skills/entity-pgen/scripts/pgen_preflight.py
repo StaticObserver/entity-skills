@@ -3,8 +3,8 @@
 
 Read-only and truly standalone PGen work may run directly.  A write to a
 source tree registered by the Router v5 store is currently refused: managed
-writes require a v5 pgen Goal, which is not yet implemented.  No
-source/control ancestor relationship is assumed.
+writes are booked through the Router record primitives, not by this skill.
+No source/control ancestor relationship is assumed.
 
 Subcommands:
 
@@ -12,8 +12,8 @@ Subcommands:
   (JSON on stdout) with a stable digest over the extracted fields.
 - ``confirm <input.toml> --by <actor> [--confirm-defaults]``: write an
   atomic confirmation record to ``<input.toml>.decisions.json`` recording
-  who confirmed which exact input file.  The Router plan gate reads this
-  record and matches ``input_sha256`` before issuing a plan.
+  who confirmed which exact input file.  The Router record run-prepare gate
+  reads this record and matches ``input_sha256`` before booking the run.
 """
 
 from __future__ import print_function

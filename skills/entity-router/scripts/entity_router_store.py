@@ -437,6 +437,25 @@ class OperationStore(object):
         finally:
             connection.close()
 
+    def latest_operation(self, case_uid):
+        """Most recent Operation of a Case (plan excluded), or None.  Used by
+        the read-only dashboard to surface the latest Goal and terminal
+        outcome without loading full history."""
+        connection = self._connect()
+        try:
+            row = connection.execute(
+                "SELECT * FROM operations WHERE case_uid=? "
+                "ORDER BY created_at DESC, rowid DESC LIMIT 1",
+                (case_uid,),
+            ).fetchone()
+            if row is None:
+                return None
+            result = self._operation_from_row(connection, row, include_plan=False)
+            result["goal"] = _load(row["goal_json"])
+            return result
+        finally:
+            connection.close()
+
     def claim_operation(self, operation_id, actor, ttl_seconds=3600):
         token = str(uuid.uuid4())
         with self.transaction() as connection:
@@ -682,6 +701,22 @@ class OperationStore(object):
             )
             self._event(connection, row["case_uid"], operation_id,
                         "operation.cancelled", result, actor)
+
+    def record_event(self, case_uid, operation_id, event_type, payload, actor,
+                     connection=None):
+        """Public event writer for the primitive record commands, which book
+        Case facts outside the Operation protocol.  Pass ``connection`` to
+        join an open transaction so the event commits atomically with the
+        identity and current writes."""
+        owns = connection is None
+        connection = connection or self._connect()
+        try:
+            self._event(connection, case_uid, operation_id, event_type, payload, actor)
+            if owns:
+                connection.commit()
+        finally:
+            if owns:
+                connection.close()
 
     def _event(self, connection, case_uid, operation_id, event_type, payload, actor):
         connection.execute(

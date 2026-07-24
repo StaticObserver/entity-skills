@@ -24,7 +24,6 @@ from .evidence import (
     validate_nt2py_inventory,
     validate_pgen_preflight,
     validate_router_action,
-    validate_router_operation,
 )
 from .adapters.codex_rollout import import_codex_rollout
 from .adapters.claude_transcript import import_claude_transcript
@@ -326,18 +325,6 @@ def command_evidence_router(args: argparse.Namespace) -> int:
     ))
 
 
-def command_evidence_router_operation(args: argparse.Namespace) -> int:
-    return _evidence_exit(validate_router_operation(
-        args.run_dir,
-        plan_path=args.plan,
-        operation_path=args.operation,
-        receipt_paths=args.receipt,
-        status_path=args.status,
-        scheduler_path=args.scheduler,
-        parent_span_id=args.parent_span_id,
-    ))
-
-
 def command_evidence_pgen(args: argparse.Namespace) -> int:
     return _evidence_exit(validate_pgen_preflight(
         args.run_dir,
@@ -519,18 +506,6 @@ def build_parser() -> argparse.ArgumentParser:
     router_anchor.add_argument("--result", type=Path)
     router_anchor.add_argument("--case-state", type=Path)
     router.set_defaults(func=command_evidence_router)
-
-    operation = evidence_sub.add_parser("router-operation")
-    _add_run_dir(operation)
-    _add_parent_span(operation)
-    operation.add_argument("--plan", type=Path, required=True)
-    operation.add_argument("--operation", type=Path, required=True,
-                           help="Operation object or complete Router v5 export")
-    operation.add_argument("--receipt", type=Path, action="append", default=[],
-                           help="Repeat once for each owner-site Step receipt")
-    operation.add_argument("--status", type=Path, required=True)
-    operation.add_argument("--scheduler", type=Path, required=True)
-    operation.set_defaults(func=command_evidence_router_operation)
 
     pgen = evidence_sub.add_parser("pgen-preflight")
     _add_run_dir(pgen)
