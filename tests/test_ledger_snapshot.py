@@ -11,18 +11,18 @@ import unittest
 
 
 ROOT = os.path.realpath(os.path.join(os.path.dirname(__file__), ".."))
-SCRIPTS = os.path.join(ROOT, "skills", "entity-router", "scripts")
+SCRIPTS = os.path.join(ROOT, "skills", "entity-ledger", "scripts")
 ENTITYCTL = os.path.join(SCRIPTS, "entityctl.py")
 if SCRIPTS not in sys.path:
     sys.path.insert(0, SCRIPTS)
 
-from entity_router_record import snapshot_source
-from entity_router_store import OperationStore
+from entity_ledger_record import snapshot_source
+from entity_ledger_store import OperationStore
 
 
 class SnapshotSourceTest(unittest.TestCase):
     def setUp(self):
-        self.temp = tempfile.mkdtemp(prefix="entity-router-snapshot-")
+        self.temp = tempfile.mkdtemp(prefix="entity-ledger-snapshot-")
         self.home = os.path.join(self.temp, "controller")
         self.project = os.path.join(self.temp, "project")
         os.makedirs(self.project)
@@ -65,13 +65,28 @@ class SnapshotSourceTest(unittest.TestCase):
         self.assertEqual(result["snapshot_id"], second["snapshot_id"])
         self.assertFalse(second["archived"])
 
+    def test_snapshot_regenerates_truncated_archive(self):
+        result = snapshot_source(self.store, self.project, {})
+        self.assertTrue(result["archived"])
+        with open(result["archive"], "wb") as handle:
+            handle.write(b"half-written-tar")
+        regenerated = snapshot_source(self.store, self.project, {})
+        self.assertTrue(regenerated["archived"])
+        self.assertEqual(regenerated["snapshot_id"], result["snapshot_id"])
+        with tarfile.open(regenerated["archive"], "r") as bundle:
+            self.assertIn("snapshot-manifest.json", bundle.getnames())
+        leftovers = [name for name in
+                     os.listdir(os.path.dirname(result["archive"]))
+                     if ".tmp-" in name]
+        self.assertEqual(leftovers, [])
+
     def test_snapshot_records_source_identity_when_case_exists(self):
         self._make_case()
         result = snapshot_source(self.store, self.project, {})
         self.assertTrue(result["recorded"])
         self.assertTrue(result["state_mutated"])
         case = self.store.resolve_project(self.project)
-        identity_id = "src-" + result["snapshot_id"][:16]
+        identity_id = "source-" + result["snapshot_id"][:16]
         self.assertEqual(case["current"]["source_id"], identity_id)
         self.assertEqual(case["current"]["readiness"]["source"], "established")
         identity = case["identities"]["source"]["items"][0]
@@ -79,14 +94,14 @@ class SnapshotSourceTest(unittest.TestCase):
         self.assertEqual(identity["status"], "snapshotted")
 
     def test_missing_project_root_fails(self):
-        from entity_router_facts import PlanError
+        from entity_ledger_facts import PlanError
         with self.assertRaises(PlanError):
             snapshot_source(self.store, os.path.join(self.temp, "nope"), {})
 
     def test_cli_snapshot_source(self):
         self._make_case()
         process = subprocess.Popen(
-            [sys.executable, ENTITYCTL, "--router-home", self.home,
+            [sys.executable, ENTITYCTL, "--ledger-home", self.home,
              "--actor-run-id", "test", "--actor-provider", "test",
              "snapshot-source", "--project-root", self.project],
             stdout=subprocess.PIPE, stderr=subprocess.PIPE,
@@ -94,7 +109,7 @@ class SnapshotSourceTest(unittest.TestCase):
         stdout, stderr = process.communicate()
         self.assertEqual(process.returncode, 0, stderr)
         payload = json.loads(stdout)
-        self.assertEqual(payload["kind"], "entity-router.snapshot-source")
+        self.assertEqual(payload["kind"], "entity-ledger.snapshot-source")
         self.assertTrue(payload["recorded"])
         self.assertTrue(os.path.isfile(payload["archive"]))
 

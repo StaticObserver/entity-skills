@@ -13,19 +13,19 @@ import os
 import re
 import subprocess
 
-from entity_router_common import (
-    RouterError,
+from entity_ledger_common import (
+    LedgerError,
     absolute,
     run_on_site,
     sha256_file,
     source_manifest,
 )
-from entity_router_store import StoreError, canonical_hash
+from entity_ledger_store import StoreError, canonical_hash
 
 
-class PlanError(RouterError):
+class PlanError(LedgerError):
     def __init__(self, message, status="invalid_request", decisions=None):
-        RouterError.__init__(self, message)
+        LedgerError.__init__(self, message)
         self.status = status
         self.decisions = decisions or []
 

@@ -369,7 +369,7 @@ class ActivitiesSkillAdoptionTest(unittest.TestCase):
         write_transcript(self.transcript, records)
         adoption = analyze_transcript(self.transcript)["skill_adoption"]
 
-        self.assertEqual(adoption["skill_calls"]["router"], 1)
+        self.assertEqual(adoption["skill_calls"]["ledger"], 1)
         self.assertEqual(adoption["skill_calls"]["total"], 1)
         self.assertEqual(adoption["raw_calls"]["sbatch"], 1)
         self.assertEqual(adoption["raw_calls"]["scheduler_poll"], 1)
@@ -382,12 +382,12 @@ class ActivitiesSkillAdoptionTest(unittest.TestCase):
         records = [
             assistant("2026-07-21T08:00:00Z",
                       [("t1", "Bash", {"command":
-                          "python3 /Users/x/.claude/skills/entity-router/scripts/entityctl.py site list"})]),
+                          "python3 /Users/x/.claude/skills/entity-ledger/scripts/entityctl.py site list"})]),
         ]
         write_transcript(self.transcript, records)
         report = analyze_transcript(self.transcript)
         adoption = report["skill_adoption"]
-        self.assertEqual(adoption["skill_calls"]["router"], 1)
+        self.assertEqual(adoption["skill_calls"]["ledger"], 1)
         self.assertEqual(adoption["skill_calls"]["total"], 1)
 
     def test_skill_doc_reads_not_counted_as_calls(self):

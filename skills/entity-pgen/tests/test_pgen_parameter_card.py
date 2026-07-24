@@ -15,9 +15,9 @@ import unittest
 PGEN_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 ROOT = os.path.dirname(os.path.dirname(PGEN_ROOT))
 PREFLIGHT = os.path.join(PGEN_ROOT, "scripts", "pgen_preflight.py")
-ROUTER_SCRIPTS = os.path.join(ROOT, "skills", "entity-router", "scripts")
-if ROUTER_SCRIPTS not in sys.path:
-    sys.path.insert(0, ROUTER_SCRIPTS)
+LEDGER_SCRIPTS = os.path.join(ROOT, "skills", "entity-ledger", "scripts")
+if LEDGER_SCRIPTS not in sys.path:
+    sys.path.insert(0, LEDGER_SCRIPTS)
 
 import tomllib  # noqa: E402
 

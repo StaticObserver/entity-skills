@@ -7,11 +7,11 @@ fingerprint。一个 Site 可以是一台本地机器，也可以是一个 SSH �
 ## 控制器布局
 
 ```text
-~/.entity-router/
-└── router.db                         # controller authority
+~/.entity-ledger/
+└── ledger.db                         # controller authority
 ```
 
-`router.db` 只包含紧凑的事实和证据引用。它绝不放在
+`ledger.db` 只包含紧凑的事实和证据引用。它绝不放在
 源代码检出目录内，也绝不复制到 `.codex`、`.claude` 或
 `.kimi-code` 等 provider 私有根目录。从 v3 导入的控制器可能仍
 带有迁移前保留的文件（`registry.json`、`sites/`、`cases/`）；
@@ -43,10 +43,10 @@ design 的编辑只发生在源权威处。
 ## 执行边界
 
 控制器推导允许的根目录和不可变的执行请求。Site
-执行器只能在这些根目录之下写入，且绝不写 `router.db`。
+执行器只能在这些根目录之下写入，且绝不写 `ledger.db`。
 receipt 保留在该次操作的暂存根目录下，以便 record 原语在
 控制器进程丢失后重跑时认领既有效果、不重复提交。
 
 Site 本地的 module 配置或策略应放在受信任的 Site 适配器中，
-而不是 record 原语参数或通用 Router 核心中。密码、令牌、私钥、可变
+而不是 record 原语参数或通用 Ledger 核心中。密码、令牌、私钥、可变
 会话记忆以及完整的 skill 副本都不应进入项目或控制器状态。

@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Compact public control-plane entrypoint for Entity simulation projects.
 
-Read-only commands return controller-local summaries. The SQLite router.db in
-the Router home is the sole structured controller authority.
+Read-only commands return controller-local summaries. The SQLite ledger.db in
+the Ledger home is the sole structured controller authority.
 """
 
 import argparse
@@ -12,25 +12,26 @@ import os
 import shutil
 import sqlite3
 import sys
+import tarfile
 import tempfile
 
-from entity_router_common import (
-    RouterError,
+from entity_ledger_common import (
+    LedgerError,
     absolute,
     actor_identity,
     atomic_write_json,
     load_json,
     now_utc,
     require_attributed_actor,
-    router_home,
+    ledger_home,
     run_on_site,
     sha256_file,
     validate_site_profile,
 )
-from entity_router_dashboard import build_dashboard, render_text
-from entity_router_facts import PlanError
-from entity_router_operation import status_for_project
-from entity_router_record import (
+from entity_ledger_dashboard import build_dashboard, render_text
+from entity_ledger_facts import PlanError
+from entity_ledger_operation import status_for_project
+from entity_ledger_record import (
     record_build,
     record_data,
     record_intent,
@@ -41,23 +42,24 @@ from entity_router_record import (
     show_case,
     snapshot_source,
 )
-from entity_router_store import (
+from entity_ledger_store import (
     OperationStore,
     SCHEMA as STORE_SCHEMA,
     STORE_SCHEMA_VERSION,
+    _migrate_legacy_db,
     canonical_hash,
     store_path,
 )
 
 
 SCHEMA_VERSION = 1
-ENTITY_SKILLS = ("entity-router", "entity-pgen", "entity-env-build", "entity-nt2py")
+ENTITY_SKILLS = ("entity-ledger", "entity-pgen", "entity-env-build", "entity-nt2py")
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 SKILL_ROOT = os.path.dirname(SCRIPT_DIR)
 DEFAULT_BUNDLE_ROOT = os.path.dirname(SKILL_ROOT)
 
 
-class EntityCtlError(RouterError):
+class EntityCtlError(LedgerError):
     pass
 
 
@@ -254,7 +256,7 @@ def install_bundle(args):
         "actor": actor,
         "source_root": source_root,
         "bundle_root": bundle_root,
-        "bundle_version": bundle_version(os.path.join(source_root, "entity-router")),
+        "bundle_version": bundle_version(os.path.join(source_root, "entity-ledger")),
         "bundle_hash": identity["hash"],
         "bundle_files": identity["files"],
         "bundle_created": created,
@@ -266,7 +268,7 @@ def install_bundle(args):
 
 
 def doctor(args):
-    home = router_home(args.router_home)
+    home = ledger_home(args.ledger_home)
     runtime_bundle = bundle_hash(DEFAULT_BUNDLE_ROOT)
     actor = actor_identity(args)
     expected_bundle = actor.get("bundle_hash", "")
@@ -322,7 +324,7 @@ def doctor(args):
             "provider": provider,
             "path": path,
             "exists": os.path.isdir(path),
-            "bundle_version": bundle_version(os.path.join(path, "entity-router")),
+            "bundle_version": bundle_version(os.path.join(path, "entity-ledger")),
             "bundle_hash": identity["hash"],
             "files": identity["files"],
             "matches_runtime": bool(identity["hash"] and identity["hash"] == runtime_bundle["hash"]),
@@ -339,7 +341,7 @@ def doctor(args):
         "kind": "entityctl.doctor",
         "state_mutated": False,
         "controller": {
-            "router_home": home,
+            "ledger_home": home,
             "available": os.path.isdir(home),
             "store": database,
             "store_available": os.path.isfile(database),
@@ -362,7 +364,7 @@ def doctor(args):
 def site_add(args):
     actor = require_attributed_actor(actor_identity(args))
     profile = validate_site_profile(load_json(args.profile, "Site profile"))
-    store = OperationStore(args.router_home)
+    store = OperationStore(args.ledger_home)
     store.upsert_site(profile)
     return {
         "schema_version": SCHEMA_VERSION,
@@ -375,7 +377,7 @@ def site_add(args):
 
 
 def site_list(args):
-    store = OperationStore(args.router_home, create=False)
+    store = OperationStore(args.ledger_home, create=False)
     return {
         "schema_version": SCHEMA_VERSION,
         "ok": True,
@@ -388,7 +390,7 @@ def site_list(args):
 def site_discover(args):
     """Probe a Site so policy defaults are chosen from facts, not guesses.
     Read-only; dispatched by the Site scheduler kind."""
-    store = OperationStore(args.router_home, create=False)
+    store = OperationStore(args.ledger_home, create=False)
     profile = store.get_site(args.site_id)
     kind = profile.get("scheduler", {}).get("kind")
     backend = DISCOVER_BACKENDS.get(kind)
@@ -562,12 +564,12 @@ DISCOVER_BACKENDS["none"] = _direct_site_discover
 
 
 def show_command(args):
-    store = OperationStore(args.router_home, create=False)
+    store = OperationStore(args.ledger_home, create=False)
     return show_case(store, args.project_root)
 
 
 def render_run_command(args):
-    store = OperationStore(args.router_home, create=False)
+    store = OperationStore(args.ledger_home, create=False)
     return render_run(
         store, args.project_root, args.toml, args.site, args.gpus,
         args.walltime, args.precision, args.executable)
@@ -575,7 +577,7 @@ def render_run_command(args):
 
 def record_run_prepare_command(args):
     actor = require_attributed_actor(actor_identity(args))
-    store = OperationStore(args.router_home, create=False)
+    store = OperationStore(args.ledger_home, create=False)
     return record_run_prepare(
         store, args.project_root, args.toml, args.site, args.gpus,
         args.walltime, args.precision, args.executable, actor)
@@ -583,7 +585,7 @@ def record_run_prepare_command(args):
 
 def record_run_launch_command(args):
     actor = require_attributed_actor(actor_identity(args))
-    store = OperationStore(args.router_home, create=False)
+    store = OperationStore(args.ledger_home, create=False)
     return record_run_launch(
         store, args.project_root, args.run_id, args.adopt_job, args.adopt_pid,
         actor)
@@ -591,43 +593,43 @@ def record_run_launch_command(args):
 
 def record_run_exit_command(args):
     actor = require_attributed_actor(actor_identity(args))
-    store = OperationStore(args.router_home, create=False)
+    store = OperationStore(args.ledger_home, create=False)
     return record_run_exit(store, args.project_root, args.run_id, actor)
 
 
 def record_build_command(args):
     actor = require_attributed_actor(actor_identity(args))
-    store = OperationStore(args.router_home, create=False)
+    store = OperationStore(args.ledger_home, create=False)
     return record_build(
         store, args.project_root, args.site, args.checkpoint, args.executable, actor)
 
 
 def record_data_command(args):
     actor = require_attributed_actor(actor_identity(args))
-    store = OperationStore(args.router_home, create=False)
+    store = OperationStore(args.ledger_home, create=False)
     return record_data(store, args.project_root, args.run_id, actor)
 
 
 def snapshot_source_command(args):
     actor = require_attributed_actor(actor_identity(args))
-    store = OperationStore(args.router_home, create=False)
+    store = OperationStore(args.ledger_home, create=False)
     return snapshot_source(store, args.project_root, actor)
 
 
 def record_intent_command(args):
     actor = require_attributed_actor(actor_identity(args))
-    store = OperationStore(args.router_home, create=False)
+    store = OperationStore(args.ledger_home, create=False)
     return record_intent(store, args.project_root, args.text, actor)
 
 
 def project_status(args):
-    store = OperationStore(args.router_home, create=False)
+    store = OperationStore(args.ledger_home, create=False)
     result = status_for_project(store, args.project_root, args.live)
     if args.json:
         return result
     dashboard = build_dashboard(store, args.project_root, result)
     return {
-        "schema_version": 1, "kind": "entity-router.status", "ok": True,
+        "schema_version": 1, "kind": "entity-ledger.status", "ok": True,
         "state_mutated": False,
         "remote_calls": dashboard["remote_calls"],
         "_entityctl_text": render_text(dashboard),
@@ -635,11 +637,11 @@ def project_status(args):
 
 
 def export_store(args):
-    store = OperationStore(args.router_home, create=False)
+    store = OperationStore(args.ledger_home, create=False)
     payload = store.export()
     atomic_write_json(args.output, payload)
     return {
-        "schema_version": 1, "kind": "entity-router.export", "ok": True,
+        "schema_version": 1, "kind": "entity-ledger.export", "ok": True,
         "state_mutated": False, "output": absolute(args.output),
         "cases": len(payload["cases"]),
     }
@@ -669,7 +671,7 @@ def _archive_operations_v1(connection, archive_dir, stamp):
     archive = os.path.join(archive_dir, "operations-v1-%s.json" % stamp)
     atomic_write_json(archive, {
         "schema_version": 1,
-        "kind": "entity-router.operations-archive",
+        "kind": "entity-ledger.operations-archive",
         "archived_at": now_utc(),
         "operations": operations,
     })
@@ -707,7 +709,7 @@ def _migrate_v1_to_v2(database, home):
             )
     finally:
         source.close()
-    backup = os.path.join(archive_dir, "router-v1-%s.db" % stamp)
+    backup = os.path.join(archive_dir, "ledger-v1-%s.db" % stamp)
     shutil.copy2(database, backup)
     temporary = database + ".migrate-v2"
     if os.path.isfile(temporary):
@@ -733,7 +735,7 @@ def _migrate_v1_to_v2(database, home):
     os.replace(temporary, database)
     counts = dict((name, len(rows)) for name, (unused, rows) in tables.items())
     return {
-        "schema_version": 1, "kind": "entity-router.store.migrate", "ok": True,
+        "schema_version": 1, "kind": "entity-ledger.store.migrate", "ok": True,
         "state_mutated": True, "store_schema_version": STORE_SCHEMA_VERSION,
         "message": "migrated store schema 1 -> %s" % STORE_SCHEMA_VERSION,
         "operations_archive": archive, "operations_archived": operation_count,
@@ -742,7 +744,10 @@ def _migrate_v1_to_v2(database, home):
 
 
 def store_migrate(args):
-    database = store_path(router_home(args.router_home))
+    home = ledger_home(args.ledger_home)
+    if os.path.isdir(home):
+        _migrate_legacy_db(home)
+    database = store_path(home)
     if not os.path.isfile(database):
         raise EntityCtlError(
             "store does not exist; nothing to migrate (register a Site with "
@@ -758,7 +763,7 @@ def store_migrate(args):
         connection.close()
     if current == STORE_SCHEMA_VERSION:
         return {
-            "schema_version": 1, "kind": "entity-router.store.migrate", "ok": True,
+            "schema_version": 1, "kind": "entity-ledger.store.migrate", "ok": True,
             "state_mutated": False, "store_schema_version": current,
             "message": "store is already at the current schema",
         }
@@ -768,7 +773,7 @@ def store_migrate(args):
             "newer bundle" % (current, STORE_SCHEMA_VERSION)
         )
     if current == 1:
-        return _migrate_v1_to_v2(database, router_home(args.router_home))
+        return _migrate_v1_to_v2(database, ledger_home(args.ledger_home))
     raise EntityCtlError(
         "no migration path from store schema %s to %s is implemented yet"
         % (current, STORE_SCHEMA_VERSION)
@@ -784,7 +789,7 @@ def _submission_body(store, project_root, artifacts, note, actor):
     }
     return {
         "schema_version": 1,
-        "kind": "entity-router.submission",
+        "kind": "entity-ledger.submission",
         "case_uid": status["case_uid"],
         "project_root": absolute(project_root),
         "identities": identities,
@@ -800,7 +805,7 @@ def submission_create(args):
     """Create a submission whose fingerprints are always recomputed by the
     tool from the final artifacts — never copied from older documents."""
     actor = require_attributed_actor(actor_identity(args))
-    store = OperationStore(args.router_home, create=False)
+    store = OperationStore(args.ledger_home, create=False)
     artifacts = []
     for raw in args.artifact or []:
         path = absolute(raw)
@@ -826,8 +831,8 @@ def submission_verify(args):
     """Recompute every artifact fingerprint and the submission fingerprint;
     any drift since creation fails verification."""
     submission = load_json(args.submission, "submission")
-    if submission.get("kind") != "entity-router.submission":
-        raise EntityCtlError("not an entity-router.submission document")
+    if submission.get("kind") != "entity-ledger.submission":
+        raise EntityCtlError("not an entity-ledger.submission document")
     stale = []
     missing = []
     for item in submission.get("artifacts", []):
@@ -842,7 +847,7 @@ def submission_verify(args):
     ok = fingerprint_match and not stale and not missing
     return {
         "schema_version": 1,
-        "kind": "entity-router.submission.verify",
+        "kind": "entity-ledger.submission.verify",
         "ok": ok,
         "state_mutated": False,
         "fingerprint_match": fingerprint_match,
@@ -873,7 +878,11 @@ def add_run_compute_arguments(parser):
 
 def build_parser():
     parser = argparse.ArgumentParser(description="Entity public control-plane CLI")
-    parser.add_argument("--router-home", default=router_home())
+    # Lazy default: resolving the Ledger home can trigger the one-time
+    # ~/.entity-router -> ~/.entity-ledger migration, which must not run as a
+    # side effect of merely building the parser (e.g. entityctl --help).
+    parser.add_argument("--ledger-home", "--router-home", dest="ledger_home",
+                        default=None)
     add_actor_arguments(parser)
     sub = parser.add_subparsers(
         dest="command",
@@ -1007,8 +1016,8 @@ def main(argv=None):
         emit({"ok": False, "status": exc.status, "error": str(exc),
               "decisions": exc.decisions, "state_mutated": False})
         return 2
-    except (IOError, OSError, ValueError, KeyError, RouterError,
-            sqlite3.Error) as exc:
+    except (IOError, OSError, ValueError, KeyError, TypeError, LedgerError,
+            sqlite3.Error, tarfile.TarError) as exc:
         emit({"ok": False, "status": "anomaly", "error": str(exc),
               "state_mutated": False})
         return 2

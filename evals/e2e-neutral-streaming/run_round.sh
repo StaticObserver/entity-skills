@@ -40,9 +40,9 @@ RUN="$HOME/entity-eval-runs/$RUN_NAME"
 # trace, or the agent will follow the signposts (observed in round S2).
 HARNESS="$HOME/entity-eval-traces/$RUN_NAME"
 
-# Variant semantics (the eval's independent variable is entity-router only):
-#   skills-v5        full bundle: entity-router + env-build + pgen + nt2py
-#   skills-no-router env-build + pgen + nt2py installed, entity-router absent
+# Variant semantics (the eval's independent variable is entity-ledger only):
+#   skills-v5        full bundle: entity-ledger + env-build + pgen + nt2py
+#   skills-no-router env-build + pgen + nt2py installed, entity-ledger absent
 # Skills are managed globally (~/.claude/skills) by the maintainer, never by
 # this script — but the variant is NOT a mere label: the projection state is
 # verified here so a mislabeled round fails fast instead of silently measuring
@@ -54,12 +54,12 @@ for s in entity-env-build entity-pgen entity-nt2py; do
     exit 1
   fi
 done
-if [[ "$VARIANT" == "skills-v5" && ! -e "$SKILLS_DIR/entity-router" ]]; then
-  echo "error: skills-v5 round but $SKILLS_DIR/entity-router is missing" >&2
+if [[ "$VARIANT" == "skills-v5" && ! -e "$SKILLS_DIR/entity-ledger" ]]; then
+  echo "error: skills-v5 round but $SKILLS_DIR/entity-ledger is missing" >&2
   exit 1
 fi
-if [[ "$VARIANT" == "skills-no-router" && -e "$SKILLS_DIR/entity-router" ]]; then
-  echo "error: skills-no-router round but $SKILLS_DIR/entity-router is present;" >&2
+if [[ "$VARIANT" == "skills-no-router" && -e "$SKILLS_DIR/entity-ledger" ]]; then
+  echo "error: skills-no-router round but $SKILLS_DIR/entity-ledger is present;" >&2
   echo "       move it away temporarily (maintainer manages skill projections)" >&2
   exit 1
 fi
@@ -86,7 +86,7 @@ if [[ -n "$STALE_SESSIONS" ]]; then
 fi
 
 mkdir -p "$RUN/project" "$HARNESS"
-# The controller dir (ENTITY_ROUTER_HOME) only exists for skills-v5 rounds;
+# The controller dir (ENTITY_LEDGER_HOME) only exists for skills-v5 rounds;
 # creating it for no-router rounds would be an empty signpost.
 if [[ "$VARIANT" == "skills-v5" ]]; then
   mkdir -p "$RUN/controller"
@@ -120,12 +120,12 @@ echo "$RUN_DIR" > "$HARNESS/run_dir.txt"
 echo
 echo "==> trace registered: $RUN_DIR"
 
-# Version anchoring (S rounds only): record the installed entity-router bundle
+# Version anchoring (S rounds only): record the installed entity-ledger bundle
 # facts from `entityctl doctor` output (always JSON; doctor exit 2 on warnings
 # still emits the payload). Read-only — the bundle is managed by the
 # maintainer, never installed by this script.
 if [[ "$VARIANT" == "skills-v5" ]]; then
-  DOCTOR_OUT="$(python3 "$REPO/skills/entity-router/scripts/entityctl.py" doctor 2>/dev/null || true)"
+  DOCTOR_OUT="$(python3 "$REPO/skills/entity-ledger/scripts/entityctl.py" doctor 2>/dev/null || true)"
   if printf '%s' "$DOCTOR_OUT" | python3 -c '
 import json, sys
 doc = json.load(sys.stdin)
@@ -143,7 +143,7 @@ fi
 if [[ $INTERACTIVE -eq 1 ]]; then
   ENV_LINE=""
   if [[ "$VARIANT" == "skills-v5" ]]; then
-    ENV_LINE="export ENTITY_ROUTER_HOME='$RUN/controller'"
+    ENV_LINE="export ENTITY_LEDGER_HOME='$RUN/controller'"
   fi
   cat <<EOF
 
@@ -172,7 +172,7 @@ echo "==> launching agent in $RUN/project (transcript -> $HARNESS/transcript.jso
 
 cd "$RUN/project"
 if [[ "$VARIANT" == "skills-v5" ]]; then
-  export ENTITY_ROUTER_HOME="$RUN/controller"
+  export ENTITY_LEDGER_HOME="$RUN/controller"
 fi
 
 CLAUDE_ARGS=(-p "$(cat "$FIXTURES/task.md")" --output-format stream-json --verbose)

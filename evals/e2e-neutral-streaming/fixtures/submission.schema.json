@@ -3,7 +3,7 @@
   "$id": "submission.schema.json",
   "title": "e2e-neutral-streaming submission",
   "type": "object",
-  "$comment": "This schema covers exactly the fields the oracle (evals/e2e-neutral-streaming/oracle) consumes. It is deliberately permissive otherwise (additional properties are allowed). Compatibility note: the entity-router 0.5.0 `entityctl submission create` document (kind=entity-router.submission, with case_uid/identities/artifacts[]/fingerprint) has a different shape and does NOT by itself satisfy this schema — agents using entityctl must merge the oracle-consumed fields below (experiment_id, run.data_root, analysis.report, analysis.script, ...) into the same submission.json. The oracle reads run.data_root with a fallback to output.data_root, mirrored here by the anyOf.",
+  "$comment": "This schema covers exactly the fields the oracle (evals/e2e-neutral-streaming/oracle) consumes. It is deliberately permissive otherwise (additional properties are allowed). Compatibility note: the entity-ledger 0.5.0 `entityctl submission create` document (kind=entity-ledger.submission, with case_uid/identities/artifacts[]/fingerprint) has a different shape and does NOT by itself satisfy this schema — agents using entityctl must merge the oracle-consumed fields below (experiment_id, run.data_root, analysis.report, analysis.script, ...) into the same submission.json. The oracle reads run.data_root with a fallback to output.data_root, mirrored here by the anyOf.",
   "required": ["experiment_id", "analysis"],
   "properties": {
     "experiment_id": {"const": "e2e-neutral-streaming-v1"},

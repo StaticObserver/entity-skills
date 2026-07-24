@@ -11,18 +11,18 @@ import unittest
 
 
 ROOT = os.path.realpath(os.path.join(os.path.dirname(__file__), ".."))
-SCRIPTS = os.path.join(ROOT, "skills", "entity-router", "scripts")
+SCRIPTS = os.path.join(ROOT, "skills", "entity-ledger", "scripts")
 ENTITYCTL = os.path.join(SCRIPTS, "entityctl.py")
 if SCRIPTS not in sys.path:
     sys.path.insert(0, SCRIPTS)
 
-from entity_router_dashboard import build_dashboard, render_text
-from entity_router_store import OperationStore
+from entity_ledger_dashboard import build_dashboard, render_text
+from entity_ledger_store import OperationStore
 
 
 class DashboardTest(unittest.TestCase):
     def setUp(self):
-        self.temp = tempfile.mkdtemp(prefix="entity-router-dashboard-")
+        self.temp = tempfile.mkdtemp(prefix="entity-ledger-dashboard-")
         self.home = os.path.join(self.temp, "controller")
         self.project = os.path.join(self.temp, "project")
         os.makedirs(self.project)
@@ -120,9 +120,58 @@ class DashboardTest(unittest.TestCase):
         self.assertEqual(dashboard["remote_calls"], 2)
         self.assertTrue(any("带外变更" in item for item in dashboard["pending"]))
 
+    def test_live_exited_nonzero_maps_to_failed(self):
+        self.store.add_identity(
+            self.case_uid, "run", "run-1",
+            {"id": "run-1", "site_id": "local", "status": "submitted",
+             "scheduler": {"pid": 4321}}, True)
+        current = {"source_id": "", "build_id": "", "run_id": "run-1",
+                   "active_run": None, "data_id": "", "analysis_id": ""}
+        self.store.upsert_case(
+            self.case_uid, "demo", self.project,
+            {"authority": {"site_id": "local", "path": self.project},
+             "revision": {"kind": "path", "root": self.project}}, current)
+        live_status = {"live": {"scheduler": "direct", "pid": 4321,
+                                "state": "EXITED", "exit_code": 1,
+                                "observed_at": "2026-07-23T00:00:00Z"},
+                       "divergences": [], "remote_calls": 1}
+        dashboard = self._dashboard(live_status)
+        self.assertEqual(dashboard["board"]["run"]["state"], "failed")
+        steps = " ".join(dashboard["next_steps"])
+        self.assertIn("失败", steps)
+        self.assertNotIn("盘点", steps)
+
+    def test_upsert_case_updates_in_place_and_preserves_identities(self):
+        self.store.add_identity(
+            self.case_uid, "run", "run-1",
+            {"id": "run-1", "site_id": "local", "status": "prepared"}, True)
+        before = self.store.get_case(self.case_uid)
+        self.store.upsert_case(
+            self.case_uid, "demo-renamed", self.project,
+            {"authority": {"site_id": "local", "path": self.project}},
+            {"source_id": "", "build_id": "", "run_id": "run-1",
+             "active_run": None, "data_id": "", "analysis_id": ""})
+        after = self.store.resolve_project(self.project)
+        self.assertEqual(after["case_id"], "demo-renamed")
+        self.assertEqual(after["created_at"], before["created_at"])
+        runs = after["identities"]["run"]["items"]
+        self.assertEqual([item["id"] for item in runs], ["run-1"])
+
+    def test_resolve_project_skips_null_project_root(self):
+        connection = self.store._connect()
+        try:
+            connection.execute(
+                "INSERT INTO projects(project_root,case_uid,updated_at) "
+                "VALUES(NULL,?,'2026-07-24T00:00:00Z')", (self.case_uid,))
+            connection.commit()
+        finally:
+            connection.close()
+        case = self.store.resolve_project(self.project)
+        self.assertEqual(case["case_uid"], self.case_uid)
+
     def test_record_intent_shows_on_dashboard(self):
-        from entity_router_record import record_intent
-        from entity_router_facts import PlanError
+        from entity_ledger_record import record_intent
+        from entity_ledger_facts import PlanError
         result = record_intent(
             self.store, self.project, "验证极冠重联的加热率", {"run_id": "t"})
         self.assertTrue(result["state_mutated"])
@@ -145,7 +194,7 @@ class DashboardTest(unittest.TestCase):
 
     def test_cli_status_defaults_to_text_and_json_is_preserved(self):
         process = subprocess.Popen(
-            [sys.executable, ENTITYCTL, "--router-home", self.home,
+            [sys.executable, ENTITYCTL, "--ledger-home", self.home,
              "status", "--project-root", self.project],
             stdout=subprocess.PIPE, stderr=subprocess.PIPE,
             universal_newlines=True)
@@ -154,14 +203,14 @@ class DashboardTest(unittest.TestCase):
         self.assertIn("就绪板", stdout)
         self.assertRaises(ValueError, json.loads, stdout)
         process = subprocess.Popen(
-            [sys.executable, ENTITYCTL, "--router-home", self.home,
+            [sys.executable, ENTITYCTL, "--ledger-home", self.home,
              "status", "--project-root", self.project, "--json"],
             stdout=subprocess.PIPE, stderr=subprocess.PIPE,
             universal_newlines=True)
         stdout, stderr = process.communicate()
         self.assertEqual(process.returncode, 0, stderr)
         payload = json.loads(stdout)
-        self.assertEqual(payload["kind"], "entity-router.status")
+        self.assertEqual(payload["kind"], "entity-ledger.status")
         self.assertEqual(payload["case_uid"], self.case_uid)
 
 

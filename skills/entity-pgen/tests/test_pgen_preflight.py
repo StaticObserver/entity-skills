@@ -12,11 +12,11 @@ import unittest
 PGEN_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 ROOT = os.path.dirname(os.path.dirname(PGEN_ROOT))
 PREFLIGHT = os.path.join(PGEN_ROOT, "scripts", "pgen_preflight.py")
-ROUTER_SCRIPTS = os.path.join(ROOT, "skills", "entity-router", "scripts")
-if ROUTER_SCRIPTS not in sys.path:
-    sys.path.insert(0, ROUTER_SCRIPTS)
+LEDGER_SCRIPTS = os.path.join(ROOT, "skills", "entity-ledger", "scripts")
+if LEDGER_SCRIPTS not in sys.path:
+    sys.path.insert(0, LEDGER_SCRIPTS)
 
-from entity_router_store import OperationStore  # noqa: E402
+from entity_ledger_store import OperationStore  # noqa: E402
 
 
 class PGenPreflightTest(unittest.TestCase):
@@ -54,7 +54,7 @@ class PGenPreflightTest(unittest.TestCase):
         )
 
     def preflight(self, operation, target, home=None):
-        args = ["--router-home", home or self.home,
+        args = ["--ledger-home", home or self.home,
                 "--operation", operation, "--target", target]
         return self.run_json(PREFLIGHT, *args)
 
@@ -91,7 +91,7 @@ class PGenPreflightTest(unittest.TestCase):
     def test_corrupt_store_still_prints_json_and_exits_2(self):
         corrupt_home = os.path.join(self.temp, "corrupt-store")
         os.makedirs(corrupt_home)
-        with open(os.path.join(corrupt_home, "router.db"), "w") as handle:
+        with open(os.path.join(corrupt_home, "ledger.db"), "w") as handle:
             handle.write("not a sqlite database")
         target = "laptop:%s" % os.path.join(self.temp, "standalone.hpp")
         code, payload, error = self.preflight("write", target, home=corrupt_home)

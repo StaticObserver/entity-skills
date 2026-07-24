@@ -13,7 +13,7 @@ Attribution model (deterministic):
   orientation reads and are skipped entirely.
 - Each remaining tool_use counts in at most ONE adoption category: the
   first matching rule in ADOPTION_RULES wins, so ``entityctl record`` is
-  skill.router only and ``entity-build.sh`` is skill.env_build only.
+  skill.ledger only and ``entity-build.sh`` is skill.env_build only.
 
 Stdlib only, consistent with the rest of this package.
 """
@@ -27,7 +27,7 @@ from typing import Any, Dict, Iterable, List, Mapping, Sequence, Tuple
 # against "<tool name> <tool targets>"; the first match wins.
 ADOPTION_RULES: Sequence[Tuple[str, str]] = (
     ("control_plane_surgery", r"\bsqlite3?\b"),
-    ("skill.router", r"\bentityctl\b"),
+    ("skill.ledger", r"\bentityctl\b"),
     ("skill.env_build", r"entity[-_]checkpoint|entity[-_]compat|entity-build\.sh"),
     ("skill.pgen", r"pgen_preflight"),
     ("skill.nt2py", r"\bnt2\b|nt2\.Data|inspect_nt2_data"),
@@ -51,7 +51,7 @@ SKILL_DOC_RE = re.compile(r"/\.claude/skills/")
 # content such as Write/Edit file bodies or subagent prompts.
 MATCH_FIELDS = ("command", "file_path", "path", "pattern", "notebook_path")
 
-SKILL_CALL_KINDS = ("router", "env_build", "pgen", "nt2py")
+SKILL_CALL_KINDS = ("ledger", "env_build", "pgen", "nt2py")
 RAW_CALL_KINDS = ("sbatch", "srun", "scancel", "scheduler_poll", "build")
 
 
@@ -84,7 +84,7 @@ def count_adoption(calls: Iterable[Mapping[str, Any]]) -> Dict[str, int]:
 
     The skill-doc skip only applies to read-type tools: a *Bash command*
     that references an installed skill path is executing the script
-    (``python3 ~/.claude/skills/entity-router/scripts/entityctl.py ...``),
+    (``python3 ~/.claude/skills/entity-ledger/scripts/entityctl.py ...``),
     which is exactly the adoption we want to count.
     """
     counts: Dict[str, int] = {category: 0 for category, _ in COMPILED_ADOPTION_RULES}

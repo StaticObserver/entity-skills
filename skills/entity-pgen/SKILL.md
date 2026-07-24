@@ -1,6 +1,6 @@
 ---
 name: entity-pgen
-description: 设计、实现、解释、评审和修改 Entity problem generator（PGen），以及配套的 TOML 配置与 docs/design.md。适用于目标明确、边界清晰的 PGen 领域工作，可直接使用，包括独立的新建或既有 PGen、初始场或粒子、边界、自定义行为、输出、归一化以及 PGen-TOML 一致性。当前拒绝在 Router 管理的 Case 内写入（受管写入须由 Router 的 record 原语登记）；Case 生命周期、跨领域工作、构建、运行、未归类的故障、Entity 核心改动以及科学分析，请路由给对应的负责技能。
+description: 设计、实现、解释、评审和修改 Entity problem generator（PGen），以及配套的 TOML 配置与 docs/design.md。适用于目标明确、边界清晰的 PGen 领域工作，可直接使用，包括独立的新建或既有 PGen、初始场或粒子、边界、自定义行为、输出、归一化以及 PGen-TOML 一致性。当前拒绝在 Ledger 管理的 Case 内写入（受管写入须由 Ledger 的 record 原语登记）；Case 生命周期、跨领域工作、构建、运行、未归类的故障、Entity 核心改动以及科学分析，请路由给对应的负责技能。
 ---
 
 # Entity PGen
@@ -17,38 +17,38 @@ description: 设计、实现、解释、评审和修改 Entity problem generator
 
 - **只读**：在不改动文件的前提下解释、检查或评审。可在独立路径或受管路径下
   直接执行。不要创建过程性产物。
-- **独立写入**：仅修改 PGen 所属的产物，且目标位置确切、不在 Router 管理的
+- **独立写入**：仅修改 PGen 所属的产物，且目标位置确切、不在 Ledger 管理的
   Case 之内。可直接执行。
-- **受管写入**：修改已在 Router v5 store 中注册的源 Locator。当前一律拒绝：
-  受管写入须由 Router 的 record 原语登记，pgen skill 不直接落账。请将请求
-  路由给 `entity-router`。
+- **受管写入**：修改已在 Ledger v5 store 中注册的源 Locator。当前一律拒绝：
+  受管写入须由 Ledger 的 record 原语登记，pgen skill 不直接落账。请将请求
+  路由给 `entity-ledger`。
 
 每次写入前，运行：
 
 ```bash
 python3 <entity-pgen-skill>/scripts/pgen_preflight.py \
-  --router-home <controller-root> \
+  --ledger-home <controller-root> \
   --operation write \
   --target <site_id:/exact/absolute/path>
 ```
 
 从本 `SKILL.md` 解析 `<entity-pgen-skill>`；不要假设当前工作目录就是技能目录。
 对每个预期目标运行 preflight，或对它们最窄的共同父目录运行。
-仅当其返回 `"allowed": true` 时才继续。preflight 会查询 Router v5 store，
+仅当其返回 `"allowed": true` 时才继续。preflight 会查询 Ledger v5 store，
 检查目标 Locator 是否落在已注册的 Case 源、identity 根目录或活动运行之下；
 它绝不从祖先目录推断受管状态。如果报告 `router-required`，则不要写入；将
-目标、检测到的 Case、请求的变更及原因返回给 `entity-router`。
-绝不要修改 Router 的控制状态。
+目标、检测到的 Case、请求的变更及原因返回给 `entity-ledger`。
+绝不要修改 Ledger 的控制状态。
 
 即使失败（退出码 2）也总会打印 JSON。其中 `store_present` 字段表明注册表
 是否被实际查询过：`true` 表示已确认 `standalone-write` 目标未注册；`false`
-表示 Router store 缺失或不可读，此时 standalone 仅意味着“无法检查”——应
+表示 Ledger store 缺失或不可读，此时 standalone 仅意味着“无法检查”——应
 将其视为警告而非确认；`null` 表示在查询之前评估就已失败（例如 `--target`
 无效）。
 
-对于未被 Router 注册的目标，仅当用户选定了确切位置且只要求 PGen 领域交付物
+对于未被 Ledger 注册的目标，仅当用户选定了确切位置且只要求 PGen 领域交付物
 时，才按 standalone 处理。含义模糊的工作区创建、持久化的模拟工作，或任何
-延续到构建、运行、恢复或分析的请求，都路由给 Router。
+延续到构建、运行、恢复或分析的请求，都路由给 Ledger。
 
 ## 范围
 
@@ -62,11 +62,11 @@ python3 <entity-pgen-skill>/scripts/pgen_preflight.py \
 
 路由至他处：
 
-- 受管 Case 生命周期与跨领域模拟工作流 -> `entity-router`；
+- 受管 Case 生命周期与跨领域模拟工作流 -> `entity-ledger`；
 - 依赖配置、CMake 配置与编译执行 -> `entity-env-build`；
-- 归属尚不明确的故障 -> 将证据返回给 package Router；
-- Entity 引擎或框架改动 -> 将限定了范围的交接返回给 package Router；
-- 模拟输出访问与可视化 -> `entity-nt2py`；科学分析路由给 `entity-router`。
+- 归属尚不明确的故障 -> 将证据返回给 package Ledger；
+- Entity 引擎或框架改动 -> 将限定了范围的交接返回给 package Ledger；
+- 模拟输出访问与可视化 -> `entity-nt2py`；科学分析路由给 `entity-ledger`。
 
 不要向核心技能添加平台特定的元数据或调用配置。
 
@@ -79,7 +79,7 @@ python3 <entity-pgen-skill>/scripts/pgen_preflight.py \
 5. 对实质性改变物理模型、归一化或实现方向的决定，要先确认。当未决问题不构成阻塞时，继续安全的局部工作。
 6. 在可行时，以当前活动的源码检出为准核实 Entity 版本、API 签名、归一化与坐标基约定。随附 references 针对 Entity v1.4.4，其效力次于当前源码证据。
 7. 当变更影响 PGen 与 TOML 的共同契约时，两者须一起修改，然后更新对应的设计章节与当前状态。
-8. 在任何运行提交之前，向用户展示参数卡，并用 `python3 <entity-pgen-skill>/scripts/pgen_preflight.py confirm <input.toml> --by <actor>` 记录确认（未逐项审查而接受默认值时加 `--confirm-defaults`）。该命令会写出 `<input.toml>.decisions.json`；当记录缺失或其 `input_sha256` 与 TOML 不再匹配时，Router 的 record run-prepare 门禁会拒绝登记。任何 TOML 编辑后都要重新运行 `confirm`。
+8. 在任何运行提交之前，向用户展示参数卡，并用 `python3 <entity-pgen-skill>/scripts/pgen_preflight.py confirm <input.toml> --by <actor>` 记录确认（未逐项审查而接受默认值时加 `--confirm-defaults`）。该命令会写出 `<input.toml>.decisions.json`；当记录缺失或其 `input_sha256` 与 TOML 不再匹配时，Ledger 的 record run-prepare 门禁会拒绝登记。任何 TOML 编辑后都要重新运行 `confirm`。
 
 ## 工作方法
 

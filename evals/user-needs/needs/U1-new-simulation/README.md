@@ -7,7 +7,7 @@
 ## 对照组
 
 - `skills-v5`（S 组）：装 entity 技能全家桶。额外核验 data-inventory.json 与 router source/build/run 身份链。
-- `skills-no-router`（N 组）：保留 env-build/pgen/nt2py，仅无 entity-router。data inventory 与 router 链属 router 能力，记 unknown 并写入 skill_boundary_notes，不算 fail。
+- `skills-no-router`（N 组）：保留 env-build/pgen/nt2py，仅无 entity-ledger。data inventory 与 router 链属 router 能力，记 unknown 并写入 skill_boundary_notes，不算 fail。
 
 ## 核验逻辑（verify.py checks）
 

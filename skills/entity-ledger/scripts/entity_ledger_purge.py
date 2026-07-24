@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Execute an explicitly authorized Router data.purge request on its target site."""
+"""Execute an explicitly authorized Ledger data.purge request on its target site."""
 
 from __future__ import print_function
 
@@ -104,8 +104,8 @@ def existing_directory(path):
 def validate_request(request, receipt):
     if request.get("action_type") != "data.purge":
         raise ValueError("request is not data.purge")
-    if request.get("owner") != "router" or request.get("execution_domain") != "router":
-        raise ValueError("data.purge must be router-owned")
+    if request.get("owner") != "ledger" or request.get("execution_domain") != "ledger":
+        raise ValueError("data.purge must be ledger-owned")
     if not request.get("authorization", "").strip():
         raise ValueError("data.purge request lacks explicit authorization")
     outputs = [absolute(item["path"]) for item in request.get("expected_outputs", [])]

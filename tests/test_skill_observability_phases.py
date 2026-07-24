@@ -294,7 +294,7 @@ class SkillAdoptionTest(unittest.TestCase):
         adoption = self.adoption(segment_transcript(self.transcript))
 
         skill = adoption["skill_calls"]
-        self.assertEqual(skill["router"], 1)
+        self.assertEqual(skill["ledger"], 1)
         self.assertEqual(skill["env_build"], 1)
         self.assertEqual(skill["pgen"], 1)
         self.assertEqual(skill["nt2py"], 1)

@@ -25,7 +25,7 @@
 
 ## 两个变体
 
-| | S：`skills-v5`（完整 bundle） | N：`skills-no-router`（仅无 entity-router） |
+| | S：`skills-v5`（完整 bundle） | N：`skills-no-router`（仅无 entity-ledger） |
 |---|---|---|
 | Entity skills | `entityctl install` 发布当前 bundle（commit `6c6e205`） | `~/.claude/skills/` 下 entity-* 投影临时移走 |
 | 模型 / 任务文本 / shell·ssh 工具 | 相同 | 相同 |
@@ -38,7 +38,7 @@
 
 ```bash
 # 开跑（建目录、注册 trace、启动 agent；启动前校验技能投影状态：
-# S 组要求 entity-router 在场，N 组要求仅 entity-router 已移走、
+# S 组要求 entity-ledger 在场，N 组要求仅 entity-ledger 已移走、
 # env-build/pgen/nt2py 三者保留——不满足则拒绝启动）
 evals/e2e-neutral-streaming/run_round.sh skills-v5 2026-07-21-S1 [model]
 evals/e2e-neutral-streaming/run_round.sh skills-no-router 2026-07-22-Snr1 [model]
@@ -78,7 +78,7 @@ python3 $OBS start \
   --agent-provider claude --agent-model <model> \
   --agent-configuration <config-sha256> \
   --tool-profile claude-code-default --tool-configuration <tools-sha256> \
-  --skill skills/entity-router --skill skills/entity-pgen \
+  --skill skills/entity-ledger --skill skills/entity-pgen \
   --skill skills/entity-env-build --skill skills/entity-nt2py \
   --trace-home ~/entity-eval-runs/<run>/traces
 # → 输出 <run-dir>（N 组去掉 --skill 行，--variant skills-no-router）
@@ -112,7 +112,7 @@ agent 的运行命令、settings、环境与裸跑逐字节一致。
 
 ```text
 ├── project/       # Agent 工作区（PGen、TOML、docs、分析脚本）
-└── controller/    # S 组 Router home（export ENTITY_ROUTER_HOME 指到这里；N 组不创建）
+└── controller/    # S 组 Router home（export ENTITY_LEDGER_HOME 指到这里；N 组不创建）
 ```
 
 Harness 状态在 agent 不可及的 `~/entity-eval-traces/<run>/`（trace home、

@@ -7,7 +7,7 @@
 从 `main` 创建短期分支，命名使用 `<type>/<scope>-<summary>`，例如：
 
 ```text
-feat/router-resume-flow
+feat/ledger-resume-flow
 fix/env-build-compatibility
 docs/pgen-boundary-contract
 ```
@@ -15,13 +15,13 @@ docs/pgen-boundary-contract
 提交信息使用 skill scope：
 
 ```text
-feat(router): add resume handoff
+feat(ledger): add resume handoff
 fix(env-build): reject stale compatibility state
 docs(pgen): clarify TOML contract
 refactor(nt2py): simplify data inventory
 ```
 
-一次行为变更如果同时影响 Router、子 skill 和测试，应作为一个原子 pull request 提交，不要拆到不同仓库或长期分支。
+一次行为变更如果同时影响 Ledger、子 skill 和测试，应作为一个原子 pull request 提交，不要拆到不同仓库或长期分支。
 
 ## 验证
 
@@ -34,7 +34,7 @@ python3 -m unittest discover -s skills/entity-env-build/tests -v
 python3 -m py_compile \
   tools/skill_observability/*.py \
   tools/skill_observability/adapters/*.py \
-  skills/entity-router/scripts/*.py \
+  skills/entity-ledger/scripts/*.py \
   skills/entity-pgen/scripts/*.py \
   skills/entity-env-build/scripts/*.py \
   skills/entity-nt2py/scripts/*.py

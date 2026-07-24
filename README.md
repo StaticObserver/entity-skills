@@ -2,9 +2,9 @@
 
 一套帮助 Agent 使用 [Entity](https://github.com/entity-toolkit/entity) 完成天体物理模拟的 skills package。
 
-`skills/entity-router/SKILL.md` 是模拟项目的确定性记录入口。Router 把
+`skills/entity-ledger/SKILL.md` 是模拟项目的确定性记录入口。Ledger 把
 公共模型收敛为 `Project → Case → Identity → Evidence`：Agent 负责与用户对话、
-科学判断和流程编排，Router 提供确定性原语——读取（status/show）、生成
+科学判断和流程编排，Ledger 提供确定性原语——读取（status/show）、生成
 （render-run/snapshot-source）、记录（record build/run-prepare/run-launch/
 run-exit/data/intent）和探测（status --live）。写入类原语自带证据探测，
 先验证、后落账，失败零写入。边界明确的只读或 standalone 领域任务仍可直接
@@ -14,17 +14,15 @@ run-exit/data/intent）和探测（status --live）。写入类原语自带证�
 - `entity-env-build`：依赖环境与 Entity 编译；
 - `entity-nt2py`：nt2py 数据访问、绘图和导出。
 
-每种模拟活动（搭环境、写 PGen、编译、跑模拟、分析、debug）有一份
-playbook 供 Agent 参考，流程顺序由 Agent 按用户目标自行编排，不单独建立
-run skill。SQLite `router.db`（schema v2）是唯一结构化 controller
-authority；Local 与 SSH 使用同一个内容寻址 executor。
+流程顺序由 Agent 按用户目标自行编排，不单独建立 run skill。SQLite
+`ledger.db`（schema v2）是唯一结构化 controller authority；Local 与
+SSH 使用同一个内容寻址 executor。
 
 ```text
 entity-skills/
 ├── skills/
-│   ├── entity-router/
+│   ├── entity-ledger/
 │   │   ├── SKILL.md
-│   │   ├── playbooks/
 │   │   ├── agents/
 │   │   ├── scripts/
 │   │   ├── references/
@@ -43,55 +41,55 @@ entity-skills/
 `design/router-restructure-migration-2026-07-23.md`。`router-v5-*`、
 `architecture-v4.md` 和 `model-efficient-router-flow.md` 是历史设计，不代表当前
 公共入口。skill 执行观测合同见 `design/skill-observability.md`。`design/` 和
-`legacy/` 不属于 Router 运行时上下文。
+`legacy/` 不属于 Ledger 运行时上下文。
 
 ## 公共控制状态
 
 Codex、Claude Code、Kimi Code 和普通 shell 默认共享控制机上的
-`~/.entity-router/router.db`（schema v2：Site、Case、项目绑定、identity 与
+`~/.entity-ledger/ledger.db`（schema v2：Site、Case、项目绑定、identity 与
 审计事件；并发为单写文件锁）。identity、事件和 evidence reference 不写入
 客户端私有目录或源码仓库。远端不可用时仍可读取最后一次控制快照，但缓存
 evidence 不代表当前远端事实。
 
 ```bash
-python3 skills/entity-router/scripts/entityctl.py doctor
-python3 skills/entity-router/scripts/entityctl.py \
+python3 skills/entity-ledger/scripts/entityctl.py doctor
+python3 skills/entity-ledger/scripts/entityctl.py \
   --actor-run-id <run-id> --actor-provider <provider> \
   install --source-root /path/to/entity-skills/skills
-python3 skills/entity-router/scripts/entityctl.py \
+python3 skills/entity-ledger/scripts/entityctl.py \
   --actor-run-id <run-id> --actor-provider <provider> \
   site add --profile /absolute/site-profile.json
-python3 skills/entity-router/scripts/entityctl.py site list
-python3 skills/entity-router/scripts/entityctl.py export --output /absolute/export.json
+python3 skills/entity-ledger/scripts/entityctl.py site list
+python3 skills/entity-ledger/scripts/entityctl.py export --output /absolute/export.json
 
 # 读取项目状态（仪表盘：就绪板 + Run 台账 + 待决 + 建议下一步）
-python3 skills/entity-router/scripts/entityctl.py status \
+python3 skills/entity-ledger/scripts/entityctl.py status \
   --project-root /absolute/project [--live] [--json]
-python3 skills/entity-router/scripts/entityctl.py show --project-root /absolute/project
+python3 skills/entity-ledger/scripts/entityctl.py show --project-root /absolute/project
 
 # 生成（零写入）
-python3 skills/entity-router/scripts/entityctl.py render-run \
+python3 skills/entity-ledger/scripts/entityctl.py render-run \
   --project-root /absolute/project --toml input.toml --site <site> [--gpus N]
-python3 skills/entity-router/scripts/entityctl.py \
+python3 skills/entity-ledger/scripts/entityctl.py \
   --actor-run-id <run-id> --actor-provider <provider> \
   snapshot-source --project-root /absolute/project
 
 # 记录（先探测证据，后落账）
-python3 skills/entity-router/scripts/entityctl.py \
+python3 skills/entity-ledger/scripts/entityctl.py \
   --actor-run-id <run-id> --actor-provider <provider> \
   record run-prepare --project-root /absolute/project --toml input.toml --site <site>
-python3 skills/entity-router/scripts/entityctl.py ... record run-launch --project-root ...
-python3 skills/entity-router/scripts/entityctl.py ... record run-exit  --project-root ...
-python3 skills/entity-router/scripts/entityctl.py ... record build --project-root ... \
+python3 skills/entity-ledger/scripts/entityctl.py ... record run-launch --project-root ...
+python3 skills/entity-ledger/scripts/entityctl.py ... record run-exit  --project-root ...
+python3 skills/entity-ledger/scripts/entityctl.py ... record build --project-root ... \
   --site <site> --checkpoint deps.local.json --executable /abs/entity.xc
-python3 skills/entity-router/scripts/entityctl.py ... record data   --project-root ...
-python3 skills/entity-router/scripts/entityctl.py ... record intent --project-root ... \
+python3 skills/entity-ledger/scripts/entityctl.py ... record data   --project-root ...
+python3 skills/entity-ledger/scripts/entityctl.py ... record intent --project-root ... \
   --text "<当前研究目标>"
 ```
 
 `record run-prepare` 要求模拟参数已确认（`pgen_preflight.py confirm` 写入的
 `<input>.decisions.json` 与 TOML 字节匹配）；`record run-launch` 有 receipt
-保护，重复执行不会重复提交，绕过 Router 提交的作业用 `--adopt-job/--adopt-pid`
+保护，重复执行不会重复提交，绕过 Ledger 提交的作业用 `--adopt-job/--adopt-pid`
 认领；`status` 默认只读本地 controller，`--live` 最多执行三次有界 scheduler
 查询。
 
@@ -99,7 +97,7 @@ python3 skills/entity-router/scripts/entityctl.py ... record intent --project-ro
 `~/.entity-skills/bundles/`；Codex、Claude Code 和 Kimi Code 的 discovery 目录只保留
 指向同一 bundle 的符号链接投影，不再分别维护三套文件。
 
-`entity-pgen` 的直接调用分为只读和 standalone 修改。它在写入前必须运行自身的 preflight；preflight 查询 Router store，target 落在注册 Case 的 source/identity/active-run Locator 内即视为受管，受管写入须由 Router 的 record 原语登记。Router 控制状态位于独立 control root，不依赖源码祖先目录中的 `_case/` 标记。
+`entity-pgen` 的直接调用分为只读和 standalone 修改。它在写入前必须运行自身的 preflight；preflight 查询 Ledger store，target 落在注册 Case 的 source/identity/active-run Locator 内即视为受管，受管写入须由 Ledger 的 record 原语登记。Ledger 控制状态位于独立 control root，不依赖源码祖先目录中的 `_case/` 标记。
 
 ## 仓库与发布
 
@@ -116,10 +114,10 @@ python3 skills/entity-router/scripts/entityctl.py ... record intent --project-ro
 
 `tools/skill_observability/skill_observer.py` 提供平台无关的 append-only
 trace。它记录 skill 身份、关键决策、工具调用、artifact 和外部验证，
-不记录隐藏思维链，也不回写 Router 或 owner 状态。
+不记录隐藏思维链，也不回写 Ledger 或 owner 状态。
 
 创建 run 时必须传入任务、Agent/tool 配置指纹和实际暴露的 skill。
-Entity source、Router Case 和 raw data root 通过 `--protected-root` 显式保护；
+Entity source、Ledger Case 和 raw data root 通过 `--protected-root` 显式保护；
 skill source 会自动加入保护列表。
 
 ```bash
@@ -133,10 +131,10 @@ python3 tools/skill_observability/skill_observer.py start \
   --agent-configuration <agent-config-sha256> \
   --tool-profile <tool-profile> \
   --tool-configuration <tool-config-sha256> \
-  --skill skills/entity-router \
+  --skill skills/entity-ledger \
   --skill skills/entity-pgen \
   --protected-root /absolute/entity-source \
-  --protected-root /absolute/router-case \
+  --protected-root /absolute/ledger-case \
   --protected-root /absolute/raw-data
 ```
 

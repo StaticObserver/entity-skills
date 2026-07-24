@@ -2,7 +2,7 @@
 
 被测对象：entity skills bundle 0.5.0（bundle_hash 见各轮 bundle.json）。
 评测框架：evals/user-needs/（场景定义见 SUITE.md，流程见 LIVE-RUN.md）。
-变体：S = skills-v5（完整 bundle）；N = skills-no-router（仅无 entity-router）。
+变体：S = skills-v5（完整 bundle）；N = skills-no-router（仅无 entity-ledger）。
 基线对照：S1（2026-07-21）/ Snr1（2026-07-22）留存证据。
 
 > 状态：5/9 轮完成（U1-S、U1-Nr、U6-Nr、U4-S、U6-S）。U2-S/U3-S/U3-Nr/U5-S

@@ -25,14 +25,14 @@ import json
 import os
 import re
 
-from entity_router_common import (
+from entity_ledger_common import (
     absolute,
     now_utc,
     run_on_site,
     sha256_file,
 )
-from entity_router_executor import ExecutorError, RENDER_BACKENDS
-from entity_router_facts import (
+from entity_ledger_executor import ExecutorError, RENDER_BACKENDS
+from entity_ledger_facts import (
     PlanError,
     _content_sha256,
     _current_build_executable,
@@ -45,9 +45,9 @@ from entity_router_facts import (
     derive_run_paths,
     require_verified_checkpoint,
 )
-from entity_router_operation import ExecutorClient, OperationError, _same_path
-from entity_router_remote import make_manifest, snapshot_archive
-from entity_router_store import StoreError, canonical_hash, canonical_json
+from entity_ledger_operation import ExecutorClient, OperationError, _same_path
+from entity_ledger_remote import archive_manifest, make_manifest, snapshot_archive
+from entity_ledger_store import StoreError, canonical_hash, canonical_json
 
 
 def show_case(store, project_root):
@@ -55,7 +55,7 @@ def show_case(store, project_root):
     case = store.resolve_project(project_root)
     return {
         "schema_version": 1,
-        "kind": "entity-router.show",
+        "kind": "entity-ledger.show",
         "ok": True,
         "state_mutated": False,
         "case_uid": case["case_uid"],
@@ -136,7 +136,7 @@ def record_intent(store, project_root, text, actor):
             {"text": text.strip()}, actor, connection)
     return {
         "schema_version": 1,
-        "kind": "entity-router.record.intent",
+        "kind": "entity-ledger.record.intent",
         "ok": True,
         "state_mutated": True,
         "case_uid": case["case_uid"],
@@ -187,7 +187,7 @@ def record_build(store, project_root, site_id, checkpoint, executable, actor):
             actor, connection)
     return {
         "schema_version": 1,
-        "kind": "entity-router.record.build",
+        "kind": "entity-ledger.record.build",
         "ok": True,
         "state_mutated": True,
         "case_uid": case["case_uid"],
@@ -217,7 +217,7 @@ def _inventory_envelope(case_uid, run_id, site_id, staging_root, run_root):
     envelope = {
         "schema_version": 1,
         "operation_id": "op-" + digest,
-        "plan_hash": canonical_hash({"kind": "entity-router.record.data",
+        "plan_hash": canonical_hash({"kind": "entity-ledger.record.data",
                                      "case_uid": case_uid, "run_id": run_id}),
         "step_index": 0,
         "step_id": "record-data",
@@ -300,7 +300,7 @@ def record_data(store, project_root, run_id, actor):
             actor, connection)
     return {
         "schema_version": 1,
-        "kind": "entity-router.record.data",
+        "kind": "entity-ledger.record.data",
         "ok": True,
         "state_mutated": True,
         "case_uid": case["case_uid"],
@@ -356,7 +356,7 @@ def _derive_run(store, project_root, input_value, site_id, compute, executable):
     paths = derive_run_paths(
         case["case_uid"], site_id, roots, scheduler_kind, source_id,
         input_sha256, executable, build_id, normalized)
-    plan_hash = canonical_hash({"kind": "entity-router.record.run",
+    plan_hash = canonical_hash({"kind": "entity-ledger.record.run",
                                 "seed": paths["seed"]})
     return {
         "case": case, "create_case": create_case, "profile": profile,
@@ -387,7 +387,7 @@ def render_run(store, project_root, input_value, site_id, gpus, walltime,
     paths = derived["paths"]
     return {
         "schema_version": 1,
-        "kind": "entity-router.render-run",
+        "kind": "entity-ledger.render-run",
         "ok": True,
         "state_mutated": False,
         "case_uid": derived["case"]["case_uid"],
@@ -421,9 +421,13 @@ def _check_receipt_identity(envelope, verified):
 
 
 def _book_run(store, case, identity, readiness_state, current_updates,
-              event_type, event_payload, actor, extra_identities=None):
+              event_type, event_payload, actor, extra_identities=None,
+              create_case=False):
     """Atomically book a run identity, the Case current projection, and the
-    audit event — the record-path equivalent of _identity_projection."""
+    audit event — the record-path equivalent of _identity_projection.  With
+    ``create_case`` the Case row itself (plus its case.created event) joins
+    the same transaction, so a failed executor call leaves the store
+    completely untouched."""
     current = dict(case["current"])
     current.update(current_updates)
     current["run_id"] = identity["id"]
@@ -432,6 +436,12 @@ def _book_run(store, case, identity, readiness_state, current_updates,
     readiness["run"] = readiness_state
     current["readiness"] = readiness
     with store.transaction() as connection:
+        if create_case:
+            store.upsert_case(
+                case["case_uid"], case["case_id"], case["project_root"],
+                case["source"], case["current"], {}, connection=connection)
+            store._event(connection, case["case_uid"], None, "case.created",
+                         {}, actor)
         for dimension, identity_id, payload in extra_identities or []:
             store.add_identity(
                 case["case_uid"], dimension, identity_id, payload, True, connection)
@@ -450,28 +460,29 @@ def record_run_prepare(store, project_root, input_value, site_id, gpus,
     """Prepare a run root on its Site and book the run identity as prepared.
 
     Gates (all before any state write): the pgen simulation confirmation must
-    match the current input bytes.  The Case is created on first use, the
-    executor receipt makes re-runs idempotent."""
+    match the current input bytes, and an existing run identity that already
+    advanced past ``prepared`` is never rewound.  The Case is created on first
+    use in the same transaction as the run booking — after the executor
+    succeeded — and the executor receipt makes re-runs idempotent."""
     compute = _compute_request(gpus, walltime, precision)
     derived = _derive_run(
         store, project_root, input_value, site_id, compute, executable)
     confirmation = _simulation_confirmation(derived["input_path"])
     case = derived["case"]
     paths = derived["paths"]
+    existing = _run_identity(case, paths["run_id"])
+    if existing is not None and existing.get("status", "") != "prepared":
+        raise PlanError(
+            "run %s is already %s; re-preparing it would rewind an advanced "
+            "run — change the input or compute to derive a new run"
+            % (paths["run_id"], existing.get("status") or "unknown"),
+            "needs_decision",
+            [{"field": "run",
+              "question": "change the parameters so a new run is derived"}],
+        )
     source_identity = _source_identity_payload(
         case, derived["source_id"], derived["source_fingerprint"])
-    created_case = False
-    if derived["create_case"]:
-        with store.transaction() as connection:
-            store.upsert_case(
-                case["case_uid"], case["case_id"], case["project_root"],
-                case["source"], case["current"], {}, connection=connection)
-            store.add_identity(
-                case["case_uid"], "source", source_identity["id"],
-                source_identity, True, connection)
-            store._event(connection, case["case_uid"], None, "case.created",
-                         {}, actor)
-        created_case = True
+    created_case = derived["create_case"]
     client = ExecutorClient(derived["profile"])
     client.stage_payload({"source": derived["input_path"],
                           "target": paths["staged_input"],
@@ -528,10 +539,11 @@ def record_run_prepare(store, project_root, input_value, site_id, gpus,
         {"run_id": paths["run_id"], "site_id": site_id,
          "run_root": paths["run_root"], "created_case": created_case},
         actor,
-        extra_identities=[("source", source_identity["id"], source_identity)])
+        extra_identities=[("source", source_identity["id"], source_identity)],
+        create_case=created_case)
     return {
         "schema_version": 1,
-        "kind": "entity-router.record.run-prepare",
+        "kind": "entity-ledger.record.run-prepare",
         "ok": True,
         "state_mutated": True,
         "case_uid": case["case_uid"],
@@ -671,6 +683,27 @@ def record_run_launch(store, project_root, run_id, adopt_job, adopt_pid, actor):
             effect = _probe_adopt_direct(profile, adopt_pid, run_root)
         effect["adopted"] = True
     else:
+        recorded_scheduler = identity.get("scheduler", {})
+        if recorded_scheduler.get("job_id") or recorded_scheduler.get("pid"):
+            # The run already carries a scheduler identity — submitted by an
+            # earlier launch or adopted out-of-band (adoption leaves no
+            # executor receipt to make a re-run idempotent).  Re-running the
+            # launch without adopt flags must claim the recorded effect
+            # instead of submitting a second job.
+            return {
+                "schema_version": 1,
+                "kind": "entity-ledger.record.run-launch",
+                "ok": True,
+                "state_mutated": False,
+                "case_uid": case["case_uid"],
+                "run_id": run_id,
+                "site_id": site_id,
+                "status": identity.get("status", ""),
+                "adopted": bool(recorded_scheduler.get("adopted")),
+                "scheduler": recorded_scheduler,
+                "detail": "run already has a recorded scheduler identity; "
+                          "no new submission",
+            }
         for key in ["operation_id", "plan_hash", "staging_root"]:
             if not identity.get(key):
                 raise PlanError(
@@ -754,7 +787,7 @@ def record_run_launch(store, project_root, run_id, adopt_job, adopt_pid, actor):
         actor)
     return {
         "schema_version": 1,
-        "kind": "entity-router.record.run-launch",
+        "kind": "entity-ledger.record.run-launch",
         "ok": True,
         "state_mutated": True,
         "case_uid": case["case_uid"],
@@ -769,10 +802,13 @@ def record_run_launch(store, project_root, run_id, adopt_job, adopt_pid, actor):
 def _direct_exit_probe(profile, scheduler):
     """Terminal probe for a scheduler-less run: the exit file decides the
     terminal state, kill -0 on the recorded pid decides still-running, and a
-    dead process without an exit file is reported gone.  Returns
-    (state, exit_code) with state in {terminal, running, gone}."""
+    dead process without an exit file is reported gone.  An exit file that
+    exists but holds no numeric code (a partial write) is reported unknown —
+    there is evidence, just not enough of it.  Returns (state, exit_code)
+    with state in {terminal, running, gone, unknown}."""
     exit_file = scheduler.get("exit_file", "")
     pid = scheduler.get("pid")
+    corrupt_exit = False
     if exit_file:
         try:
             code, unused, unused_err = run_on_site(
@@ -787,6 +823,7 @@ def _direct_exit_probe(profile, scheduler):
             text = stdout.strip()
             if text.isdigit():
                 return "terminal", int(text)
+            corrupt_exit = True
     if pid:
         try:
             code, unused, unused_err = run_on_site(
@@ -795,6 +832,8 @@ def _direct_exit_probe(profile, scheduler):
             raise PlanError("cannot probe run process: %s" % exc)
         if code == 0:
             return "running", None
+    if corrupt_exit:
+        return "unknown", None
     return "gone", None
 
 
@@ -861,7 +900,7 @@ def record_run_exit(store, project_root, run_id, actor):
     if status in {"completed", "failed"}:
         return {
             "schema_version": 1,
-            "kind": "entity-router.record.run-exit",
+            "kind": "entity-ledger.record.run-exit",
             "ok": True,
             "state_mutated": False,
             "case_uid": case["case_uid"],
@@ -890,7 +929,7 @@ def record_run_exit(store, project_root, run_id, actor):
     if state == "running":
         return {
             "schema_version": 1,
-            "kind": "entity-router.record.run-exit",
+            "kind": "entity-ledger.record.run-exit",
             "ok": True,
             "state_mutated": False,
             "case_uid": case["case_uid"],
@@ -901,13 +940,25 @@ def record_run_exit(store, project_root, run_id, actor):
     if state == "gone":
         return {
             "schema_version": 1,
-            "kind": "entity-router.record.run-exit",
+            "kind": "entity-ledger.record.run-exit",
             "ok": True,
             "state_mutated": False,
             "case_uid": case["case_uid"],
             "run_id": run_id,
             "state": "gone",
             "detail": "recorded process is gone and no exit file was written",
+        }
+    if state == "unknown":
+        return {
+            "schema_version": 1,
+            "kind": "entity-ledger.record.run-exit",
+            "ok": True,
+            "state_mutated": False,
+            "case_uid": case["case_uid"],
+            "run_id": run_id,
+            "state": "unknown",
+            "detail": "exit file holds no numeric exit code (partial write) "
+                      "and the recorded process is gone",
         }
     final = "completed" if exit_code == 0 else "failed"
     identity = dict(identity)
@@ -926,7 +977,7 @@ def record_run_exit(store, project_root, run_id, actor):
         actor)
     return {
         "schema_version": 1,
-        "kind": "entity-router.record.run-exit",
+        "kind": "entity-ledger.record.run-exit",
         "ok": True,
         "state_mutated": True,
         "case_uid": case["case_uid"],
@@ -944,24 +995,36 @@ def snapshot_source(store, project_root, actor):
     project_root = absolute(project_root)
     if not os.path.isdir(project_root):
         raise PlanError("project root does not exist: %s" % project_root)
-    manifest = make_manifest(project_root)
-    snapshot_id = manifest["snapshot_id"]
+    probe = make_manifest(project_root)
     snapshots_root = os.path.join(store.home, "snapshots")
-    archive = os.path.join(snapshots_root, snapshot_id + ".tar")
+    archive = os.path.join(snapshots_root, probe["snapshot_id"] + ".tar")
     archived = False
-    if not os.path.isfile(archive):
+    manifest = None
+    if os.path.isfile(archive):
+        # An existing archive is trusted only after its recorded manifest is
+        # readable and matches the content address; a truncated tar (an
+        # interrupted earlier run) is regenerated.
+        try:
+            manifest = archive_manifest(archive)
+        except ValueError:
+            manifest = None
+        if manifest is not None and manifest.get("snapshot_id") != probe["snapshot_id"]:
+            manifest = None
+    if manifest is None:
         # snapshot_archive prints the manifest to stdout; capture it so the
-        # CLI's JSON output stays clean.
+        # CLI's JSON output stays clean.  The returned manifest is the one
+        # actually archived — use it rather than recomputing (TOCTOU).
         request = argparse.Namespace(source=project_root, archive=archive)
         with contextlib.redirect_stdout(io.StringIO()):
-            snapshot_archive(request)
+            manifest = snapshot_archive(request)
         archived = True
+    snapshot_id = manifest["snapshot_id"]
     try:
         case = store.resolve_project(project_root)
     except StoreError:
         case = None
     recorded = False
-    identity_id = "src-" + snapshot_id[:16]
+    identity_id = "source-" + snapshot_id[:16]
     if case is not None:
         authority = case.get("source", {}).get("authority", {})
         payload = {
@@ -992,7 +1055,7 @@ def snapshot_source(store, project_root, actor):
         recorded = True
     return {
         "schema_version": 1,
-        "kind": "entity-router.snapshot-source",
+        "kind": "entity-ledger.snapshot-source",
         "ok": True,
         "state_mutated": recorded,
         "snapshot_id": snapshot_id,

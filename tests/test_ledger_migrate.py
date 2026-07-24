@@ -11,12 +11,15 @@ import unittest
 
 
 ROOT = os.path.realpath(os.path.join(os.path.dirname(__file__), ".."))
-SCRIPTS = os.path.join(ROOT, "skills", "entity-router", "scripts")
+SCRIPTS = os.path.join(ROOT, "skills", "entity-ledger", "scripts")
 ENTITYCTL = os.path.join(SCRIPTS, "entityctl.py")
 if SCRIPTS not in sys.path:
     sys.path.insert(0, SCRIPTS)
 
-from entity_router_store import OperationStore, STORE_SCHEMA_VERSION
+from entity_ledger_store import OperationStore, STORE_SCHEMA_VERSION
+from entity_ledger_common import LedgerError, ledger_home
+
+from unittest import mock
 
 
 # The retired v1 schema, inlined so the fixture does not depend on any
@@ -59,10 +62,10 @@ CREATE TABLE events (event_id INTEGER PRIMARY KEY AUTOINCREMENT,
 
 class StoreMigrateTest(unittest.TestCase):
     def setUp(self):
-        self.temp = tempfile.mkdtemp(prefix="entity-router-migrate-")
+        self.temp = tempfile.mkdtemp(prefix="entity-ledger-migrate-")
         self.home = os.path.join(self.temp, "controller")
         os.makedirs(self.home)
-        self.database = os.path.join(self.home, "router.db")
+        self.database = os.path.join(self.home, "ledger.db")
         self._build_v1_store()
 
     def tearDown(self):
@@ -116,7 +119,7 @@ class StoreMigrateTest(unittest.TestCase):
 
     def cli(self, *args):
         process = subprocess.Popen(
-            [sys.executable, ENTITYCTL, "--router-home", self.home] + list(args),
+            [sys.executable, ENTITYCTL, "--ledger-home", self.home] + list(args),
             stdout=subprocess.PIPE, stderr=subprocess.PIPE,
             universal_newlines=True)
         stdout, stderr = process.communicate()
@@ -135,7 +138,7 @@ class StoreMigrateTest(unittest.TestCase):
         # a v1 store is rejected by the v2 runtime before migration
         with self.assertRaises(Exception) as caught:
             OperationStore(self.home, create=False)._initialize()
-        self.assertIn("unsupported Router store schema", str(caught.exception))
+        self.assertIn("unsupported Ledger store schema", str(caught.exception))
         code, payload = self.cli("store", "migrate")
         self.assertEqual(code, 0, payload)
         self.assertTrue(payload["state_mutated"])
@@ -150,7 +153,7 @@ class StoreMigrateTest(unittest.TestCase):
         self.assertTrue(os.path.isfile(payload["database_backup"]))
         with open(archive, "r") as handle:
             archived = json.load(handle)
-        self.assertEqual(archived["kind"], "entity-router.operations-archive")
+        self.assertEqual(archived["kind"], "entity-ledger.operations-archive")
         self.assertEqual(len(archived["operations"]), 1)
         operation = archived["operations"][0]
         self.assertEqual(operation["operation_id"], "op-1")
@@ -202,13 +205,85 @@ class StoreMigrateTest(unittest.TestCase):
         finally:
             connection.close()
         process = subprocess.Popen(
-            [sys.executable, ENTITYCTL, "--router-home", self.home,
+            [sys.executable, ENTITYCTL, "--ledger-home", self.home,
              "store", "migrate"],
             stdout=subprocess.PIPE, stderr=subprocess.PIPE,
             universal_newlines=True)
         stdout, unused = process.communicate()
         self.assertEqual(process.returncode, 2)
         self.assertIn("newer than this bundle supports", stdout)
+
+
+class LegacyStorageMigrationTest(unittest.TestCase):
+    """Pre-rename Router storage is adopted automatically on first access."""
+
+    def setUp(self):
+        self.temp = tempfile.mkdtemp(prefix="entity-ledger-legacy-")
+        self._env = mock.patch.dict(os.environ, {"HOME": self.temp})
+        self._env.start()
+        for key in ("ENTITY_LEDGER_HOME", "ENTITY_ROUTER_HOME"):
+            os.environ.pop(key, None)
+
+    def tearDown(self):
+        self._env.stop()
+        shutil.rmtree(self.temp)
+
+    def test_legacy_home_directory_is_adopted(self):
+        legacy = os.path.join(self.temp, ".entity-router")
+        os.makedirs(legacy)
+        with open(os.path.join(legacy, "marker"), "w") as handle:
+            handle.write("x")
+        home = ledger_home()
+        self.assertEqual(
+            home, os.path.join(os.path.realpath(self.temp), ".entity-ledger"))
+        self.assertFalse(os.path.exists(legacy))
+        self.assertTrue(os.path.isfile(os.path.join(home, "marker")))
+        # a second call is a no-op now that the new home exists
+        self.assertEqual(ledger_home(), home)
+
+    def test_legacy_home_rename_race_with_completed_peer(self):
+        legacy = os.path.join(self.temp, ".entity-router")
+        os.makedirs(legacy)
+        home = os.path.join(os.path.realpath(self.temp), ".entity-ledger")
+
+        def peer_won(unused_source, unused_target):
+            # another process finished the migration between our existence
+            # check and the rename
+            os.makedirs(home)
+            raise FileNotFoundError("no such file or directory")
+
+        with mock.patch("entity_ledger_common.os.rename",
+                        side_effect=peer_won):
+            self.assertEqual(ledger_home(), home)
+
+    def test_legacy_home_rename_failure_is_a_ledger_error(self):
+        legacy = os.path.join(self.temp, ".entity-router")
+        os.makedirs(legacy)
+        with mock.patch("entity_ledger_common.os.rename",
+                        side_effect=OSError("permission denied")):
+            with self.assertRaises(LedgerError) as raised:
+                ledger_home()
+        self.assertIn("cannot migrate", str(raised.exception))
+
+    def test_legacy_home_environment_variable_is_honoured(self):
+        legacy = os.path.join(self.temp, "legacy-controller")
+        os.environ["ENTITY_ROUTER_HOME"] = legacy
+        self.assertEqual(ledger_home(), os.path.realpath(legacy))
+        os.environ["ENTITY_LEDGER_HOME"] = os.path.join(self.temp, "explicit")
+        self.assertEqual(
+            ledger_home(), os.path.realpath(os.environ["ENTITY_LEDGER_HOME"]))
+
+    def test_legacy_router_db_is_renamed(self):
+        home = os.path.join(self.temp, "controller")
+        store = OperationStore(home)
+        store.upsert_site({"site_id": "local", "transport": {"kind": "local"},
+                           "scheduler": {"kind": "none"}, "roots": {}})
+        os.rename(os.path.join(home, "ledger.db"),
+                  os.path.join(home, "router.db"))
+        reopened = OperationStore(home, create=False)
+        self.assertTrue(os.path.isfile(os.path.join(home, "ledger.db")))
+        self.assertFalse(os.path.exists(os.path.join(home, "router.db")))
+        self.assertEqual(reopened.get_site("local")["site_id"], "local")
 
 
 if __name__ == "__main__":

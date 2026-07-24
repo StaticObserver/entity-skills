@@ -11,18 +11,18 @@ import unittest
 
 
 ROOT = os.path.realpath(os.path.join(os.path.dirname(__file__), ".."))
-SCRIPTS = os.path.join(ROOT, "skills", "entity-router", "scripts")
+SCRIPTS = os.path.join(ROOT, "skills", "entity-ledger", "scripts")
 ENTITYCTL = os.path.join(SCRIPTS, "entityctl.py")
 if SCRIPTS not in sys.path:
     sys.path.insert(0, SCRIPTS)
 
-from entity_router_dashboard import build_dashboard
-from entity_router_store import OperationStore, canonical_hash
+from entity_ledger_dashboard import build_dashboard
+from entity_ledger_store import OperationStore, canonical_hash
 
 
 class RecordTest(unittest.TestCase):
     def setUp(self):
-        self.temp = tempfile.mkdtemp(prefix="entity-router-record-")
+        self.temp = tempfile.mkdtemp(prefix="entity-ledger-record-")
         self.home = os.path.join(self.temp, "controller")
         self.project = os.path.join(self.temp, "project")
         self.run_root = os.path.join(self.temp, "runs")
@@ -56,7 +56,7 @@ class RecordTest(unittest.TestCase):
 
     def cli(self, *args):
         process = subprocess.Popen(
-            [sys.executable, ENTITYCTL, "--router-home", self.home] + list(args),
+            [sys.executable, ENTITYCTL, "--ledger-home", self.home] + list(args),
             stdout=subprocess.PIPE, stderr=subprocess.PIPE,
             universal_newlines=True,
         )
@@ -111,7 +111,7 @@ class RecordTest(unittest.TestCase):
         self._register_run()
         code, payload = self.cli("show", "--project-root", self.project)
         self.assertEqual(code, 0)
-        self.assertEqual(payload["kind"], "entity-router.show")
+        self.assertEqual(payload["kind"], "entity-ledger.show")
         self.assertFalse(payload["state_mutated"])
         self.assertEqual(payload["case_uid"], self.case_uid)
         self.assertEqual(payload["case_id"], "record-demo")
@@ -138,7 +138,7 @@ class RecordTest(unittest.TestCase):
             "--project-root", self.project, "--site", "local",
             "--checkpoint", checkpoint, "--executable", executable)
         self.assertEqual(code, 0, payload)
-        self.assertEqual(payload["kind"], "entity-router.record.build")
+        self.assertEqual(payload["kind"], "entity-ledger.record.build")
         self.assertTrue(payload["state_mutated"])
         self.assertTrue(payload["build_id"].startswith("build-"))
         case = self.store.get_case(self.case_uid)
@@ -223,7 +223,7 @@ class RecordTest(unittest.TestCase):
             "--actor-run-id", "record-test", "record", "data",
             "--project-root", self.project)
         self.assertEqual(code, 0, payload)
-        self.assertEqual(payload["kind"], "entity-router.record.data")
+        self.assertEqual(payload["kind"], "entity-ledger.record.data")
         self.assertTrue(payload["state_mutated"])
         self.assertTrue(payload["data_id"].startswith("data-"))
         self.assertEqual(payload["run_id"], "run-1")

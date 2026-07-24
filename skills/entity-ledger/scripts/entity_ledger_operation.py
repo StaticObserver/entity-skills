@@ -9,8 +9,8 @@ import shlex
 import shutil
 import tempfile
 
-from entity_router_common import (
-    RouterError,
+from entity_ledger_common import (
+    LedgerError,
     absolute,
     atomic_write_json,
     now_utc,
@@ -20,7 +20,7 @@ from entity_router_common import (
 )
 
 
-class OperationError(RouterError):
+class OperationError(LedgerError):
     pass
 
 
@@ -64,13 +64,13 @@ class ExecutorClient(object):
         self.profile = profile
         self.transport = profile.get("transport", {}).get("kind")
         self.alias = profile.get("transport", {}).get("ssh_alias", "")
-        self.script = os.path.join(os.path.dirname(__file__), "entity_router_executor.py")
+        self.script = os.path.join(os.path.dirname(__file__), "entity_ledger_executor.py")
         self.digest = sha256_file(self.script)
         staging = profile.get("roots", {}).get("staging_root")
         if not staging:
             raise OperationError("execution Site has no staging_root")
         self.remote_script = os.path.join(
-            staging, ".entity-router-executor", self.digest, "entity_router_executor.py"
+            staging, ".entity-ledger-executor", self.digest, "entity_ledger_executor.py"
         )
 
     def _remote_hash(self, path):
@@ -217,7 +217,7 @@ def _slurm_reconcile_job(profile, scheduler, job_id, live_state, observed_at):
                 "kind": "state_mismatch", "job_id": job_id,
                 "recorded": "submitted", "observed": terminal,
                 "detail": "recorded job reached terminal scheduler state %s "
-                          "without the router observing it" % terminal,
+                          "without the ledger observing it" % terminal,
                 "observed_at": observed_at,
             })
         else:
@@ -269,7 +269,7 @@ def status_for_project(store, project_root, live=False):
             run_identity = item
             break
     result = {
-        "schema_version": 1, "kind": "entity-router.status", "ok": True,
+        "schema_version": 1, "kind": "entity-ledger.status", "ok": True,
         "state_mutated": False, "remote_calls": 0,
         "project_root": case.get("project_root"), "case_uid": case["case_uid"],
         "current": current, "run": run_identity, "live": None, "divergences": [],
@@ -335,7 +335,7 @@ def _direct_foreign_scan(profile, run_root, recorded_pid, recorded_pgid):
     script = (
         "command -v pgrep >/dev/null 2>&1 && command -v lsof >/dev/null 2>&1 "
         "|| { echo UNSUPPORTED; exit 0; }; "
-        "pids=$(pgrep -f 'run\\.sh entity-router:' 2>/dev/null); rc=$?; "
+        "pids=$(pgrep -f 'run\\.sh entity-(ledger|router):' 2>/dev/null); rc=$?; "
         "if [ $rc -gt 1 ]; then echo SCAN_FAILED; exit 0; fi; "
         "for pid in $pids; do "
         "cwd=$(lsof -a -p \"$pid\" -d cwd -Fn 2>/dev/null | sed -n 's/^n//p'); "
@@ -398,7 +398,7 @@ def _direct_live_status(profile, scheduler, result):
             "kind": "state_mismatch", "pid": pid,
             "recorded": "submitted", "observed": "EXITED",
             "detail": "recorded process exited with code %s without the "
-                      "router observing it" % exit_code,
+                      "ledger observing it" % exit_code,
             "observed_at": observed_at,
         })
     else:

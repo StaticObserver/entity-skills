@@ -36,9 +36,9 @@ REPO = Path(__file__).resolve().parents[3]
 E2E = REPO / "evals" / "e2e-neutral-streaming"
 ORACLE_PY = E2E / "oracle" / "oracle.py"
 SUBMISSION_SCHEMA = E2E / "fixtures" / "submission.schema.json"
-ENTITYCTL = REPO / "skills" / "entity-router" / "scripts" / "entityctl.py"
+ENTITYCTL = REPO / "skills" / "entity-ledger" / "scripts" / "entityctl.py"
 SKILL_VARIANT = "skills-v5"
-# The contrast group keeps env-build/pgen/nt2py and removes only entity-router
+# The contrast group keeps env-build/pgen/nt2py and removes only entity-ledger
 # (the eval's independent variable is the router, not the whole bundle).
 CONTRAST_VARIANT = "skills-no-router"
 
@@ -81,7 +81,7 @@ def parse_args(need_id: str, description: str) -> argparse.Namespace:
     p.add_argument("--run-name", required=True)
     p.add_argument("--variant", help="fallback when the trace manifest is unreadable")
     p.add_argument("--project", type=Path, help="agent project dir (default: ~/entity-eval-runs/<run>/project)")
-    p.add_argument("--router-home", type=Path, help="ENTITY_ROUTER_HOME (default: ~/entity-eval-runs/<run>/controller)")
+    p.add_argument("--router-home", type=Path, help="ENTITY_LEDGER_HOME (default: ~/entity-eval-runs/<run>/controller)")
     p.add_argument("--transcript", type=Path)
     p.add_argument("--activities", type=Path, help="activities.json (default: <trace-run-dir>/activities.json)")
     p.add_argument("--trace-run-dir", type=Path, help="skill_observer run_dir")
@@ -251,7 +251,7 @@ def read_router_export(router_home: Any) -> Optional[dict]:
     output = Path(tempfile.mkdtemp(prefix="router-export-")) / "store.json"
     cmd = [sys.executable, str(ENTITYCTL), "--router-home", str(router_home),
            "export", "--output", str(output)]
-    env = dict(os.environ, ENTITY_ROUTER_HOME=str(router_home))
+    env = dict(os.environ, ENTITY_LEDGER_HOME=str(router_home))
     try:
         proc = subprocess.run(cmd, capture_output=True, text=True, timeout=60, env=env)
     except (OSError, subprocess.TimeoutExpired):

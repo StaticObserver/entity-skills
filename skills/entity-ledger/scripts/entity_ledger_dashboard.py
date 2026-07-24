@@ -13,8 +13,8 @@ from __future__ import print_function
 import json
 import os
 
-from entity_router_common import sha256_file
-from entity_router_facts import _git_revision
+from entity_ledger_common import sha256_file
+from entity_ledger_facts import _git_revision
 
 
 BOARD_ORDER = ["source", "pgen", "build", "run", "data", "analysis"]
@@ -126,7 +126,10 @@ def _run_cell(case, current, live):
     if live:
         live_state = live.get("state", "")
         if live_state == "EXITED":
-            state = "exited"
+            # A non-zero live exit means the run failed: mapping it to plain
+            # "exited" would make the deriver suggest inventorying the
+            # outputs of a failed run.
+            state = "failed" if live.get("exit_code") else "exited"
             detail += "；exit %s" % live.get("exit_code", "?")
         elif live_state == "RUNNING":
             state = "running"
@@ -149,10 +152,10 @@ def _data_cell(case, current):
             "detail": "%s 个文件" % payload.get("files", "?")}
 
 
-def derive_next_steps(board, pending, run_id):
-    """The deriver: map (board, intent facts) to suggested next steps.  These
-    rules replace a stored state machine — they are computed on every read and
-    can never drift from the recorded facts."""
+def derive_next_steps(board, run_id):
+    """The deriver: map board facts to suggested next steps.  These rules
+    replace a stored state machine — they are computed on every read and can
+    never drift from the recorded facts."""
     steps = []
     run_state = board["run"]["state"]
     if run_state in {"exited", "completed"} and board["data"]["state"] == "missing":
@@ -214,7 +217,7 @@ def build_dashboard(store, project_root, status=None):
     if board["pgen"]["state"] in {"unconfirmed", "partial"}:
         pending.append("模拟参数未确认：%s" % board["pgen"]["detail"])
     return {
-        "schema_version": 1, "kind": "entity-router.dashboard",
+        "schema_version": 1, "kind": "entity-ledger.dashboard",
         "state_mutated": False,
         "remote_calls": (status or {}).get("remote_calls", 0),
         "case_uid": case["case_uid"], "case_id": case.get("case_id", ""),
@@ -222,8 +225,7 @@ def build_dashboard(store, project_root, status=None):
         "updated_at": case.get("updated_at", ""),
         "intent": intent, "board": board, "runs": ledger,
         "pending": pending,
-        "next_steps": derive_next_steps(
-            board, pending, current.get("run_id", "")),
+        "next_steps": derive_next_steps(board, current.get("run_id", "")),
         "live": live,
     }
 

@@ -73,7 +73,7 @@ echo "==> launching agent in $RUN/project (transcript -> $HARNESS/transcript.jso
 
 cd "$RUN/project"
 if [[ "$VARIANT" == "skills-v5" ]]; then
-  export ENTITY_ROUTER_HOME="$RUN/controller"
+  export ENTITY_LEDGER_HOME="$RUN/controller"
 fi
 
 CLAUDE_ARGS=(-p "$(cat "$PROMPT")" --output-format stream-json --verbose)

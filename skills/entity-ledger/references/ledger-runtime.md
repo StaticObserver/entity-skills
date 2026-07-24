@@ -1,21 +1,21 @@
-# Router 运行时参考
+# Ledger 运行时参考
 
 这是一份内部/调试参考。正常工作使用 `SKILL.md` 中记录的
 `entityctl status`、`record` 原语和 `show`。
 
 ## 控制器
 
-`$ENTITY_ROUTER_HOME/router.db`（默认 `~/.entity-router/router.db`）是
+`$ENTITY_LEDGER_HOME/ledger.db`（默认 `~/.entity-ledger/ledger.db`）是
 唯一的结构化权威。schema v2 在 SQLite 中存储 Site、Case、项目绑定、
 identity、紧凑证据和事件（events 为被动审计）。大型
 产物和日志保留在其 owner Site。并发控制是 `BEGIN IMMEDIATE`
 文件锁；旧 plan/apply 协议的 Operation/Step 记录已随 v1→v2 迁移
-归档到 `<router_home>/archive/`。
+归档到 `<ledger_home>/archive/`。
 
 在不改变控制器状态的情况下导出：
 
 ```bash
-python3 scripts/entityctl.py export --output /absolute/router-export.json
+python3 scripts/entityctl.py export --output /absolute/ledger-export.json
 ```
 
 ## record 落账与 receipt
@@ -32,13 +32,35 @@ python3 scripts/entityctl.py export --output /absolute/router-export.json
 按 launch comment 在 scheduler/进程表中找回唯一匹配的已提交效果并
 认领，绝不二次提交。多个匹配属于异常——采纳其中任何一个都不安全。
 
+## 改名与存储迁移边界
+
+entity-router → entity-ledger 改名带来三处兼容边界：
+
+- **存储目录与数据库**：首次解析 Ledger home 时自动把
+  `~/.entity-router` 迁移为 `~/.entity-ledger`（home 内的
+  `router.db` 随之改名为 `ledger.db`）。迁移是惰性的，只在
+  命令真正解析 home 时发生，不会在 `--help` 等 parser 构建阶段
+  触发。`ENTITY_ROUTER_HOME` 环境变量仍被识别（在
+  `ENTITY_LEDGER_HOME` 未设置时）。
+- **receipt 身份**：改名前已 prepare/inventory 的 run，其 staging
+  receipts 里的 receipt 记录着旧的 `plan_hash`（其中嵌有旧 kind
+  字符串）。对同一个 run 重跑 prepare/data 会命中 "existing receipt
+  belongs to another Step"。修复办法：删除该 run 在
+  `<staging_root>/<case_uid>/<operation_id>/receipts/` 下的旧
+  receipt 后重跑原语。
+- **在途作业恢复**：改名前提交的在途作业带有
+  `entity-router:` 前缀的 launch comment。恢复匹配（Slurm 的
+  squeue/sacct 扫描与 direct 的 pgrep 扫描）同时接受
+  `entity-ledger:` 和 `entity-router:` 两种前缀，旧作业会被认领
+  而不是重复提交；新提交一律使用 `entity-ledger:` 前缀。
+
 ## 执行器 transport
 
-本地和 SSH 使用相同的 `entity_router_executor.py` 内容和请求 envelope。
+本地和 SSH 使用相同的 `entity_ledger_executor.py` 内容和请求 envelope。
 远端副本位于：
 
 ```text
-<staging_root>/.entity-router-executor/<sha256>/entity_router_executor.py
+<staging_root>/.entity-ledger-executor/<sha256>/entity_ledger_executor.py
 ```
 
 Transport 只负责暂存精确的 payload/请求 JSON、调用白名单内的动作、
@@ -54,7 +76,7 @@ launch 的 effect identity 因后端而异。Slurm 记录
 ```json
 {"scheduler": "direct", "pid": 418795, "pgid": 418795,
  "run_root": "...", "log": "<run_root>/run.log",
- "exit_file": "<run_root>/.entity-exit-code", "comment": "entity-router:..."}
+ "exit_file": "<run_root>/.entity-exit-code", "comment": "entity-ledger:..."}
 ```
 
 被启动的进程是会话首进程（`pid == pgid`）；walltime 由
@@ -90,6 +112,6 @@ profile 中。
 以及外来进程扫描——当 Site 拒绝该扫描时降级为 `unknown`（绝不视为
 失败）。`--live` 还会报告 `divergences`，对带外变更分类：
 `job_gone`（后端对已记录的作业或进程没有记录）、`state_mismatch`
-（作业到达了 router 从未观测到的终态），以及 `untracked_job`
+（作业到达了 Ledger 从未观测到的终态），以及 `untracked_job`
 （一个外来的 scheduler 作业或进程正在 Case run root 中运行——
 这是绕过记录原语的证据）。

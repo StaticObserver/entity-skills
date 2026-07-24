@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Transactional controller store for Entity Router Case facts.
+"""Transactional controller store for Entity Ledger Case facts.
 
 The database contains only compact control facts and evidence references.  Raw
 simulation data, long logs, build trees, and run artifacts remain on their
@@ -22,18 +22,18 @@ import json
 import os
 import sqlite3
 
-from entity_router_common import (
-    RouterError,
+from entity_ledger_common import (
+    LedgerError,
     absolute,
     now_utc,
-    router_home,
+    ledger_home,
 )
 
 
 STORE_SCHEMA_VERSION = 2
 
 
-class StoreError(RouterError):
+class StoreError(LedgerError):
     pass
 
 
@@ -46,7 +46,16 @@ def canonical_hash(value):
 
 
 def store_path(home):
-    return os.path.join(router_home(home), "router.db")
+    return os.path.join(ledger_home(home), "ledger.db")
+
+
+def _migrate_legacy_db(home):
+    """One-time storage migration from the pre-rename Router layout: if the
+    home holds only a legacy ``router.db``, rename it to ``ledger.db``."""
+    legacy = os.path.join(home, "router.db")
+    current = os.path.join(home, "ledger.db")
+    if os.path.isfile(legacy) and not os.path.exists(current):
+        os.rename(legacy, current)
 
 
 def _json(value):
@@ -119,7 +128,9 @@ CREATE TABLE IF NOT EXISTS events (
 
 class OperationStore(object):
     def __init__(self, home=None, create=True):
-        self.home = router_home(home)
+        self.home = ledger_home(home)
+        if os.path.isdir(self.home):
+            _migrate_legacy_db(self.home)
         self.path = store_path(self.home)
         if create:
             if not os.path.isdir(self.home):
@@ -127,7 +138,7 @@ class OperationStore(object):
             self._initialize()
         elif not os.path.isfile(self.path):
             raise StoreError(
-                "Entity Router store does not exist; initialize it with "
+                "Entity Ledger store does not exist; initialize it with "
                 "entityctl site add (run entityctl doctor for diagnostics)"
             )
 
@@ -151,7 +162,7 @@ class OperationStore(object):
             ).fetchone()[0]
             if int(current) != STORE_SCHEMA_VERSION:
                 raise StoreError(
-                    "unsupported Router store schema: %s (expected %s; run "
+                    "unsupported Ledger store schema: %s (expected %s; run "
                     "entityctl store migrate)" % (current, STORE_SCHEMA_VERSION))
             connection.commit()
         finally:
@@ -213,15 +224,25 @@ class OperationStore(object):
             existing = connection.execute(
                 "SELECT created_at FROM cases WHERE case_uid=?", (case_uid,)
             ).fetchone()
-            connection.execute(
-                """INSERT OR REPLACE INTO cases(
-                       case_uid,case_id,project_root,source_json,current_json,legacy_json,
-                       created_at,updated_at)
-                   VALUES(?,?,?,?,?,?,?,?)""",
-                (case_uid, case_id, normalized_project, _json(source), _json(current),
-                 _json(legacy or {}),
-                 existing["created_at"] if existing else (created_at or timestamp), timestamp),
-            )
+            if existing:
+                # UPDATE in place: INSERT OR REPLACE is DELETE+INSERT, which
+                # can trip the foreign keys from projects/identities/events.
+                connection.execute(
+                    """UPDATE cases SET case_id=?,project_root=?,source_json=?,
+                           current_json=?,legacy_json=?,updated_at=?
+                       WHERE case_uid=?""",
+                    (case_id, normalized_project, _json(source), _json(current),
+                     _json(legacy or {}), timestamp, case_uid),
+                )
+            else:
+                connection.execute(
+                    """INSERT INTO cases(
+                           case_uid,case_id,project_root,source_json,current_json,legacy_json,
+                           created_at,updated_at)
+                       VALUES(?,?,?,?,?,?,?,?)""",
+                    (case_uid, case_id, normalized_project, _json(source), _json(current),
+                     _json(legacy or {}), created_at or timestamp, timestamp),
+                )
             if normalized_project:
                 connection.execute(
                     "INSERT OR REPLACE INTO projects(project_root,case_uid,updated_at) VALUES(?,?,?)",
@@ -294,6 +315,10 @@ class OperationStore(object):
         try:
             matches = []
             for row in connection.execute("SELECT project_root,case_uid FROM projects"):
+                if not row["project_root"]:
+                    # Legacy rows may carry a NULL/empty root; they can never
+                    # cover a query path and must not be absolutized.
+                    continue
                 root = absolute(row["project_root"])
                 try:
                     within = os.path.commonpath([query, root]) == root

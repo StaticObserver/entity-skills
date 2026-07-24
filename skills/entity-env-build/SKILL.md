@@ -6,7 +6,7 @@ description: 在一个明确的执行站点配置、验证并执行 Entity 依�
 # Entity 环境构建
 
 负责构建站点的环境与 Entity 编译。本技能可以携带精确路径独立运行，也可以
-配合 Router 使用：构建验证通过后由 `entityctl record build` 把 checkpoint
+配合 Ledger 使用：构建验证通过后由 `entityctl record build` 把 checkpoint
 登记进 Case 台账。它不选择 PGen 物理内容、不启动模拟、
 不分析输出，也不修改 Entity 核心代码。
 
@@ -33,14 +33,14 @@ description: 在一个明确的执行站点配置、验证并执行 Entity 依�
 - `build_root` 是一个不可变构建身份的 CMake 树。
 - `deps_root` 存放可复用的依赖前缀、源码以及生成的依赖脚本。
 - `artifacts_root` 存放 requirements/checkpoint/env/构建脚本/日志。
-- 这些路径不需要共享父目录，也不需要靠近 Router 控制路径、源码权威
+- 这些路径不需要共享父目录，也不需要靠近 Ledger 控制路径、源码权威
   路径、运行路径或数据路径。
 - `site_id` 在路径变化时保持稳定，并为可复用的机器笔记提供键。
 
 Schema v1 的 `checkout_root/workdir` 仅在明确的旧版迁移时被接受。绝不从
 旧的单体式约定生成新状态。
 
-仅在调用方提供的执行 Site 与 Locator 授权路径上执行，绝不写入 Router
+仅在调用方提供的执行 Site 与 Locator 授权路径上执行，绝不写入 Ledger
 控制状态。远程 Worker 返回证据；由控制器提交状态。
 
 ## 硬性门槛
@@ -75,7 +75,7 @@ Schema v1 的 `checkout_root/workdir` 仅在明确的旧版迁移时被接受。
 ### 1. Requirements
 
 在 `artifacts_root` 下编写 schema-v2 的 `requirements.json`。包含上述
-五个站点/路径字段、由 Router 提供的源码版本身份、Entity 版本配置、
+五个站点/路径字段、由 Ledger 提供的源码版本身份、Entity 版本配置、
 环境选择、编译选择以及期望的产物路径。校验：
 
 ```bash
@@ -152,7 +152,7 @@ scheduler 类型，但不编码分区、账户、module 栈或 SSH 凭据。
 
 从第一个因果性错误和当前的 JSON/日志证据开始诊断。只修复构建方拥有
 的状态。PGen/TOML 错误交回 `entity-pgen`；源码分歧或物化错误交回
-`entity-router`；scheduler/运行错误交回 `entity-router`；未知的跨层
+`entity-ledger`；scheduler/运行错误交回 `entity-ledger`；未知的跨层
 原因作为 `failure.triage` 证据返回。
 
 成功需要：

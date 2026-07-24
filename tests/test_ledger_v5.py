@@ -13,21 +13,21 @@ import shlex
 
 
 ROOT = os.path.realpath(os.path.join(os.path.dirname(__file__), ".."))
-SCRIPTS = os.path.join(ROOT, "skills", "entity-router", "scripts")
+SCRIPTS = os.path.join(ROOT, "skills", "entity-ledger", "scripts")
 ENTITYCTL = os.path.join(SCRIPTS, "entityctl.py")
 if SCRIPTS not in sys.path:
     sys.path.insert(0, SCRIPTS)
 
-from entity_router_operation import status_for_project
-from entity_router_record import record_run_launch, record_run_prepare
-from entity_router_common import atomic_write_json
-import entity_router_common
-from entity_router_store import OperationStore
+from entity_ledger_operation import status_for_project
+from entity_ledger_record import record_run_launch, record_run_prepare
+from entity_ledger_common import atomic_write_json
+import entity_ledger_common
+from entity_ledger_store import OperationStore
 
 
-class RouterV5Test(unittest.TestCase):
+class LedgerV5Test(unittest.TestCase):
     def setUp(self):
-        self.temp = tempfile.mkdtemp(prefix="entity-router-v5-")
+        self.temp = tempfile.mkdtemp(prefix="entity-ledger-v5-")
         self.home = os.path.join(self.temp, "controller")
         self.project = os.path.join(self.temp, "project")
         self.run_root = os.path.join(self.temp, "runs")
@@ -171,7 +171,7 @@ else:
 
     def cli(self, *args):
         process = __import__("subprocess").Popen(
-            [sys.executable, ENTITYCTL, "--router-home", self.home] + list(args),
+            [sys.executable, ENTITYCTL, "--ledger-home", self.home] + list(args),
             stdout=__import__("subprocess").PIPE,
             stderr=__import__("subprocess").PIPE,
             universal_newlines=True,
@@ -285,7 +285,7 @@ else:
         self.assertIn("'pbs'", payload["error"])
 
     def test_sbatch_invokes_entity_with_dash_input(self):
-        from entity_router_executor import render_sbatch
+        from entity_ledger_executor import render_sbatch
         script = render_sbatch({
             "executable": self.executable,
             "input_name": "input.toml",
@@ -299,7 +299,7 @@ else:
     def _launch_intent(self, comment_hash="0" * 16):
         """Fabricate a launch intent receipt as if the controller crashed
         after sbatch accepted the job but before the effect receipt landed."""
-        import entity_router_executor
+        import entity_ledger_executor
         run_root = os.path.join(self.run_root, "case-x", "run-x")
         os.makedirs(run_root)
         submit = os.path.join(run_root, "run.sbatch")
@@ -322,9 +322,9 @@ else:
                         "submit_script": submit,
                         "job_name": "entity-op-tz", "submit_user": "tester"},
         }
-        entity_router_executor.receipt_base(envelope, "intent_written")
-        comment = "entity-router:op-tz:%s" % comment_hash
-        return entity_router_executor, envelope, run_root, comment
+        entity_ledger_executor.receipt_base(envelope, "intent_written")
+        comment = "entity-ledger:op-tz:%s" % comment_hash
+        return entity_ledger_executor, envelope, run_root, comment
 
     def _write_slurm_record(self, run_root, comment, submitted_at):
         record = {"job_id": "42", "job_name": "entity-op-tz", "user": "tester",
@@ -382,7 +382,7 @@ print('|'.join([r['job_id'], r['job_name'], r['user'], r['run_root'],
         """Fabricate a direct launch intent receipt as if the controller
         crashed after the process started but before the effect receipt
         landed."""
-        import entity_router_executor
+        import entity_ledger_executor
         run_root = os.path.join(self.run_root, "case-d", "run-d")
         os.makedirs(run_root)
         submit = os.path.join(run_root, "run.sh")
@@ -405,8 +405,8 @@ print('|'.join([r['job_id'], r['job_name'], r['user'], r['run_root'],
                         "submit_script": submit,
                         "job_name": "entity-op-d", "submit_user": "tester"},
         }
-        entity_router_executor.receipt_base(envelope, "intent_written")
-        return entity_router_executor, envelope, run_root
+        entity_ledger_executor.receipt_base(envelope, "intent_written")
+        return entity_ledger_executor, envelope, run_root
 
     def test_direct_launch_recovery_claims_running_process(self):
         executor, envelope, unused_root = self._direct_launch_intent()
@@ -430,7 +430,7 @@ print('|'.join([r['job_id'], r['job_name'], r['user'], r['run_root'],
                 pass
 
     def test_direct_run_script_is_deterministic(self):
-        from entity_router_executor import RENDER_BACKENDS
+        from entity_ledger_executor import RENDER_BACKENDS
         run_spec = {
             "executable": self.executable, "input_name": "input.toml",
             "compute": {"nodes": 1, "tasks": 1, "gpus": 1, "cpus_per_task": 2,
@@ -457,7 +457,7 @@ print('|'.join([r['job_id'], r['job_name'], r['user'], r['run_root'],
         with mock.patch.dict(os.environ, {"HOME": fake_home}):
             code, payload = self.cli("doctor")
         self.assertEqual(code, 0, payload)
-        version_file = os.path.join(ROOT, "skills", "entity-router", "VERSION")
+        version_file = os.path.join(ROOT, "skills", "entity-ledger", "VERSION")
         with open(version_file, "r") as handle:
             self.assertEqual(payload["runtime_bundle"]["version"], handle.read().strip())
         self.assertEqual(payload["controller"]["store_schema_version"], 2)
@@ -465,7 +465,7 @@ print('|'.join([r['job_id'], r['job_name'], r['user'], r['run_root'],
 
     def test_doctor_fails_on_client_bundle_drift(self):
         fake_home = os.path.join(self.temp, "drifted-clients")
-        drifted = os.path.join(fake_home, ".claude", "skills", "entity-router")
+        drifted = os.path.join(fake_home, ".claude", "skills", "entity-ledger")
         os.makedirs(drifted)
         with open(os.path.join(drifted, "VERSION"), "w") as handle:
             handle.write("0.0.0-drifted\n")
@@ -482,7 +482,7 @@ print('|'.join([r['job_id'], r['job_name'], r['user'], r['run_root'],
         self.assertFalse(payload["state_mutated"])
         empty_home = os.path.join(self.temp, "empty-controller")
         process = __import__("subprocess").Popen(
-            [sys.executable, ENTITYCTL, "--router-home", empty_home,
+            [sys.executable, ENTITYCTL, "--ledger-home", empty_home,
              "store", "migrate"],
             stdout=__import__("subprocess").PIPE,
             stderr=__import__("subprocess").PIPE, universal_newlines=True,
@@ -498,7 +498,7 @@ print('|'.join([r['job_id'], r['job_name'], r['user'], r['run_root'],
         self.store.upsert_site(remote_profile)
 
         def local_site(unused_profile, argv):
-            return entity_router_common.run_command(argv)
+            return entity_ledger_common.run_command(argv)
 
         def scp_or_local(argv, cwd=None):
             if argv and argv[0] == "scp":
@@ -510,12 +510,12 @@ print('|'.join([r['job_id'], r['job_name'], r['user'], r['run_root'],
                     os.makedirs(parent)
                 shutil.copy2(source, target)
                 return 0, "", ""
-            return entity_router_common.run_command(argv, cwd)
+            return entity_ledger_common.run_command(argv, cwd)
 
-        with mock.patch("entity_router_facts.run_on_site", local_site):
-            with mock.patch("entity_router_operation.run_on_site",
+        with mock.patch("entity_ledger_facts.run_on_site", local_site):
+            with mock.patch("entity_ledger_operation.run_on_site",
                             side_effect=local_site) as remote_calls:
-                with mock.patch("entity_router_operation.run_command",
+                with mock.patch("entity_ledger_operation.run_command",
                                 side_effect=scp_or_local):
                     prepared, launched = self._record_run(site="fake-ssh")
                     calls_before_status = remote_calls.call_count
@@ -701,7 +701,7 @@ print('normal')
                 handle.write("#!/bin/bash\nsleep 30\n")
             subprocess = __import__("subprocess")
             foreign = subprocess.Popen(
-                ["bash", foreign_script, "entity-router:op-foreign:0000000000000000"],
+                ["bash", foreign_script, "entity-ledger:op-foreign:0000000000000000"],
                 cwd=run_root, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL, start_new_session=True,
             )
@@ -785,7 +785,7 @@ raise SystemExit(1)
         with open(self.store.path, "wb") as handle:
             handle.write(b"definitely not a sqlite database")
         process = subprocess.Popen(
-            [sys.executable, ENTITYCTL, "--router-home", self.home, "site", "list"],
+            [sys.executable, ENTITYCTL, "--ledger-home", self.home, "site", "list"],
             stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True,
         )
         stdout, stderr = process.communicate()
@@ -805,7 +805,7 @@ raise SystemExit(1)
         self.assertFalse(payload["ok"])
         self.assertFalse(payload["state_mutated"])
         # a conventional user@host alias stays valid
-        from entity_router_common import validate_site_profile
+        from entity_ledger_common import validate_site_profile
         valid = dict(self.profile, site_id="ok-ssh")
         valid["transport"] = {"kind": "ssh", "ssh_alias": "deploy@login-1.example"}
         self.assertEqual(validate_site_profile(valid)["site_id"], "ok-ssh")

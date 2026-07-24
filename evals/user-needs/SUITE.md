@@ -1,8 +1,8 @@
 # user-needs 评测套件
 
-"生产用户需求级"评测：检验装了 entity 技能（entity-router 0.5.0 + env-build + pgen + nt2py）的 agent 能否在真实集群（siyuan，SSH Slurm）上完成真实用户需求。
+"生产用户需求级"评测：检验装了 entity 技能（entity-ledger 0.5.0 + env-build + pgen + nt2py）的 agent 能否在真实集群（siyuan，SSH Slurm）上完成真实用户需求。
 
-**变体设计**：评测的自变量只有 entity-router。S 组 `skills-v5` 装完整 bundle；N 组 `skills-no-router` 保留 env-build/pgen/nt2py 三个 owner 技能、仅移除 entity-router。不测"完全无技能"——三个 owner 技能是生产基线的一部分。run_round.sh 开跑前会校验技能投影状态与变体一致，不一致拒绝启动。
+**变体设计**：评测的自变量只有 entity-ledger。S 组 `skills-v5` 装完整 bundle；N 组 `skills-no-router` 保留 env-build/pgen/nt2py 三个 owner 技能、仅移除 entity-ledger。不测"完全无技能"——三个 owner 技能是生产基线的一部分。run_round.sh 开跑前会校验技能投影状态与变体一致，不一致拒绝启动。
 
 ## 设计原则
 

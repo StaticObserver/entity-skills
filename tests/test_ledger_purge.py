@@ -10,12 +10,12 @@ import unittest
 
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-PURGE = os.path.join(ROOT, "skills", "entity-router", "scripts", "entity_router_purge.py")
+PURGE = os.path.join(ROOT, "skills", "entity-ledger", "scripts", "entity_ledger_purge.py")
 
 
-class RouterPurgeTest(unittest.TestCase):
+class LedgerPurgeTest(unittest.TestCase):
     def setUp(self):
-        self.temp = tempfile.mkdtemp(prefix="entity-router-purge-")
+        self.temp = tempfile.mkdtemp(prefix="entity-ledger-purge-")
         self.target = os.path.join(self.temp, "run", "test.log")
         self.receipt_root = os.path.join(self.temp, "staging", "receipts")
         self.receipt = os.path.join(self.receipt_root, "receipt.json")
@@ -32,8 +32,8 @@ class RouterPurgeTest(unittest.TestCase):
     def request(self, include_fingerprint=True):
         request = {
             "action_type": "data.purge",
-            "owner": "router",
-            "execution_domain": "router",
+            "owner": "ledger",
+            "execution_domain": "ledger",
             "execution_site_id": "test-site",
             "authorization": "explicit unit-test authorization",
             "case_uid": "case",

@@ -2,8 +2,8 @@
 """Fail-closed registry/Locator preflight for Entity PGen work.
 
 Read-only and truly standalone PGen work may run directly.  A write to a
-source tree registered by the Router v5 store is currently refused: managed
-writes are booked through the Router record primitives, not by this skill.
+source tree registered by the Ledger v5 store is currently refused: managed
+writes are booked through the Ledger record primitives, not by this skill.
 No source/control ancestor relationship is assumed.
 
 Subcommands:
@@ -12,7 +12,7 @@ Subcommands:
   (JSON on stdout) with a stable digest over the extracted fields.
 - ``confirm <input.toml> --by <actor> [--confirm-defaults]``: write an
   atomic confirmation record to ``<input.toml>.decisions.json`` recording
-  who confirmed which exact input file.  The Router record run-prepare gate
+  who confirmed which exact input file.  The Ledger record run-prepare gate
   reads this record and matches ``input_sha256`` before booking the run.
 """
 
@@ -28,20 +28,20 @@ import sys
 import tempfile
 
 
-ROUTER_SCRIPTS = os.path.realpath(os.path.join(
-    os.path.dirname(__file__), "..", "..", "entity-router", "scripts"
+LEDGER_SCRIPTS = os.path.realpath(os.path.join(
+    os.path.dirname(__file__), "..", "..", "entity-ledger", "scripts"
 ))
-if ROUTER_SCRIPTS not in sys.path:
-    sys.path.insert(0, ROUTER_SCRIPTS)
+if LEDGER_SCRIPTS not in sys.path:
+    sys.path.insert(0, LEDGER_SCRIPTS)
 
-from entity_router_common import (  # noqa: E402
-    RouterError,
+from entity_ledger_common import (  # noqa: E402
+    LedgerError,
     absolute,
     locator_within,
     parse_locator,
-    router_home,
+    ledger_home,
 )
-from entity_router_store import OperationStore, StoreError  # noqa: E402
+from entity_ledger_store import OperationStore, StoreError  # noqa: E402
 
 
 # --- Simulation parameter card / confirmation record -----------------------
@@ -436,7 +436,7 @@ def find_cases(home, target):
 
 
 def evaluate(args):
-    home = router_home(args.router_home)
+    home = ledger_home(args.ledger_home)
     target = target_locator(args.target, args.site_id, home)
     matches, store_present = find_cases(home, target)
     if len(matches) > 1:
@@ -451,12 +451,15 @@ def evaluate(args):
                       target, case, "read-only operation",
                       store_present=store_present)
     if not case:
-        reason = "locator is not registered by Router"
+        reason = "locator is not registered by Ledger"
         if not store_present:
-            reason = ("Router store is missing or unreadable; registration "
+            reason = ("Ledger store is missing or unreadable; registration "
                       "could not be checked, treating target as standalone")
         return result(True, "standalone-write", target,
                       reason=reason, store_present=store_present)
+    # "router-required" is a stable contract string shared with the
+    # observability evidence validator (validate_pgen_preflight); it
+    # intentionally keeps the pre-rename router name.
     return result(False, "router-required", target, case,
                   "managed source writes require a v5 pgen Goal, which is not yet implemented",
                   store_present=store_present)
@@ -466,7 +469,11 @@ def build_parser():
     parser = argparse.ArgumentParser(
         description="Validate whether entity-pgen may read or write a Locator"
     )
-    parser.add_argument("--router-home", default=router_home())
+    # Lazy default: resolving the Ledger home can trigger the one-time
+    # ~/.entity-router -> ~/.entity-ledger migration, which must not run as a
+    # side effect of merely building the parser.
+    parser.add_argument("--ledger-home", "--router-home", dest="ledger_home",
+                        default=None)
     parser.add_argument("--operation", choices=["read", "write"], required=True)
     parser.add_argument("--target", required=True,
                         help="SITE_ID:/absolute/path; plain path uses --site-id")
@@ -495,7 +502,7 @@ def main(argv=None):
     args = build_parser().parse_args(argv)
     try:
         payload = evaluate(args)
-    except (RouterError, OSError, ValueError, KeyError,
+    except (LedgerError, OSError, ValueError, KeyError,
             sqlite3.DatabaseError) as exc:
         payload = result(False, "router-required", _safe_target(args),
                          reason="%s [target: %s]" % (exc, args.target))

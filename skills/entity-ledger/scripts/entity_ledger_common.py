@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Shared primitives for the Entity Router runtime.
+"""Shared primitives for the Entity Ledger runtime.
 
 The module is standard-library only and remains compatible with Python 3.6 so
 the same probe helpers can run on older HPC login nodes.
@@ -30,7 +30,7 @@ ACTOR_ENVIRONMENT = {
 }
 
 
-class RouterError(Exception):
+class LedgerError(Exception):
     pass
 
 
@@ -43,8 +43,32 @@ def absolute(path):
     return os.path.realpath(os.path.abspath(os.path.expanduser(path)))
 
 
-def router_home(value=None):
-    return absolute(value or os.environ.get("ENTITY_ROUTER_HOME", "~/.entity-router"))
+def ledger_home(value=None):
+    if value:
+        return absolute(value)
+    explicit = os.environ.get("ENTITY_LEDGER_HOME")
+    if explicit:
+        return absolute(explicit)
+    # Backward compatibility with the pre-rename Router storage: honour the
+    # legacy ENTITY_ROUTER_HOME variable when ENTITY_LEDGER_HOME is unset.
+    legacy_env = os.environ.get("ENTITY_ROUTER_HOME")
+    if legacy_env:
+        return absolute(legacy_env)
+    home = absolute("~/.entity-ledger")
+    legacy = absolute("~/.entity-router")
+    # One-time storage migration: adopt a pre-rename ~/.entity-router home.
+    # A concurrent process may have completed the rename already (the legacy
+    # path vanishes mid-call), so only a failure that leaves the new home
+    # missing is an error.
+    if not os.path.exists(home) and os.path.isdir(legacy):
+        try:
+            os.rename(legacy, home)
+        except OSError:
+            if not os.path.isdir(home):
+                raise LedgerError(
+                    "cannot migrate the legacy Ledger home %s to %s; move it "
+                    "manually or set ENTITY_LEDGER_HOME" % (legacy, home))
+    return home
 
 
 def actor_identity(values=None):
@@ -69,9 +93,9 @@ def actor_identity(values=None):
 
 
 def require_attributed_actor(actor):
-    if os.environ.get("ENTITY_ROUTER_REQUIRE_ACTOR", "") == "1":
+    if os.environ.get("ENTITY_LEDGER_REQUIRE_ACTOR", "") == "1":
         if not actor or actor.get("run_id") == "unattributed":
-            raise RouterError(
+            raise LedgerError(
                 "mutation requires ENTITY_AGENT_RUN_ID or --actor-run-id"
             )
     return actor
@@ -103,9 +127,9 @@ def load_json(path, label="JSON file"):
         with open(path, "r") as handle:
             value = json.load(handle)
     except (IOError, OSError, ValueError) as exc:
-        raise RouterError("cannot read %s %s: %s" % (label, path, exc))
+        raise LedgerError("cannot read %s %s: %s" % (label, path, exc))
     if not isinstance(value, dict):
-        raise RouterError("%s must contain a JSON object: %s" % (label, path))
+        raise LedgerError("%s must contain a JSON object: %s" % (label, path))
     return value
 
 
@@ -124,12 +148,12 @@ def parse_locator(value):
     else:
         text = str(value or "")
         if ":" not in text:
-            raise RouterError("locator must use SITE_ID:/absolute/path: %s" % text)
+            raise LedgerError("locator must use SITE_ID:/absolute/path: %s" % text)
         site_id, path = text.split(":", 1)
         site_id = site_id.strip()
         path = path.strip()
     if not site_id or not path or not path.startswith("/"):
-        raise RouterError("locator must use SITE_ID:/absolute/path")
+        raise LedgerError("locator must use SITE_ID:/absolute/path")
     return {"site_id": site_id, "path": os.path.normpath(path)}
 
 
@@ -146,33 +170,33 @@ def locator_within(locator, root):
 
 def validate_site_profile(profile):
     if profile.get("schema_version") != SITE_SCHEMA_VERSION:
-        raise RouterError("unsupported site profile schema")
+        raise LedgerError("unsupported site profile schema")
     site_id = str(profile.get("site_id", ""))
     if not site_id or any(char not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_" for char in site_id):
-        raise RouterError("invalid site_id: %s" % site_id)
+        raise LedgerError("invalid site_id: %s" % site_id)
     transport = profile.get("transport", {})
     kind = transport.get("kind")
     if kind not in {"local", "ssh"}:
-        raise RouterError("site transport.kind must be local or ssh")
+        raise LedgerError("site transport.kind must be local or ssh")
     if kind == "ssh":
         alias = str(transport.get("ssh_alias", ""))
         # The alias is passed as an ssh/scp argv element; forbid leading dashes
         # and option syntax so it can never smuggle ssh options like
         # -oProxyCommand=... into the command line.
         if not alias or not re.match(r"^[A-Za-z0-9_.@][A-Za-z0-9_.@-]*$", alias):
-            raise RouterError("invalid transport.ssh_alias: %s" % alias)
+            raise LedgerError("invalid transport.ssh_alias: %s" % alias)
     scheduler = profile.get("scheduler", {})
     if scheduler.get("kind", "none") not in {"none", "slurm", "pbs", "custom"}:
-        raise RouterError("unsupported scheduler kind")
+        raise LedgerError("unsupported scheduler kind")
     for name, path in profile.get("roots", {}).items():
         if path and not str(path).startswith("/"):
-            raise RouterError("site root %s must be absolute" % name)
+            raise LedgerError("site root %s must be absolute" % name)
     for mapping in profile.get("shared_mappings", []):
         if not mapping.get("peer_site_id"):
-            raise RouterError("shared mapping requires peer_site_id")
+            raise LedgerError("shared mapping requires peer_site_id")
         for name in ["this_root", "peer_root"]:
             if not str(mapping.get(name, "")).startswith("/"):
-                raise RouterError("shared mapping %s must be absolute" % name)
+                raise LedgerError("shared mapping %s must be absolute" % name)
     return profile
 
 
@@ -237,7 +261,7 @@ def _git_files(source):
 def source_manifest(source):
     source = absolute(source)
     if not os.path.isdir(source):
-        raise RouterError("snapshot source is not a directory: %s" % source)
+        raise LedgerError("snapshot source is not a directory: %s" % source)
     entries = []
     for relative in _git_files(source):
         path = os.path.join(source, relative)

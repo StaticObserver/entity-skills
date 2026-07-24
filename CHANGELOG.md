@@ -10,6 +10,20 @@ compatibility contracts and are not the product version.
 
 ## [Unreleased]
 
+Skill rename: `entity-router` is now `entity-ledger` — the plan/apply
+control plane is gone and the skill is a deterministic ledger of project
+assets and facts, so the Router name no longer fit. The rename covers the
+skill directory, all `entity_router_*.py` modules, the JSON contract kinds
+(`entity-ledger.*`, receipt comment prefix `entity-ledger:`), and storage:
+the home is now `~/.entity-ledger` with `ledger.db` (`ENTITY_LEDGER_HOME`).
+Pre-rename storage is adopted automatically: `ENTITY_ROUTER_HOME` is still
+honoured when `ENTITY_LEDGER_HOME` is unset, a legacy `~/.entity-router`
+directory is renamed on first access, and a legacy `router.db` is renamed
+to `ledger.db` when the store opens. The per-activity playbooks are
+removed; their unique semantics (exactly-once launch receipts, external
+job adoption, in-flight runs not occupying project state) live in
+`SKILL.md`.
+
 Case-centric restructure: the plan/apply control plane is replaced by
 deterministic primitives. Agents plan the simulation flow; the CLI reads and
 writes deterministic records, renders deterministic scripts, and probes
@@ -28,15 +42,13 @@ evidence — big flows are no longer wrapped in code.
   jobs (`--adopt-job` / `--adopt-pid`).
 - `record intent`: the research intent is the only stored pointer, shown on
   the dashboard.
-- Six per-activity playbooks (`skills/entity-router/playbooks/`):
-  setup-env, develop-pgen, build, run-simulation, analyze-data, debug.
 - `store migrate` v1→v2: archives legacy operations to
-  `<router_home>/archive/`, then installs the slimmed store.
+  `<ledger_home>/archive/`, then installs the slimmed store.
 
 ### Changed
 
-- `entity-router/SKILL.md` rewritten around the research workflow;
-  control-plane internals moved to `references/router-runtime.md`.
+- `entity-ledger/SKILL.md` rewritten around the research workflow;
+  control-plane internals moved to `references/ledger-runtime.md`.
 - Store schema v2: drops the operations/steps tables and the whole
   Operation API; concurrency degrades to the `BEGIN IMMEDIATE` file lock,
   events remain as passive audit.

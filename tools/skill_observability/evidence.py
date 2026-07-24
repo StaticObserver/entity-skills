@@ -135,6 +135,8 @@ def validate_router_action(
            "write_roots is a locator array")
 
     artifacts: List[ArtifactSpec] = [
+        # Historical authority labels: validate_router_action checks Router-era
+        # documents, so the attribution keeps the pre-rename name.
         (request_path, "action-request", "entity-router-action-request", "controller")
     ]
     anchored = False
@@ -204,7 +206,7 @@ def validate_router_action(
     status = _status(checks, anchored=anchored)
     return _record(
         run_dir,
-        validator="entity-router-action-v2",
+        validator="entity-ledger-action-v2",
         status=status,
         checks=checks,
         summary={

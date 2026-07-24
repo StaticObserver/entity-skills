@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 
+import datetime
 import hashlib
 import json
 import os
@@ -14,18 +15,18 @@ from unittest import mock
 
 
 ROOT = os.path.realpath(os.path.join(os.path.dirname(__file__), ".."))
-SCRIPTS = os.path.join(ROOT, "skills", "entity-router", "scripts")
+SCRIPTS = os.path.join(ROOT, "skills", "entity-ledger", "scripts")
 ENTITYCTL = os.path.join(SCRIPTS, "entityctl.py")
 if SCRIPTS not in sys.path:
     sys.path.insert(0, SCRIPTS)
 
-from entity_router_dashboard import build_dashboard
-from entity_router_store import OperationStore
+from entity_ledger_dashboard import build_dashboard
+from entity_ledger_store import OperationStore
 
 
 class RecordRunTest(unittest.TestCase):
     def setUp(self):
-        self.temp = tempfile.mkdtemp(prefix="entity-router-record-run-")
+        self.temp = tempfile.mkdtemp(prefix="entity-ledger-record-run-")
         self.home = os.path.join(self.temp, "controller")
         self.project = os.path.join(self.temp, "project")
         self.run_root = os.path.join(self.temp, "runs")
@@ -89,7 +90,7 @@ class RecordRunTest(unittest.TestCase):
 
     def cli(self, *args):
         process = subprocess.Popen(
-            [sys.executable, ENTITYCTL, "--router-home", self.home,
+            [sys.executable, ENTITYCTL, "--ledger-home", self.home,
              "--actor-run-id", "record-run-test"] + list(args),
             stdout=subprocess.PIPE, stderr=subprocess.PIPE,
             universal_newlines=True,
@@ -237,7 +238,7 @@ else:
                 "--executable", self.executable]
         code, first = self.cli(*argv)
         self.assertEqual(code, 0, first)
-        self.assertEqual(first["kind"], "entity-router.render-run")
+        self.assertEqual(first["kind"], "entity-ledger.render-run")
         self.assertFalse(first["state_mutated"])
         code, second = self.cli(*argv)
         self.assertEqual(code, 0, second)
@@ -319,7 +320,7 @@ else:
 
     def test_run_prepare_books_case_and_run_idempotently(self):
         payload = self._prepare("local-slurm", self.executable)
-        self.assertEqual(payload["kind"], "entity-router.record.run-prepare")
+        self.assertEqual(payload["kind"], "entity-ledger.record.run-prepare")
         self.assertTrue(payload["state_mutated"])
         self.assertTrue(payload["created_case"])
         self.assertTrue(payload["run_id"].startswith("run-"))
@@ -346,7 +347,7 @@ else:
         self._prepare("local-slurm", self.executable)
         code, payload = self._launch()
         self.assertEqual(code, 0, payload)
-        self.assertEqual(payload["kind"], "entity-router.record.run-launch")
+        self.assertEqual(payload["kind"], "entity-ledger.record.run-launch")
         self.assertEqual(payload["status"], "submitted")
         self.assertFalse(payload["adopted"])
         self.assertEqual(payload["scheduler"]["job_id"], "42")
@@ -568,6 +569,125 @@ else:
         self.assertEqual(identity["status"], "failed")
         self.assertEqual(identity["exit_code"], 1)
         self.assertEqual(identity["scheduler"]["state"], "FAILED")
+
+    def test_run_launch_after_adopt_does_not_resubmit(self):
+        prepared = self._prepare("local-slurm", self.executable)
+        with open(self.record, "w") as handle:
+            json.dump({"job_id": "42", "job_name": "entity-manual",
+                       "user": "tester", "submitted_at": "2026-07-23T00:00:00",
+                       "state": "RUNNING", "run_root": prepared["run_root"],
+                       "comment": "manual"}, handle)
+        code, payload = self._launch(["--adopt-job", "42"])
+        self.assertEqual(code, 0, payload)
+        self.assertTrue(payload["adopted"])
+        # an adopted run leaves no executor receipt; a plain re-launch must
+        # claim the recorded scheduler identity, not submit a second job
+        code, again = self._launch()
+        self.assertEqual(code, 0, again)
+        self.assertFalse(again["state_mutated"])
+        self.assertTrue(again["adopted"])
+        self.assertEqual(again["scheduler"]["job_id"], "42")
+        self.assertEqual(self.submit_count(), 0)
+
+    def test_launch_recovery_claims_pre_rename_comment(self):
+        prepared = self._prepare("local-slurm", self.executable)
+        identity = self._run_identity()
+        operation_id = identity["operation_id"]
+        plan_hash = identity["plan_hash"]
+        receipt = os.path.join(
+            identity["staging_root"], "receipts", "run-launch.json")
+        now = datetime.datetime.utcnow().replace(microsecond=0)
+        with open(receipt, "w") as handle:
+            json.dump({
+                "schema_version": 1, "operation_id": operation_id,
+                "plan_hash": plan_hash, "step_index": 2, "step_id": "launch",
+                "kind": "run.launch.v2", "state": "intent_written",
+                "attempt": 1, "intent_written_at": now.isoformat() + "Z",
+                "effect_identity": {}, "outputs": [],
+                "stdout": {}, "stderr": {},
+                "updated_at": now.isoformat() + "Z"}, handle)
+        # the in-flight job was submitted before the router -> ledger rename
+        # and carries the old comment prefix; recovery must claim it
+        legacy_comment = "entity-router:%s:%s" % (
+            operation_id, plan_hash.split(":", 1)[-1][:16])
+        with open(self.record, "w") as handle:
+            json.dump({"job_id": "42", "job_name": "entity-" + operation_id,
+                       "user": "tester",
+                       "submitted_at": datetime.datetime.now().replace(
+                           microsecond=0).isoformat(),
+                       "state": "RUNNING", "run_root": prepared["run_root"],
+                       "comment": legacy_comment}, handle)
+        code, claimed = self._launch()
+        self.assertEqual(code, 0, claimed)
+        self.assertEqual(claimed["scheduler"]["job_id"], "42")
+        self.assertEqual(self.submit_count(), 0)
+        scheduler = self._run_identity()["scheduler"]
+        self.assertEqual(scheduler["comment"], legacy_comment)
+
+    def test_run_prepare_refuses_an_advanced_run(self):
+        self._prepare("local-slurm", self.executable)
+        code, payload = self._launch()
+        self.assertEqual(code, 0, payload)
+        argv = ["record", "run-prepare", "--project-root", self.project,
+                "--toml", "input.toml", "--site", "local-slurm",
+                "--executable", self.executable]
+        code, refused = self.cli(*argv)
+        self.assertEqual(code, 2, refused)
+        self.assertFalse(refused["ok"])
+        self.assertEqual(refused["status"], "needs_decision")
+        self.assertFalse(refused["state_mutated"])
+        self.assertEqual(self._run_identity()["status"], "submitted")
+        self._sacct_terminal("COMPLETED", "0:0")
+        code, probed = self.cli("record", "run-exit",
+                                "--project-root", self.project)
+        self.assertEqual(probed["state"], "completed")
+        code, refused = self.cli(*argv)
+        self.assertEqual(code, 2, refused)
+        self.assertFalse(refused["ok"])
+        self.assertIn("derive a new run", refused["error"])
+        identity = self._run_identity()
+        self.assertEqual(identity["status"], "completed")
+
+    def test_run_prepare_executor_failure_leaves_store_untouched(self):
+        import entity_ledger_record
+        from entity_ledger_operation import OperationError
+        with mock.patch.object(entity_ledger_record, "ExecutorClient") as client:
+            client.return_value.invoke.side_effect = OperationError("boom")
+            with self.assertRaises(OperationError):
+                entity_ledger_record.record_run_prepare(
+                    self.store, self.project, "input.toml", "local-slurm",
+                    1, "01:00:00", "double", self.executable, {"run_id": "t"})
+        exported = self.store.export()
+        self.assertEqual(exported["cases"], [])
+        self.assertEqual(exported["projects"], [])
+        self.assertEqual(exported["events"], [])
+
+    def test_run_exit_direct_unknown_on_partial_exit_file(self):
+        prepared = self._prepare(
+            "local-direct", self._direct_executable("sleep 30"))
+        code, payload = self._launch()
+        self.assertEqual(code, 0, payload)
+        self._track_process_group()
+        scheduler = self._run_identity()["scheduler"]
+        os.killpg(scheduler["pgid"], signal.SIGKILL)
+        deadline = time.time() + 10
+        while time.time() < deadline:
+            try:
+                os.kill(scheduler["pid"], 0)
+            except OSError:
+                break
+            time.sleep(0.1)
+        # a half-written exit file plus a dead process is not enough
+        # evidence for a terminal state
+        exit_file = os.path.join(prepared["run_root"], ".entity-exit-code")
+        with open(exit_file, "w") as handle:
+            handle.write("par")
+        code, probed = self.cli("record", "run-exit",
+                                "--project-root", self.project)
+        self.assertEqual(code, 0, probed)
+        self.assertEqual(probed["state"], "unknown")
+        self.assertFalse(probed["state_mutated"])
+        self.assertEqual(self._run_identity()["status"], "submitted")
 
     def test_dashboard_follows_run_lifecycle(self):
         prepared = self._prepare(

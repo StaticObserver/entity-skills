@@ -15,11 +15,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "lib"))
 import verify_common as vc  # noqa: E402
 
 BOUNDARY_NO_DATA_GOAL = (
-    "data inventory 是 entity-router data Goal 的产物；无 router 变体没有该能力，"
+    "data inventory 是 entity-ledger data Goal 的产物；无 router 变体没有该能力，"
     "记 unknown 而非 fail（技能边界，非 agent 失误）"
 )
 BOUNDARY_NO_ROUTER = (
-    "router source/build/run 链路是 entity-router 能力；无 router 变体没有该能力，"
+    "router source/build/run 链路是 entity-ledger 能力；无 router 变体没有该能力，"
     "记 unknown 而非 fail（技能边界）"
 )
 

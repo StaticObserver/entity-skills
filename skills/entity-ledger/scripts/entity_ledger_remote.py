@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Python 3.6-compatible remote snapshot helper for Router staging.
+"""Python 3.6-compatible remote snapshot helper for Ledger staging.
 
 This file is copied to an SSH site's staging root. It has no package imports,
 stores no credential, and never writes controller state.
@@ -86,6 +86,20 @@ def verify(root):
     return manifest
 
 
+def archive_manifest(archive):
+    """Read the manifest recorded inside a snapshot archive; raises
+    ValueError when the archive is truncated or carries no manifest, so the
+    caller can regenerate instead of trusting a half-written tar."""
+    try:
+        with tarfile.open(archive, "r") as bundle:
+            member = bundle.extractfile("snapshot-manifest.json")
+            if member is None:
+                raise ValueError("snapshot manifest missing")
+            return json.loads(member.read().decode("utf-8"))
+    except (tarfile.TarError, IOError, OSError) as exc:
+        raise ValueError("snapshot archive is unreadable: %s" % exc)
+
+
 def snapshot_archive(args):
     source = os.path.realpath(os.path.abspath(os.path.expanduser(args.source)))
     manifest = make_manifest(source)
@@ -97,16 +111,28 @@ def snapshot_archive(args):
         with os.fdopen(handle, "w") as output:
             json.dump(manifest, output, indent=2, sort_keys=True)
             output.write("\n")
-        with tarfile.open(args.archive, "w") as bundle:
-            for entry in manifest["files"]:
-                bundle.add(os.path.join(source, entry["path"]), arcname=entry["path"], recursive=False)
-            bundle.add(manifest_path, arcname="snapshot-manifest.json", recursive=False)
+        # Write to a temporary sibling and rename, so a concurrent reader
+        # never observes a half-written archive.
+        temporary = os.path.abspath(args.archive) + ".tmp-" + str(os.getpid())
+        try:
+            with tarfile.open(temporary, "w") as bundle:
+                for entry in manifest["files"]:
+                    bundle.add(os.path.join(source, entry["path"]), arcname=entry["path"], recursive=False)
+                bundle.add(manifest_path, arcname="snapshot-manifest.json", recursive=False)
+            os.replace(temporary, os.path.abspath(args.archive))
+        except Exception:
+            try:
+                os.unlink(temporary)
+            except OSError:
+                pass
+            raise
     finally:
         try:
             os.unlink(manifest_path)
         except OSError:
             pass
     print(json.dumps(manifest, sort_keys=True))
+    return manifest
 
 
 def safe_extract(archive, destination):
@@ -119,11 +145,7 @@ def safe_extract(archive, destination):
 
 
 def snapshot_install(args):
-    with tarfile.open(args.archive, "r") as bundle:
-        member = bundle.extractfile("snapshot-manifest.json")
-        if member is None:
-            raise ValueError("snapshot manifest missing")
-        manifest = json.loads(member.read().decode("utf-8"))
+    manifest = archive_manifest(args.archive)
     snapshot_id = manifest["snapshot_id"]
     root = os.path.abspath(args.target_root)
     destination = os.path.join(root, snapshot_id)

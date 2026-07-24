@@ -1,17 +1,17 @@
 # 实跑流程（Live Run Playbook）— user-needs 套件 + e2e 基础设施
 
-版本：2026-07-22。被测对象：entity skills bundle 0.5.0（`skills/entity-router/VERSION`）。
+版本：2026-07-22。被测对象：entity skills bundle 0.5.0（`skills/entity-ledger/VERSION`）。
 本文档规定六个生产需求场景（U1–U6）的实跑顺序、操作者动作、收尾与验收口径。
 场景定义见 `SUITE.md`；单轮基础设施见 `../e2e-neutral-streaming/RUNBOOK.md`。
 
-**变体**：自变量只有 entity-router。S 组 `skills-v5` = 完整 bundle；
-N 组 `skills-no-router` = env-build/pgen/nt2py 保留、仅移除 entity-router。
+**变体**：自变量只有 entity-ledger。S 组 `skills-v5` = 完整 bundle；
+N 组 `skills-no-router` = env-build/pgen/nt2py 保留、仅移除 entity-ledger。
 run_round.sh 开跑前强制校验投影状态，N 组开跑前由维护者临时移走
-`~/.claude/skills/entity-router`，跑完恢复。
+`~/.claude/skills/entity-ledger`，跑完恢复。
 
 ## 0. 开跑前总检查（只做一次）
 
-1. **bundle 版本锚定**：`python3 skills/entity-router/scripts/entityctl.py doctor`
+1. **bundle 版本锚定**：`python3 skills/entity-ledger/scripts/entityctl.py doctor`
    输出 `runtime_bundle.version == "0.5.0"`。不一致则先 `entityctl install`
    再重跑 doctor。S 组每轮启动时 run_round.sh 会自动把 bundle 事实写进
    `$HARNESS/bundle.json`。

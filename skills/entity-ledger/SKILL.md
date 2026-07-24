@@ -1,13 +1,13 @@
 ---
-name: entity-router
+name: entity-ledger
 description: 为 Entity 等离子体模拟项目维护一份确定性记录：环境、源码版本、构建、run 台账和数据状态都有据可查，任何一轮会话（换机器、换 agent、中途崩溃）都能接着上次继续。用于跨会话或跨机器的模拟工作、run 提交与跟踪、结果盘点。有界的只读问题和独立的 PGen/构建/分析编辑可以直接进入对应的 owner skill。
 ---
 
-# Entity Router
+# Entity Ledger
 
 这个技能帮你用 Entity 做等离子体模拟研究时**不丢状态**：编译环境怎么
 配的、代码用哪个版本、跑过哪些 run、参数是什么、结果在哪——这些确定
-性的事实都记录在案。你自由探索（改 PGen、换参数、分析数据），Router
+性的事实都记录在案。你自由探索（改 PGen、换参数、分析数据），Ledger
 负责把既成事实登记进 Case 台账，让任何一轮会话都能知道项目在哪、
 下一步是什么。
 
@@ -71,9 +71,11 @@ python3 scripts/entityctl.py record intent --project-root <project> --text "<当
 - `record run-prepare` 要求参数已确认（pgen skill 的
   `pgen_preflight.py confirm <input> --by <actor>` 写入
   `<input>.decisions.json`）；TOML 改动后需重新确认。
-- `record run-launch` 有 receipt 保护，重复执行不会重复提交；
-  绕过 Router 自己提交的作业用 `--adopt-job` / `--adopt-pid` 认领进
-  台账。
+- `record run-launch` 的 receipt 保证 exactly-once：重复执行不会
+  重复提交，进程中断后重跑会认领已提交的作业；绕过 Ledger 自己提交
+  的作业用 `--adopt-job` / `--adopt-pid` 认领进台账。
+- run 上了调度器后就是在途事实，不占用项目状态；等待期间你可以去
+  分析上一个 run 或开发下一个 PGen，`status --live` 随时探测进度。
 - `record build` 要求 env-build checkpoint 为 `compatibility: pass`
   且参数已确认；登记后 run 原语可省略 `--executable`。
 - `record intent` 记录当前研究目标（仪表盘"目标"行）。意图是唯一
@@ -83,20 +85,8 @@ python3 scripts/entityctl.py record intent --project-root <project> --text "<当
   `store migrate`、`submission create/verify`、`export`。写 site 策略
   前先用 `site discover` 探测；崩溃后用 `doctor` 检查安装与存储。
 
-## Playbooks
-
-每种活动一份 playbook，讲产物、原语用法和记账方式。**它们是参考
-不是轨道**——顺序和组合由你按用户目标决定：
-
-- `playbooks/setup-env.md`：确立编译环境（转引 entity-env-build）
-- `playbooks/develop-pgen.md`：PGen/TOML/design 开发（转引 entity-pgen）
-- `playbooks/build.md`：编译并登记 build identity
-- `playbooks/run-simulation.md`：从参数确认到 run 终态落账
-- `playbooks/analyze-data.md`：数据盘点与分析（转引 entity-nt2py）
-- `playbooks/debug.md`：按失败证据定位环节并回到对应活动
-
 内部机制（receipt、executor、scheduler 后端、live 探测细节）只在
-调试时需要，见 `references/router-runtime.md`；多站点目录归属见
+调试时需要，见 `references/ledger-runtime.md`；多站点目录归属见
 `references/workspace-layout.md`。
 
 ## Owner skills
@@ -104,7 +94,7 @@ python3 scripts/entityctl.py record intent --project-root <project> --text "<当
 `entity-pgen` 负责 PGen/TOML/design，`entity-env-build` 负责依赖与
 构建，`entity-nt2py` 负责数据访问与分析。对它们使用**自由探索、
 严格收束**：给出语义目标、输入 identity、边界和验收标准，让它们
-自行选择内部方法；Router 只登记经过重新探测的既成事实，不做它们
+自行选择内部方法；Ledger 只登记经过重新探测的既成事实，不做它们
 的领域推理。
 
 ## 破坏性操作

@@ -25,7 +25,7 @@ BOUNDARY_NO_RESUBMIT = (
     "重提交需要 agent 自行发起新 Plan（技能边界，重复提交不计 fail）"
 )
 BOUNDARY_NO_STATUS_LIVE = (
-    "status --live 的 divergences 视图是 entity-router 能力；无 router 变体记 unknown（技能边界）"
+    "status --live 的 divergences 视图是 entity-ledger 能力；无 router 变体记 unknown（技能边界）"
 )
 
 
