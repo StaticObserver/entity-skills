@@ -65,8 +65,12 @@ class RouterContractTest(unittest.TestCase):
         with open(os.path.join(ROUTER_ROOT, "SKILL.md"), "r") as handle:
             skill = handle.read()
         self.assertIn("status", skill)
-        self.assertIn("控制器本地", skill)
-        self.assertIn("最多做三次有界的后端查询", skill)
+        self.assertIn("只读", skill)
+        with open(os.path.join(ROUTER_ROOT, "references",
+                               "router-runtime.md"), "r") as handle:
+            runtime = handle.read()
+        self.assertIn("控制器本地", runtime)
+        self.assertIn("最多做三次有界的后端查询", runtime)
 
 
 if __name__ == "__main__":

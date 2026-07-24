@@ -120,6 +120,18 @@ class DashboardTest(unittest.TestCase):
         self.assertEqual(dashboard["remote_calls"], 2)
         self.assertTrue(any("带外变更" in item for item in dashboard["pending"]))
 
+    def test_record_intent_shows_on_dashboard(self):
+        from entity_router_record import record_intent
+        from entity_router_facts import PlanError
+        result = record_intent(
+            self.store, self.project, "验证极冠重联的加热率", {"run_id": "t"})
+        self.assertTrue(result["state_mutated"])
+        dashboard = self._dashboard()
+        self.assertIn("验证极冠重联的加热率", dashboard["intent"])
+        self.assertIn("记录于", dashboard["intent"])
+        with self.assertRaises(PlanError):
+            record_intent(self.store, self.project, "  ", {})
+
     def test_render_is_compact_and_human_readable(self):
         self._write_toml()
         self.store.add_identity(

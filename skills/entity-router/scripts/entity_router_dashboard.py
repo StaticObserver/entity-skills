@@ -204,8 +204,12 @@ def build_dashboard(store, project_root, status=None):
             "status": item.get("status", "unknown"),
             "scheduler": _scheduler_brief(item),
         })
-    # 原语时代没有记录 intent 的入口；目标只来自带外事实，统一显示"未记录"
-    intent = "未记录"
+    # 意图是唯一存下来的指针（不可推导）：由 entityctl record intent 显式
+    # 写入 current["intent"]，未写入时显示"未记录"
+    intent_record = current.get("intent") or {}
+    intent = intent_record.get("text") or "未记录"
+    if intent_record.get("recorded_at") and intent_record.get("text"):
+        intent += "（记录于 %s）" % intent_record["recorded_at"]
     pending = list(alerts)
     if board["pgen"]["state"] in {"unconfirmed", "partial"}:
         pending.append("模拟参数未确认：%s" % board["pgen"]["detail"])

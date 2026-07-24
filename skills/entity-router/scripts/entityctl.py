@@ -33,6 +33,7 @@ from entity_router_operation import status_for_project
 from entity_router_record import (
     record_build,
     record_data,
+    record_intent,
     record_run_exit,
     record_run_launch,
     record_run_prepare,
@@ -613,6 +614,12 @@ def snapshot_source_command(args):
     return snapshot_source(store, args.project_root, actor)
 
 
+def record_intent_command(args):
+    actor = require_attributed_actor(actor_identity(args))
+    store = OperationStore(args.router_home, create=False)
+    return record_intent(store, args.project_root, args.text, actor)
+
+
 def project_status(args):
     store = OperationStore(args.router_home, create=False)
     result = status_for_project(store, args.project_root, args.live)
@@ -930,6 +937,11 @@ def build_parser():
     record_run_exit_parser.add_argument("--project-root", required=True)
     record_run_exit_parser.add_argument("--run-id", default="")
     record_run_exit_parser.set_defaults(func=record_run_exit_command)
+
+    record_intent_parser = record_sub.add_parser("intent")
+    record_intent_parser.add_argument("--project-root", required=True)
+    record_intent_parser.add_argument("--text", required=True)
+    record_intent_parser.set_defaults(func=record_intent_command)
 
     site = sub.add_parser("site")
     site_sub = site.add_subparsers(dest="site_command")

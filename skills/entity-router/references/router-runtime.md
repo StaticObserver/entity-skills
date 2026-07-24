@@ -6,9 +6,11 @@
 ## 控制器
 
 `$ENTITY_ROUTER_HOME/router.db`（默认 `~/.entity-router/router.db`）是
-唯一的结构化权威。它在 SQLite 中存储 Site、Case、项目绑定、
-identity、Operation、Step、紧凑证据和事件。大型
-产物和日志保留在其 owner Site。
+唯一的结构化权威。schema v2 在 SQLite 中存储 Site、Case、项目绑定、
+identity、紧凑证据和事件（events 为被动审计）。大型
+产物和日志保留在其 owner Site。并发控制是 `BEGIN IMMEDIATE`
+文件锁；旧 plan/apply 协议的 Operation/Step 记录已随 v1→v2 迁移
+归档到 `<router_home>/archive/`。
 
 在不改变控制器状态的情况下导出：
 
@@ -16,40 +18,32 @@ identity、Operation、Step、紧凑证据和事件。大型
 python3 scripts/entityctl.py export --output /absolute/router-export.json
 ```
 
-## Operation 日志
+## record 落账与 receipt
 
-> 注意：本节描述的 plan/apply 协议（GoalSpec、Operation Plan、Step
-> 推进与重新 Apply 恢复）已退役，仅用于解读旧 store 中导出的
-> Operation 记录。当前写入路径是 `entityctl record` 原语。
+每个 record 原语先在控制器本地推导 identity（内容寻址哈希），再经
+`ExecutorClient` 把结构化 envelope 交给执行 Site 上的执行器。写入类
+原语自带证据探测：执行器重新读取并验证 receipt/输出 fingerprint，
+全部通过后原语才在一个 SQLite 事务中落账 identity、current 投影和
+审计事件。任何一步失败都是零写入，修复原因后重跑同一条原语即可。
 
-每个 Operation 都有不可变的 Goal 和 Plan 哈希。内部 Step 依次推进：
-
-```text
-pending → intent_written → effect_observed → verified → committed
-```
-
-执行 Site 为每个 Step 持有一份 receipt。Apply 记录控制器
-intent，调用内容寻址执行器，让执行器重新读取并
-验证 receipt/输出 fingerprint，然后在一个 SQLite 事务中
-提交该 Step 以及 identity 和当前投影。
-
-进程丢失、网络中断或控制器瞬时错误都会留下可恢复的
-receipt/日志。用同一个 Plan 重新运行 Apply 即可。匹配同一次
-launch intent 的 scheduler 作业或进程出现多个时，属于终态
-`anomaly`，因为采纳其中任何一个都是不安全的。
+提交作业（`record run-launch`）是不可盲目重放的外部效果，执行器内部
+按 `intent_written → effect_observed → outputs_verified` 推进 receipt：
+重复执行命中已验证的 receipt 直接短路；进程在提交后、验证前中断时，
+按 launch comment 在 scheduler/进程表中找回唯一匹配的已提交效果并
+认领，绝不二次提交。多个匹配属于异常——采纳其中任何一个都不安全。
 
 ## 执行器 transport
 
-本地和 SSH 使用相同的 `entity_router_executor.py` 内容和 StepSpec。
+本地和 SSH 使用相同的 `entity_router_executor.py` 内容和请求 envelope。
 远端副本位于：
 
 ```text
 <staging_root>/.entity-router-executor/<sha256>/entity_router_executor.py
 ```
 
-Transport 只负责暂存精确的 payload/请求 JSON、调用白名单内的 Step、
+Transport 只负责暂存精确的 payload/请求 JSON、调用白名单内的动作、
 并返回结构化结果。run 提交接受经过校验的 `run_spec`；
-执行器渲染由 Plan 的 `scheduler` 字段选定的提交
+执行器渲染由 Site profile 的 `scheduler.kind` 选定的提交
 脚本——`slurm` 对应 sbatch 脚本，`direct` 对应自包含的 `run.sh`。
 调用方提供的 shell、命令、前置命令或脚本文本都会被拒绝。
 
@@ -86,3 +80,16 @@ scheduler 的 Site 使用 `none`）。策略可以提供 `default_cpus_per_gpu`�
 `default_qos`（它们归一化为空字符串），并将提交用户
 默认为当前用户。密钥和集群修复命令绝不应出现在
 profile 中。
+
+## live status 探测
+
+默认 status 是控制器本地的，且绝不写状态；只有 `--live` 才接触
+执行 Site，且最多做三次有界的后端查询。在 Slurm Site 上：作业状态、
+作业离开队列后的 `sacct` 兜底查询，以及对 Case run root 的未跟踪
+作业扫描。在无 scheduler 的 Site 上：退出文件、`kill -0` 存活探测，
+以及外来进程扫描——当 Site 拒绝该扫描时降级为 `unknown`（绝不视为
+失败）。`--live` 还会报告 `divergences`，对带外变更分类：
+`job_gone`（后端对已记录的作业或进程没有记录）、`state_mismatch`
+（作业到达了 router 从未观测到的终态），以及 `untracked_job`
+（一个外来的 scheduler 作业或进程正在 Case run root 中运行——
+这是绕过记录原语的证据）。

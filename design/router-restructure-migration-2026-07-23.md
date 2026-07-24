@@ -1,7 +1,7 @@
 # Entity Router 重构迁移计划：plan/apply → 确定性原语
 
 日期：2026-07-23
-状态：讨论稿
+状态：P1–P4 已完成（2f333ef、b7330e6 及后续提交）；P5 实测验证待做
 依据：`design/router-case-centric-restructure-2026-07-23.md`（目标架构）
 前置：P1（status 仪表盘化）已完成
 

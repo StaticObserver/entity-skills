@@ -116,6 +116,34 @@ def _probe_executable(profile, executable):
     return executable, _content_sha256(profile, executable)
 
 
+def record_intent(store, project_root, text, actor):
+    """Record the current research intent of a Case.  The intent is the only
+    stored pointer: it cannot be derived from artifacts, so it is written
+    explicitly and shown on the dashboard.  Recording a new intent replaces
+    the previous one (history stays in the audit events)."""
+    if not text or not text.strip():
+        raise PlanError("intent text must be non-empty")
+    case = _require_case(store, project_root)
+    current = dict(case["current"])
+    current["intent"] = {"text": text.strip(), "recorded_at": now_utc()}
+    with store.transaction() as connection:
+        connection.execute(
+            "UPDATE cases SET current_json=?,updated_at=? WHERE case_uid=?",
+            (canonical_json(current), now_utc(), case["case_uid"]),
+        )
+        store.record_event(
+            case["case_uid"], None, "record.intent",
+            {"text": text.strip()}, actor, connection)
+    return {
+        "schema_version": 1,
+        "kind": "entity-router.record.intent",
+        "ok": True,
+        "state_mutated": True,
+        "case_uid": case["case_uid"],
+        "intent": current["intent"],
+    }
+
+
 def record_build(store, project_root, site_id, checkpoint, executable, actor):
     """Register a verified build identity.  The build_id is content-addressed
     from (case, checkpoint, executable, site), so recording the same build
