@@ -123,6 +123,8 @@ def _run_cell(case, current, live):
         detail += "（%s）" % brief
     if payload.get("exit_code") is not None:
         detail += "；exit %s" % payload["exit_code"]
+    if payload.get("exit_anomaly"):
+        detail += "；退出阶段已知无害 abort"
     if live:
         live_state = live.get("state", "")
         if live_state == "EXITED":

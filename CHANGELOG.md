@@ -44,6 +44,15 @@ evidence — big flows are no longer wrapped in code.
   the dashboard.
 - `store migrate` v1→v2: archives legacy operations to
   `<ledger_home>/archive/`, then installs the slimmed store.
+- `record run-exit` recognizes Entity's known harmless teardown abort: when
+  the terminal exit code is non-zero but the run_root logs show both the
+  final step reached (`Step: N ... [of M]` with `N >= M - 1`, ANSI escapes
+  stripped) and a known glibc `malloc_consolidate()` abort signature, the
+  run is booked `completed` with an `exit_anomaly` note (the real exit code
+  is preserved). Missing or mismatched evidence keeps the run `failed`,
+  exactly as before. The new `--reclassify` flag re-judges a run already
+  booked `failed` from its log evidence alone (no scheduler probe), and the
+  dashboard run cell annotates the anomaly.
 
 ### Changed
 

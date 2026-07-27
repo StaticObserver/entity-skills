@@ -799,6 +799,98 @@ def record_run_launch(store, project_root, run_id, adopt_job, adopt_pid, actor):
     }
 
 
+_ANSI_ESCAPE = re.compile(r"\x1b\[[0-9;]*m")
+_STEP_PATTERN = re.compile(r"Step:\s*(\d+)")
+_OF_PATTERN = re.compile(r"\[of\s*(\d+)\]")
+
+# Known Entity teardown abort signatures: glibc heap-consolidation aborts
+# raised while the runtime tears down after the final step.  Both observed
+# variants ("invalid chunk size", "unaligned fastbin chunk detected") share
+# the malloc_consolidate() prefix.  New signatures are added here as they
+# are observed and confirmed harmless.
+_TEARDOWN_ABORT_SIGNATURES = ("malloc_consolidate()",)
+_ABORT_MARKERS = ("Aborted", "SIGABRT")
+
+_LOG_TAIL_BYTES = 262144
+
+
+def classify_teardown_abort(err_text, out_text):
+    """Classify whether a non-zero exit is a known harmless teardown abort.
+    Pure function, no I/O.  Both evidence groups must hold: the stderr tail
+    carries a known teardown signature plus an abort marker, and the last
+    ``Step: N ... [of M]`` pair in the stdout log (ANSI escapes stripped)
+    satisfies ``N >= M - 1`` (Entity prints the final step as M-1).  Returns
+    the anomaly record, or None when any evidence is missing."""
+    if not err_text or not out_text:
+        return None
+    signature = None
+    for candidate in _TEARDOWN_ABORT_SIGNATURES:
+        if candidate in err_text:
+            signature = candidate
+            break
+    if signature is None:
+        return None
+    if not any(marker in err_text for marker in _ABORT_MARKERS):
+        return None
+    last_step = None
+    total_steps = None
+    for line in _ANSI_ESCAPE.sub("", out_text).splitlines():
+        step_match = _STEP_PATTERN.search(line)
+        of_match = _OF_PATTERN.search(line)
+        if step_match is not None and of_match is not None:
+            last_step = int(step_match.group(1))
+            total_steps = int(of_match.group(1))
+    if last_step is None or total_steps is None:
+        return None
+    if last_step < total_steps - 1:
+        return None
+    return {
+        "kind": "exit-teardown-abort",
+        "signature": signature,
+        "last_step": last_step,
+        "total_steps": total_steps,
+    }
+
+
+def _tail_log(profile, path):
+    """Read the tail of a log file on its Site.  A missing file or any read
+    failure yields an empty string — log probing must never crash the record
+    path; missing evidence simply means no reclassification."""
+    try:
+        code, stdout, unused = run_on_site(
+            profile, ["tail", "-c", str(_LOG_TAIL_BYTES), path])
+    except OSError:
+        return ""
+    if code != 0:
+        return ""
+    return stdout
+
+
+def _probe_run_logs(profile, identity):
+    """Collect (stderr_text, stdout_text) tails from the run's log files.
+    simulation.err and the direct-backend run.log count as stderr evidence;
+    simulation.out, slurm-<job_id>.out and run.log count as stdout
+    evidence."""
+    scheduler = identity.get("scheduler", {})
+    run_root = identity.get("root", {}).get("path", "") \
+        or scheduler.get("run_root", "")
+    if not run_root:
+        return "", ""
+    err_names = ["simulation.err", "run.log"]
+    out_names = ["simulation.out"]
+    job_id = scheduler.get("job_id", "")
+    if job_id:
+        out_names.append("slurm-%s.out" % job_id)
+    out_names.append("run.log")
+    err_text = "\n".join(text for text in (
+        _tail_log(profile, os.path.join(run_root, name))
+        for name in err_names) if text)
+    out_text = "\n".join(text for text in (
+        _tail_log(profile, os.path.join(run_root, name))
+        for name in out_names) if text)
+    return err_text, out_text
+
+
 def _direct_exit_probe(profile, scheduler):
     """Terminal probe for a scheduler-less run: the exit file decides the
     terminal state, kill -0 on the recorded pid decides still-running, and a
@@ -877,10 +969,18 @@ def _slurm_exit_probe(profile, job_id):
     return "terminal", scheduler_state, exit_code
 
 
-def record_run_exit(store, project_root, run_id, actor):
+def record_run_exit(store, project_root, run_id, actor, reclassify=False):
     """Probe a submitted run's terminal state and book it.  A still-running
     run is reported without mutating state; an unreachable Site fails with
-    exit 2 and no write."""
+    exit 2 and no write.  When the terminal exit code is non-zero, the run's
+    log tails are checked for a known harmless teardown abort (see
+    classify_teardown_abort); with both evidence groups the run is booked
+    completed with an exit_anomaly note, the real exit code preserved.
+
+    With ``reclassify`` the scheduler probe is skipped and a run already
+    booked failed is re-judged from its logs alone: a match rewrites the
+    identity to completed with exit_anomaly, a miss reports state_mutated
+    false.  Any status other than failed is an error with zero writes."""
     case = _require_case(store, project_root)
     run_id = run_id or case.get("current", {}).get("run_id", "")
     if not run_id:
@@ -897,6 +997,52 @@ def record_run_exit(store, project_root, run_id, actor):
             [{"field": "run", "question": "select a known run id"}],
         )
     status = identity.get("status", "")
+    if reclassify:
+        if status != "failed":
+            raise PlanError(
+                "run %s is %s; --reclassify only applies to a failed run"
+                % (run_id, status or "unknown"))
+        site_id = identity.get("root", {}).get("site_id") \
+            or identity.get("site_id", "")
+        profile = store.get_site(site_id)
+        err_text, out_text = _probe_run_logs(profile, identity)
+        anomaly = classify_teardown_abort(err_text, out_text)
+        if anomaly is None:
+            return {
+                "schema_version": 1,
+                "kind": "entity-ledger.record.run-exit",
+                "ok": True,
+                "state_mutated": False,
+                "case_uid": case["case_uid"],
+                "run_id": run_id,
+                "state": "failed",
+                "exit_code": identity.get("exit_code"),
+                "detail": "log evidence does not match a known harmless "
+                          "teardown abort; the run stays failed",
+            }
+        identity = dict(identity)
+        identity["status"] = "completed"
+        identity["exit_anomaly"] = anomaly
+        identity["observed_at"] = now_utc()
+        _book_run(
+            store, case, identity, "completed", {},
+            "record.run-exit",
+            {"run_id": run_id, "site_id": site_id, "status": "completed",
+             "exit_code": identity.get("exit_code"),
+             "exit_anomaly": anomaly, "reclassified": True},
+            actor)
+        return {
+            "schema_version": 1,
+            "kind": "entity-ledger.record.run-exit",
+            "ok": True,
+            "state_mutated": True,
+            "case_uid": case["case_uid"],
+            "run_id": run_id,
+            "state": "completed",
+            "exit_code": identity.get("exit_code"),
+            "exit_anomaly": anomaly,
+            "reclassified": True,
+        }
     if status in {"completed", "failed"}:
         return {
             "schema_version": 1,
@@ -961,19 +1107,30 @@ def record_run_exit(store, project_root, run_id, actor):
                       "and the recorded process is gone",
         }
     final = "completed" if exit_code == 0 else "failed"
+    anomaly = None
+    if final == "failed":
+        err_text, out_text = _probe_run_logs(profile, identity)
+        anomaly = classify_teardown_abort(err_text, out_text)
+        if anomaly is not None:
+            final = "completed"
     identity = dict(identity)
     identity["status"] = final
     identity["exit_code"] = exit_code
     identity["observed_at"] = now_utc()
+    if anomaly is not None:
+        identity["exit_anomaly"] = anomaly
     if scheduler_state:
         scheduler = dict(scheduler)
         scheduler["state"] = scheduler_state
         identity["scheduler"] = scheduler
+    event_payload = {"run_id": run_id, "site_id": site_id, "status": final,
+                     "exit_code": exit_code}
+    if anomaly is not None:
+        event_payload["exit_anomaly"] = anomaly
     _book_run(
         store, case, identity, final, {},
         "record.run-exit",
-        {"run_id": run_id, "site_id": site_id, "status": final,
-         "exit_code": exit_code},
+        event_payload,
         actor)
     return {
         "schema_version": 1,
@@ -984,6 +1141,7 @@ def record_run_exit(store, project_root, run_id, actor):
         "run_id": run_id,
         "state": final,
         "exit_code": exit_code,
+        "exit_anomaly": anomaly,
     }
 
 

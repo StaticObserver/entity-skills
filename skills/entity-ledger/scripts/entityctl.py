@@ -594,7 +594,8 @@ def record_run_launch_command(args):
 def record_run_exit_command(args):
     actor = require_attributed_actor(actor_identity(args))
     store = OperationStore(args.ledger_home, create=False)
-    return record_run_exit(store, args.project_root, args.run_id, actor)
+    return record_run_exit(store, args.project_root, args.run_id, actor,
+                           reclassify=args.reclassify)
 
 
 def record_build_command(args):
@@ -945,6 +946,11 @@ def build_parser():
     record_run_exit_parser = record_sub.add_parser("run-exit")
     record_run_exit_parser.add_argument("--project-root", required=True)
     record_run_exit_parser.add_argument("--run-id", default="")
+    record_run_exit_parser.add_argument(
+        "--reclassify", action="store_true",
+        help="re-judge a run booked failed from its log evidence alone "
+             "(skip the scheduler probe); rewrites to completed only when "
+             "a known harmless teardown abort is confirmed")
     record_run_exit_parser.set_defaults(func=record_run_exit_command)
 
     record_intent_parser = record_sub.add_parser("intent")

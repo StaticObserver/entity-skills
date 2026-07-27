@@ -59,7 +59,7 @@ python3 scripts/entityctl.py \
   --actor-run-id <run-id> --actor-provider <provider> \
   record run-prepare --project-root <project> --toml <input.toml> --site <site> [...]
 python3 scripts/entityctl.py record run-launch --project-root <project> [--run-id <id>]
-python3 scripts/entityctl.py record run-exit  --project-root <project> [--run-id <id>]
+python3 scripts/entityctl.py record run-exit  --project-root <project> [--run-id <id>] [--reclassify]
 python3 scripts/entityctl.py record build --project-root <project> --site <site> \
   --checkpoint <deps-checkpoint.json> --executable <path>
 python3 scripts/entityctl.py record data --project-root <project> [--run-id <id>]
@@ -76,6 +76,13 @@ python3 scripts/entityctl.py record intent --project-root <project> --text "<当
   的作业用 `--adopt-job` / `--adopt-pid` 认领进台账。
 - run 上了调度器后就是在途事实，不占用项目状态；等待期间你可以去
   分析上一个 run 或开发下一个 PGen，`status --live` 随时探测进度。
+- `record run-exit` 终态非零退出时会用 run_root 日志证据识别已知的
+  退出阶段 teardown abort：stdout（去 ANSI）最后一步满足
+  `Step: N [of M]` 且 `N >= M - 1`，stderr 尾部命中已知 glibc
+  `malloc_consolidate()` abort 签名——两组证据齐备时记 completed 并附
+  `exit_anomaly`（真实 exit_code 保留），缺一维持 failed。已落账为
+  failed 的 run 事后拿到日志证据时用 `--reclassify` 重判（跳过调度器
+  探测，仅 failed 可用，其余状态报错零写入）。
 - `record build` 要求 env-build checkpoint 为 `compatibility: pass`
   且参数已确认；登记后 run 原语可省略 `--executable`。
 - `record intent` 记录当前研究目标（仪表盘"目标"行）。意图是唯一

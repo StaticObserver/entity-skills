@@ -570,6 +570,199 @@ else:
         self.assertEqual(identity["exit_code"], 1)
         self.assertEqual(identity["scheduler"]["state"], "FAILED")
 
+    _TEARDOWN_ERR = (
+        "Entity runtime shutdown\n"
+        "malloc_consolidate(): invalid chunk size\n"
+        "srun: error: gpu1: task 0: Aborted\n")
+    _COMPLETE_OUT_ANSI = (
+        "\x1b[0m\x1b[90m\x1b[0mStep:\x1b[0m\x1b[90m \x1b[92m7998\x1b[0m"
+        "\x1b[90m .... \x1b[90m[of 8000]\x1b[0m\n"
+        "\x1b[0m\x1b[90m\x1b[0mStep:\x1b[0m\x1b[90m \x1b[92m7999\x1b[0m"
+        "\x1b[90m .... \x1b[90m[of 8000]\x1b[0m\n")
+    _INCOMPLETE_OUT_ANSI = (
+        "\x1b[0m\x1b[90m\x1b[0mStep:\x1b[0m\x1b[90m \x1b[92m50\x1b[0m"
+        "\x1b[90m .... \x1b[90m[of 8000]\x1b[0m\n")
+
+    def _write_log(self, run_root, name, text):
+        with open(os.path.join(run_root, name), "w") as handle:
+            handle.write(text)
+
+    def test_run_exit_slurm_teardown_abort_books_completed_with_anomaly(self):
+        prepared = self._prepare("local-slurm", self.executable)
+        code, payload = self._launch()
+        self.assertEqual(code, 0, payload)
+        self._sacct_terminal("FAILED", "6:0")
+        self._write_log(prepared["run_root"], "simulation.err",
+                        self._TEARDOWN_ERR)
+        self._write_log(prepared["run_root"], "simulation.out",
+                        self._COMPLETE_OUT_ANSI)
+        code, probed = self.cli("record", "run-exit",
+                                "--project-root", self.project)
+        self.assertEqual(code, 0, probed)
+        self.assertEqual(probed["state"], "completed")
+        self.assertEqual(probed["exit_code"], 6)
+        self.assertTrue(probed["state_mutated"])
+        anomaly = probed["exit_anomaly"]
+        self.assertEqual(anomaly["kind"], "exit-teardown-abort")
+        self.assertEqual(anomaly["signature"], "malloc_consolidate()")
+        self.assertEqual(anomaly["last_step"], 7999)
+        self.assertEqual(anomaly["total_steps"], 8000)
+        identity = self._run_identity()
+        self.assertEqual(identity["status"], "completed")
+        self.assertEqual(identity["exit_code"], 6)
+        self.assertEqual(identity["exit_anomaly"], anomaly)
+        case = self.store.resolve_project(self.project)
+        self.assertEqual(case["current"]["readiness"]["run"], "completed")
+        board = build_dashboard(self.store, self.project)["board"]
+        self.assertEqual(board["run"]["state"], "completed")
+        self.assertIn("退出阶段已知无害 abort", board["run"]["detail"])
+
+    def test_run_exit_slurm_teardown_signature_without_completion_stays_failed(self):
+        prepared = self._prepare("local-slurm", self.executable)
+        code, payload = self._launch()
+        self.assertEqual(code, 0, payload)
+        self._sacct_terminal("FAILED", "6:0")
+        self._write_log(prepared["run_root"], "simulation.err",
+                        self._TEARDOWN_ERR)
+        self._write_log(prepared["run_root"], "simulation.out",
+                        self._INCOMPLETE_OUT_ANSI)
+        code, probed = self.cli("record", "run-exit",
+                                "--project-root", self.project)
+        self.assertEqual(code, 0, probed)
+        self.assertEqual(probed["state"], "failed")
+        self.assertEqual(probed["exit_code"], 6)
+        self.assertIsNone(probed["exit_anomaly"])
+        identity = self._run_identity()
+        self.assertEqual(identity["status"], "failed")
+        self.assertNotIn("exit_anomaly", identity)
+
+    def test_run_exit_slurm_completion_without_teardown_signature_stays_failed(self):
+        prepared = self._prepare("local-slurm", self.executable)
+        code, payload = self._launch()
+        self.assertEqual(code, 0, payload)
+        self._sacct_terminal("FAILED", "6:0")
+        self._write_log(prepared["run_root"], "simulation.err",
+                        "Segmentation fault (core dumped)\n")
+        self._write_log(prepared["run_root"], "simulation.out",
+                        self._COMPLETE_OUT_ANSI)
+        code, probed = self.cli("record", "run-exit",
+                                "--project-root", self.project)
+        self.assertEqual(code, 0, probed)
+        self.assertEqual(probed["state"], "failed")
+        self.assertIsNone(probed["exit_anomaly"])
+        self.assertEqual(self._run_identity()["status"], "failed")
+
+    def test_run_exit_slurm_missing_logs_stays_failed(self):
+        self._prepare("local-slurm", self.executable)
+        code, payload = self._launch()
+        self.assertEqual(code, 0, payload)
+        self._sacct_terminal("FAILED", "6:0")
+        code, probed = self.cli("record", "run-exit",
+                                "--project-root", self.project)
+        self.assertEqual(code, 0, probed)
+        self.assertEqual(probed["state"], "failed")
+        self.assertEqual(probed["exit_code"], 6)
+        self.assertIsNone(probed["exit_anomaly"])
+        self.assertEqual(self._run_identity()["status"], "failed")
+
+    def test_run_exit_direct_teardown_abort_books_completed_with_anomaly(self):
+        prepared = self._prepare(
+            "local-direct", self._direct_executable("exit 134"))
+        code, payload = self._launch()
+        self.assertEqual(code, 0, payload)
+        self._track_process_group()
+        exit_file = os.path.join(prepared["run_root"], ".entity-exit-code")
+        self.assertEqual(self._wait_exit_file(exit_file), "134")
+        self._write_log(
+            prepared["run_root"], "run.log",
+            self._COMPLETE_OUT_ANSI +
+            "malloc_consolidate(): unaligned fastbin chunk detected\n"
+            "Aborted\n")
+        code, probed = self.cli("record", "run-exit",
+                                "--project-root", self.project)
+        self.assertEqual(code, 0, probed)
+        self.assertEqual(probed["state"], "completed")
+        self.assertEqual(probed["exit_code"], 134)
+        anomaly = probed["exit_anomaly"]
+        self.assertEqual(anomaly["kind"], "exit-teardown-abort")
+        self.assertEqual(anomaly["last_step"], 7999)
+        self.assertEqual(anomaly["total_steps"], 8000)
+        self.assertEqual(self._run_identity()["status"], "completed")
+
+    def test_run_exit_reclassify_failed_run_with_late_log_evidence(self):
+        prepared = self._prepare("local-slurm", self.executable)
+        code, payload = self._launch()
+        self.assertEqual(code, 0, payload)
+        self._sacct_terminal("FAILED", "6:0")
+        code, probed = self.cli("record", "run-exit",
+                                "--project-root", self.project)
+        self.assertEqual(code, 0, probed)
+        self.assertEqual(probed["state"], "failed")
+        self.assertIsNone(probed["exit_anomaly"])
+        # the logs are inspected only later (e.g. fetched by hand)
+        self._write_log(prepared["run_root"], "simulation.err",
+                        self._TEARDOWN_ERR)
+        self._write_log(prepared["run_root"], "simulation.out",
+                        self._COMPLETE_OUT_ANSI)
+        code, again = self.cli("record", "run-exit",
+                               "--project-root", self.project)
+        self.assertEqual(code, 0, again)
+        self.assertEqual(again["state"], "failed")
+        self.assertFalse(again["state_mutated"])
+        code, fixed = self.cli("record", "run-exit",
+                               "--project-root", self.project, "--reclassify")
+        self.assertEqual(code, 0, fixed)
+        self.assertEqual(fixed["state"], "completed")
+        self.assertTrue(fixed["state_mutated"])
+        self.assertTrue(fixed["reclassified"])
+        self.assertEqual(fixed["exit_code"], 6)
+        self.assertEqual(fixed["exit_anomaly"]["last_step"], 7999)
+        identity = self._run_identity()
+        self.assertEqual(identity["status"], "completed")
+        self.assertEqual(identity["exit_code"], 6)
+        self.assertEqual(identity["exit_anomaly"]["kind"],
+                         "exit-teardown-abort")
+        case = self.store.resolve_project(self.project)
+        self.assertEqual(case["current"]["readiness"]["run"], "completed")
+
+    def test_run_exit_reclassify_true_failure_leaves_state_untouched(self):
+        self._prepare("local-slurm", self.executable)
+        code, payload = self._launch()
+        self.assertEqual(code, 0, payload)
+        self._sacct_terminal("FAILED", "1:0")
+        code, probed = self.cli("record", "run-exit",
+                                "--project-root", self.project)
+        self.assertEqual(code, 0, probed)
+        self.assertEqual(probed["state"], "failed")
+        events_before = len(self.store.export()["events"])
+        code, again = self.cli("record", "run-exit",
+                               "--project-root", self.project, "--reclassify")
+        self.assertEqual(code, 0, again)
+        self.assertEqual(again["state"], "failed")
+        self.assertFalse(again["state_mutated"])
+        self.assertIn("detail", again)
+        self.assertEqual(self._run_identity()["status"], "failed")
+        self.assertEqual(len(self.store.export()["events"]), events_before)
+
+    def test_run_exit_reclassify_completed_run_errors_without_writes(self):
+        self._prepare("local-slurm", self.executable)
+        code, payload = self._launch()
+        self.assertEqual(code, 0, payload)
+        self._sacct_terminal("COMPLETED", "0:0")
+        code, probed = self.cli("record", "run-exit",
+                                "--project-root", self.project)
+        self.assertEqual(code, 0, probed)
+        self.assertEqual(probed["state"], "completed")
+        events_before = len(self.store.export()["events"])
+        code, refused = self.cli("record", "run-exit",
+                                 "--project-root", self.project,
+                                 "--reclassify")
+        self.assertEqual(code, 2, refused)
+        self.assertFalse(refused["ok"])
+        self.assertFalse(refused["state_mutated"])
+        self.assertEqual(self._run_identity()["status"], "completed")
+        self.assertEqual(len(self.store.export()["events"]), events_before)
+
     def test_run_launch_after_adopt_does_not_resubmit(self):
         prepared = self._prepare("local-slurm", self.executable)
         with open(self.record, "w") as handle:
