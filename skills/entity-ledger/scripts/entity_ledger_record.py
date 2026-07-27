@@ -313,10 +313,13 @@ def record_data(store, project_root, run_id, actor):
 
 
 def _compute_request(gpus, walltime, precision):
-    """Validate the CLI compute overrides before site policy fills the rest."""
+    """Validate the CLI compute overrides before site policy fills the rest.
+    An empty walltime means no time limit: the sbatch carries no --time and
+    the direct backend runs without a timeout wrapper."""
     if not isinstance(gpus, int) or isinstance(gpus, bool) or gpus < 1:
         raise PlanError("gpus must be a positive integer")
-    if not re.match(r"^[0-9]+(?:-[0-9]{2})?:[0-9]{2}:[0-9]{2}$", walltime or ""):
+    if walltime and not re.match(r"^[0-9]+(?:-[0-9]{2})?:[0-9]{2}:[0-9]{2}$",
+                                 walltime):
         raise PlanError("walltime must use HH:MM:SS or D-HH:MM:SS")
     if precision not in {"single", "double"}:
         raise PlanError("precision must be single or double")

@@ -56,6 +56,11 @@ evidence — big flows are no longer wrapped in code.
 
 ### Changed
 
+- Job submission no longer sets a walltime by default: `--walltime` now
+  defaults to empty, the rendered sbatch carries no `#SBATCH --time=` line
+  (the partition/QoS default limit applies), and the direct backend skips
+  its timeout wrapper. An explicit `--walltime HH:MM:SS` behaves exactly as
+  before, including format validation.
 - `entity-ledger/SKILL.md` rewritten around the research workflow;
   control-plane internals moved to `references/ledger-runtime.md`.
 - Store schema v2: drops the operations/steps tables and the whole

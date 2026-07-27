@@ -249,7 +249,7 @@ else:
         self.assertIn("#SBATCH --partition=test", script)
         self.assertIn("#SBATCH --gres=gpu:1", script)
         self.assertIn("#SBATCH --cpus-per-task=2", script)
-        self.assertIn("#SBATCH --time=01:00:00", script)
+        self.assertNotIn("#SBATCH --time", script)
         self.assertIn("srun %s -input input.toml" % self.executable, script)
         self.assertEqual(first["compute"]["partition"], "test")
         self.assertEqual(first["compute"]["submit_user"], "tester")
@@ -276,6 +276,25 @@ else:
         self.assertEqual(payload["compute"]["gpus"], 4)
         self.assertEqual(payload["compute"]["tasks"], 4)
         self.assertEqual(payload["compute"]["precision"], "single")
+
+    def test_render_run_default_leaves_walltime_unset(self):
+        code, payload = self.cli(
+            "render-run", "--project-root", self.project,
+            "--toml", "input.toml", "--site", "local-slurm",
+            "--executable", self.executable)
+        self.assertEqual(code, 0, payload)
+        self.assertEqual(payload["compute"]["walltime"], "")
+        self.assertNotIn("#SBATCH --time", payload["script"])
+
+    def test_render_run_rejects_an_invalid_walltime(self):
+        code, payload = self.cli(
+            "render-run", "--project-root", self.project,
+            "--toml", "input.toml", "--site", "local-slurm",
+            "--executable", self.executable, "--walltime", "soon")
+        self.assertEqual(code, 2, payload)
+        self.assertFalse(payload["ok"])
+        self.assertFalse(payload["state_mutated"])
+        self.assertIn("walltime", payload["error"])
 
     def test_render_run_resolves_executable_from_build_identity(self):
         checkpoint = os.path.join(self.temp, "entity-deps.local.json")

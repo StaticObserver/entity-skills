@@ -52,6 +52,7 @@ CLI 是辅助工具，每个命令只做一件确定性的事；流程顺序由�
 python3 scripts/entityctl.py render-run \
   --project-root <project> --toml <input.toml> --site <site> \
   [--gpus N] [--walltime HH:MM:SS] [--precision single|double] [--executable <path>]
+  # --walltime 留空（默认）则不设置时限，由分区/QoS 默认值决定
 python3 scripts/entityctl.py snapshot-source --project-root <project>
 
 # 记录（先探测证据，后落账）

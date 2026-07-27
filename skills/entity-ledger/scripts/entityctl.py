@@ -868,8 +868,9 @@ def add_actor_arguments(parser):
 
 def add_run_compute_arguments(parser):
     parser.add_argument("--gpus", type=int, default=1)
-    parser.add_argument("--walltime", default="01:00:00",
-                        help="HH:MM:SS or D-HH:MM:SS")
+    parser.add_argument("--walltime", default="",
+                        help="HH:MM:SS or D-HH:MM:SS; empty (default) leaves "
+                             "the time limit unset so the Site default applies")
     parser.add_argument("--precision", default="double",
                         choices=["single", "double"])
     parser.add_argument("--executable", default="",

@@ -444,6 +444,43 @@ print('|'.join([r['job_id'], r['job_name'], r['user'], r['run_root'],
         self.assertIn("-input input.toml", first)
         self.assertIn(".entity-exit-code", first)
 
+    def test_direct_run_script_without_walltime_has_no_timeout(self):
+        from entity_ledger_executor import ExecutorError, RENDER_BACKENDS
+        run_spec = {
+            "executable": self.executable, "input_name": "input.toml",
+            "compute": {"nodes": 1, "tasks": 1, "gpus": 1, "cpus_per_task": 2,
+                        "walltime": "", "partition": "", "qos": "",
+                        "submit_user": "tester", "precision": "double"},
+        }
+        first = RENDER_BACKENDS["direct"](run_spec)
+        self.assertEqual(first, RENDER_BACKENDS["direct"](run_spec))
+        self.assertIn("set -eu", first)
+        self.assertNotIn("timeout", first)
+        self.assertIn("-input input.toml", first)
+        self.assertIn(".entity-exit-code", first)
+        # an empty walltime is legal; an invalid non-empty one still fails
+        run_spec["compute"]["walltime"] = "soon"
+        with self.assertRaises(ExecutorError):
+            RENDER_BACKENDS["direct"](run_spec)
+
+    def test_direct_run_without_walltime_end_to_end(self):
+        marker = os.path.join(self.temp, "direct-no-walltime-ran.txt")
+        prepared, launched = self._record_direct_run(
+            'echo ran >> "%s"\nsleep 0.2' % marker, walltime="")
+        self.assertEqual(launched["status"], "submitted")
+        self._track_process_group()
+        run_root = prepared["run_root"]
+        with open(os.path.join(run_root, "run.sh"), "r") as handle:
+            script = handle.read()
+        self.assertIn("set -eu", script)
+        self.assertNotIn("timeout", script)
+        self.assertIn(".entity-exit-code", script)
+        exit_code = self._wait_exit_file(
+            os.path.join(run_root, ".entity-exit-code"))
+        self.assertEqual(exit_code, "0")
+        with open(marker, "r") as handle:
+            self.assertEqual(handle.read().splitlines(), ["ran"])
+
     def test_missing_store_error_points_to_site_add(self):
         empty_home = os.path.join(self.temp, "empty-controller")
         with self.assertRaises(Exception) as caught:
