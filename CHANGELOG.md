@@ -8,6 +8,8 @@ version considered production-satisfactory will be released as 1.0.0. Schema
 versions (store, checkpoint, compat checker) are independent integer
 compatibility contracts and are not the product version.
 
+## [Unreleased]
+
 ## [0.6.0] - 2026-07-28
 
 Skill rename: `entity-router` is now `entity-ledger` — the plan/apply
