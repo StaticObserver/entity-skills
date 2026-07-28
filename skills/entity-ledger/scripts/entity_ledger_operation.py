@@ -20,6 +20,7 @@ from entity_ledger_common import (
     sha256_file,
     site_file_sha256,
 )
+import entity_ledger_executor
 
 
 class OperationError(LedgerError):
@@ -167,7 +168,31 @@ class ExecutorClient(object):
             except OSError:
                 pass
 
+    def _invoke_local(self, command, envelope):
+        """In-process executor call for local Sites: same validate/execute/
+        verify and the same on-disk receipts as the subprocess path, without
+        staging the executor script or the request envelope.  The JSON
+        round-trip mirrors the subprocess boundary (validate_envelope
+        normalizes the copy, not the caller's dict)."""
+        try:
+            request = entity_ledger_executor.validate_envelope(
+                json.loads(json.dumps(envelope)))
+            if command == "execute":
+                result = entity_ledger_executor.execute(request)
+            elif command == "verify":
+                result = entity_ledger_executor.verify(request)
+            else:
+                raise OperationError("unsupported executor command: %s" % command)
+        except (entity_ledger_executor.ExecutorError,
+                IOError, OSError, ValueError, KeyError) as exc:
+            raise OperationError(str(exc))
+        if result.get("status") not in {"completed", "verified"}:
+            raise OperationError(result.get("message") or "Site executor failed")
+        return result
+
     def invoke(self, command, envelope):
+        if self.transport == "local":
+            return self._invoke_local(command, envelope)
         executor = self.ensure_executor()
         request_path = self._stage_envelope(envelope)
         code, stdout, stderr = run_on_site(
