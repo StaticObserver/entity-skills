@@ -18,15 +18,13 @@ compatible.
 
 from __future__ import print_function
 
-import argparse
-import contextlib
-import io
 import json
 import os
 import re
 
 from entity_ledger_common import (
     absolute,
+    find_identity,
     now_utc,
     run_on_site,
     sha256_file,
@@ -203,10 +201,8 @@ def record_build(store, project_root, site_id, checkpoint, executable, actor):
 
 
 def _run_identity(case, run_id):
-    for item in case.get("identities", {}).get("run", {}).get("items", []):
-        if item.get("id") == run_id or item.get("identity_id") == run_id:
-            return item
-    return None
+    return find_identity(
+        case.get("identities", {}).get("run", {}).get("items", []), run_id)
 
 
 def _inventory_envelope(case_uid, run_id, site_id, staging_root, run_root):
@@ -1172,12 +1168,9 @@ def snapshot_source(store, project_root, actor):
         if manifest is not None and manifest.get("snapshot_id") != probe["snapshot_id"]:
             manifest = None
     if manifest is None:
-        # snapshot_archive prints the manifest to stdout; capture it so the
-        # CLI's JSON output stays clean.  The returned manifest is the one
-        # actually archived — use it rather than recomputing (TOCTOU).
-        request = argparse.Namespace(source=project_root, archive=archive)
-        with contextlib.redirect_stdout(io.StringIO()):
-            manifest = snapshot_archive(request)
+        # The returned manifest is the one actually archived — use it rather
+        # than recomputing (TOCTOU).
+        manifest = snapshot_archive(project_root, archive)
         archived = True
     snapshot_id = manifest["snapshot_id"]
     try:

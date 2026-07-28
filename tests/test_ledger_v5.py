@@ -550,14 +550,15 @@ print('|'.join([r['job_id'], r['job_name'], r['user'], r['run_root'],
             return entity_ledger_common.run_command(argv, cwd)
 
         with mock.patch("entity_ledger_facts.run_on_site", local_site):
-            with mock.patch("entity_ledger_operation.run_on_site",
-                            side_effect=local_site) as remote_calls:
-                with mock.patch("entity_ledger_operation.run_command",
-                                side_effect=scp_or_local):
-                    prepared, launched = self._record_run(site="fake-ssh")
-                    calls_before_status = remote_calls.call_count
-                    status = status_for_project(self.store, self.project,
-                                                live=True)
+            with mock.patch("entity_ledger_common.run_on_site", local_site):
+                with mock.patch("entity_ledger_operation.run_on_site",
+                                side_effect=local_site) as remote_calls:
+                    with mock.patch("entity_ledger_operation.run_command",
+                                    side_effect=scp_or_local):
+                        prepared, launched = self._record_run(site="fake-ssh")
+                        calls_before_status = remote_calls.call_count
+                        status = status_for_project(self.store, self.project,
+                                                    live=True)
         self.assertEqual(launched["status"], "submitted")
         self.assertEqual(launched["scheduler"]["job_id"], "42")
         self.assertEqual(self.submit_count(), 1)
