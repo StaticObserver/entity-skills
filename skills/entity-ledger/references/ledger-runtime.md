@@ -69,14 +69,19 @@ boundaries:
 
 ## Executor transport
 
-Local and SSH use the same `entity_ledger_executor.py` content and request
-envelope. The remote copy lives at:
+Local and SSH run the same `entity_ledger_executor.py` validate/execute/verify
+logic and the same request envelope protocol, but the invocation differs: on a
+local Site the `ExecutorClient` calls it in-process (receipt persistence and
+allowed_roots checks are identical, skipping the script copy, the request
+file, and the subprocess); on an SSH Site a content-addressed executor copy
+is deployed to the remote and invoked as a subprocess. The remote copy lives
+at:
 
 ```text
 <staging_root>/.entity-ledger-executor/<sha256>/entity_ledger_executor.py
 ```
 
-The transport only stages the exact payload/request JSON, invokes actions
+The SSH transport only stages the exact payload/request JSON, invokes actions
 on the whitelist, and returns structured results. Run submission accepts a
 validated `run_spec`; the executor renders the submission script selected
 by the Site profile's `scheduler.kind` — `slurm` corresponds to an sbatch

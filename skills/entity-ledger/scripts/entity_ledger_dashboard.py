@@ -10,21 +10,13 @@ is standard-library only and Python 3.6 compatible.
 
 from __future__ import print_function
 
-import json
 import os
 
-from entity_ledger_common import sha256_file
+from entity_ledger_common import find_identity, load_simulation_confirmation
 from entity_ledger_facts import _git_revision
 
 
 BOARD_ORDER = ["source", "pgen", "build", "run", "data", "analysis"]
-
-
-def _find_identity(items, identity_id):
-    for item in items:
-        if item.get("id") == identity_id:
-            return item
-    return None
 
 
 def _pgen_cell(project_root):
@@ -37,18 +29,9 @@ def _pgen_cell(project_root):
     for name in sorted(os.listdir(project_root)):
         if not name.endswith(".toml"):
             continue
-        record = None
-        digest = None
-        try:
-            with open(os.path.join(project_root, name + ".decisions.json"), "r") as handle:
-                record = json.load(handle)
-            digest = sha256_file(os.path.join(project_root, name))
-        except (IOError, OSError, ValueError):
-            pass
-        if (isinstance(record, dict)
-                and record.get("kind") == "entity-pgen.simulation-confirmation"
-                and digest is not None
-                and record.get("input_sha256") == digest):
+        unused_record, matches = load_simulation_confirmation(
+            os.path.join(project_root, name))
+        if matches:
             confirmed.append(name)
         else:
             unconfirmed.append(name)
@@ -90,7 +73,7 @@ def _source_cell(case, project_root, alerts):
 
 def _build_cell(case, current):
     build_id = current.get("build_id", "")
-    payload = _find_identity(
+    payload = find_identity(
         case.get("identities", {}).get("build", {}).get("items", []), build_id)
     if not build_id or payload is None:
         return {"state": "missing", "detail": "—"}
@@ -112,7 +95,7 @@ def _scheduler_brief(payload):
 
 def _run_cell(case, current, live):
     run_id = current.get("run_id", "")
-    payload = _find_identity(
+    payload = find_identity(
         case.get("identities", {}).get("run", {}).get("items", []), run_id)
     if not run_id or payload is None:
         return {"state": "none", "detail": "—"}
@@ -123,6 +106,8 @@ def _run_cell(case, current, live):
         detail += " (%s)" % brief
     if payload.get("exit_code") is not None:
         detail += "; exit %s" % payload["exit_code"]
+    if payload.get("exit_anomaly"):
+        detail += "; known benign teardown abort"
     if live:
         live_state = live.get("state", "")
         if live_state == "EXITED":
@@ -144,7 +129,7 @@ def _run_cell(case, current, live):
 
 def _data_cell(case, current):
     data_id = current.get("data_id", "")
-    payload = _find_identity(
+    payload = find_identity(
         case.get("identities", {}).get("data", {}).get("items", []), data_id)
     if not data_id or payload is None:
         return {"state": "missing", "detail": "—"}

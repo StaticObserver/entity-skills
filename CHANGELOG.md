@@ -8,7 +8,7 @@ version considered production-satisfactory will be released as 1.0.0. Schema
 versions (store, checkpoint, compat checker) are independent integer
 compatibility contracts and are not the product version.
 
-## [Unreleased]
+## [0.6.0] - 2026-07-28
 
 Skill rename: `entity-router` is now `entity-ledger` — the plan/apply
 control plane is gone and the skill is a deterministic ledger of project
@@ -44,20 +44,54 @@ evidence — big flows are no longer wrapped in code.
   the dashboard.
 - `store migrate` v1→v2: archives legacy operations to
   `<ledger_home>/archive/`, then installs the slimmed store.
+- `record run-exit` recognizes Entity's known harmless teardown abort: when
+  the terminal exit code is non-zero but the run_root logs show both the
+  final step reached (`Step: N ... [of M]` with `N >= M - 1`, ANSI escapes
+  stripped) and a known glibc `malloc_consolidate()` abort signature, the
+  run is booked `completed` with an `exit_anomaly` note (the real exit code
+  is preserved). Missing or mismatched evidence keeps the run `failed`,
+  exactly as before. The new `--reclassify` flag re-judges a run already
+  booked `failed` from its log evidence alone (no scheduler probe), and the
+  dashboard run cell annotates the anomaly.
 
 ### Changed
 
+- Job submission no longer sets a walltime by default: `--walltime` now
+  defaults to empty, the rendered sbatch carries no `#SBATCH --time=` line
+  (the partition/QoS default limit applies), and the direct backend skips
+  its timeout wrapper. An explicit `--walltime HH:MM:SS` behaves exactly as
+  before, including format validation.
 - `entity-ledger/SKILL.md` rewritten around the research workflow;
   control-plane internals moved to `references/ledger-runtime.md`.
 - Store schema v2: drops the operations/steps tables and the whole
   Operation API; concurrency degrades to the `BEGIN IMMEDIATE` file lock,
   events remain as passive audit.
+- Local Sites run the executor in-process: `ExecutorClient` calls the same
+  validate/execute/verify logic with the same on-disk receipts, skipping
+  the content-addressed script copy, the request envelope file, and two
+  `python3` spawns per record step. SSH Sites are unchanged.
+- The snapshot manifest walk now lives in one place
+  (`entity_ledger_common.source_manifest`). The removed duplicate in
+  `entity_ledger_remote.py` did not exclude `run-*` directories, so a
+  source containing them could get two different snapshot ids depending on
+  the path taken; snapshot ids of such sources change (content addressing
+  simply writes a new archive).
+- Site fingerprinting, identity lookup, and the pgen confirmation
+  comparison are unified into shared helpers
+  (`site_file_sha256`, `find_identity`, `load_simulation_confirmation`)
+  instead of three near-identical copies.
 
 ### Removed
 
 - The plan/apply protocol: `entityctl plan/apply/operation cancel`,
   GoalSpec and plan JSON schemas, the planner, the apply engine, and
   claim/lease machinery. Legacy operations are export-archived on migrate.
+- Plan/apply-era dead code: `entity_ledger_purge.py` (the `data.purge`
+  Action protocol had no producer), the executor kinds
+  `build.register.v1` and the direct-backend preflight (no caller),
+  `entity_ledger_remote.py`'s snapshot-install half, the duplicate
+  `entityctl bundle install` command, and the `--router-home` CLI alias
+  (the `ENTITY_ROUTER_HOME` environment variable is still honoured).
 
 ## [0.5.0] - 2026-07-22
 

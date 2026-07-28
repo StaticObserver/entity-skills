@@ -60,6 +60,7 @@ same command:
 python3 scripts/entityctl.py render-run \
   --project-root <project> --toml <input.toml> --site <site> \
   [--gpus N] [--walltime HH:MM:SS] [--precision single|double] [--executable <path>]
+  # --walltime left empty (default) sets no time limit; the partition/QoS default applies
 python3 scripts/entityctl.py snapshot-source --project-root <project>
 
 # Record (probe evidence first, then write to the ledger)
@@ -67,7 +68,7 @@ python3 scripts/entityctl.py \
   --actor-run-id <run-id> --actor-provider <provider> \
   record run-prepare --project-root <project> --toml <input.toml> --site <site> [...]
 python3 scripts/entityctl.py record run-launch --project-root <project> [--run-id <id>]
-python3 scripts/entityctl.py record run-exit  --project-root <project> [--run-id <id>]
+python3 scripts/entityctl.py record run-exit  --project-root <project> [--run-id <id>] [--reclassify]
 python3 scripts/entityctl.py record build --project-root <project> --site <site> \
   --checkpoint <deps-checkpoint.json> --executable <path>
 python3 scripts/entityctl.py record data --project-root <project> [--run-id <id>]
@@ -87,6 +88,16 @@ Key semantics:
 - Once a run is on the scheduler it is an in-flight fact and does not occupy
   project state; while waiting you can analyze the previous run or develop
   the next PGen, and `status --live` probes progress at any time.
+- When a run exits non-zero, `record run-exit` uses the run_root log evidence
+  to recognize the known teardown abort at exit: stdout (ANSI stripped)
+  shows the final step satisfying `Step: N [of M]` with `N >= M - 1`, and
+  the stderr tail matches a known glibc `malloc_consolidate()` abort
+  signature — with both pieces of evidence the run is booked `completed`
+  with an `exit_anomaly` note (the real exit_code is preserved); with either
+  missing it stays `failed`. For a run already booked `failed`, once the log
+  evidence is available, use `--reclassify` to re-judge it (skips the
+  scheduler probe, only valid for `failed`, any other state errors out with
+  zero writes).
 - `record build` requires the env-build checkpoint to be
   `compatibility: pass` and the parameters to be confirmed; once recorded,
   run primitives may omit `--executable`.

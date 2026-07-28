@@ -181,13 +181,6 @@ class OperationStore(object):
         finally:
             connection.close()
 
-    def has_cases(self):
-        connection = self._connect()
-        try:
-            return connection.execute("SELECT 1 FROM cases LIMIT 1").fetchone() is not None
-        finally:
-            connection.close()
-
     def upsert_site(self, profile, connection=None):
         owns = connection is None
         connection = connection or self._connect()

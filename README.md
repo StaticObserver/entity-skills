@@ -20,8 +20,8 @@ invoke the corresponding owner skill directly.
 
 The workflow order is orchestrated by the agent according to the user's goal;
 no separate run skill is established. The SQLite `ledger.db` (schema v2) is
-the only structured controller authority; Local and SSH share the same
-content-addressed executor.
+the only structured controller authority; Local runs the same executor logic
+in-process, while SSH uses a content-addressed executor copy.
 
 ```text
 entity-skills/

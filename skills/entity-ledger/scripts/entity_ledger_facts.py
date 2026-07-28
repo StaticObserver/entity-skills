@@ -16,8 +16,9 @@ import subprocess
 from entity_ledger_common import (
     LedgerError,
     absolute,
+    load_simulation_confirmation,
     run_on_site,
-    sha256_file,
+    site_file_sha256,
     source_manifest,
 )
 from entity_ledger_store import StoreError, canonical_hash
@@ -248,19 +249,9 @@ def _site_policy(profile, compute):
 
 def _content_sha256(profile, path):
     """Fingerprint an executable on its execution Site, locally or over SSH."""
-    if profile.get("transport", {}).get("kind") == "local":
-        return sha256_file(path)
-    script = (
-        "import hashlib,os,sys; p=sys.argv[1]; "
-        "print(hashlib.sha256(open(p,'rb').read()).hexdigest() if os.path.isfile(p) else '')"
-    )
-    code, stdout, stderr = run_on_site(profile, ["python3", "-c", script, path])
-    digest = stdout.strip()
-    if code != 0 or not digest:
-        raise PlanError(
-            "cannot fingerprint executable on execution Site: %s"
-            % (stderr.strip() or stdout.strip() or path)
-        )
+    digest = site_file_sha256(profile, path)
+    if not digest:
+        raise PlanError("cannot fingerprint executable on execution Site: %s" % path)
     return digest
 
 
@@ -282,22 +273,17 @@ def derive_run_paths(case_uid, site_id, roots, scheduler_kind, source_id,
     operation_id = _operation_id(seed)
     run_root = os.path.join(roots["run_root"], case_uid, run_id)
     staging_root = os.path.join(roots["staging_root"], case_uid, operation_id)
-    receipt_root = os.path.join(staging_root, "receipts")
     return {
         "seed": seed,
         "run_id": run_id,
         "operation_id": operation_id,
         "run_root": run_root,
         "staging_root": staging_root,
-        "receipt_root": receipt_root,
         "manifest": os.path.join(run_root, "run-manifest.json"),
         "submit_script": os.path.join(
             run_root, "run.sbatch" if scheduler_kind == "slurm" else "run.sh"),
         "staged_input": os.path.join(staging_root, "payloads", "input.toml"),
-        "launch_receipt": os.path.join(receipt_root, "run-launch.json"),
-        "prepare_receipt": os.path.join(receipt_root, "run-prepare.json"),
-        "preflight_receipt": os.path.join(receipt_root, "run-preflight.json"),
-        "job_name": "entity-%s" % operation_id,
+        "prepare_receipt": os.path.join(staging_root, "receipts", "run-prepare.json"),
     }
 
 
@@ -324,25 +310,18 @@ def _source_identity(source_root, controller_artifacts=None):
 def _simulation_confirmation(input_path):
     """Hard gate: the simulation parameter confirmation recorded by
     pgen_preflight.py confirm must exist and match the current input bytes."""
-    path = input_path + ".decisions.json"
     question = (
         "show the parameter card to the user and record confirmation with "
         "pgen_preflight.py confirm %s --by <actor>" % input_path
     )
-    if not os.path.isfile(path):
+    record, matches = load_simulation_confirmation(input_path)
+    if record is None:
         raise PlanError(
             "simulation parameters have not been confirmed",
             "needs_decision",
             [{"field": "input", "question": question}],
         )
-    try:
-        with open(path, "r") as handle:
-            record = json.load(handle)
-    except (IOError, OSError, ValueError) as exc:
-        raise PlanError("cannot read simulation confirmation: %s" % exc)
-    if (not isinstance(record, dict)
-            or record.get("kind") != "entity-pgen.simulation-confirmation"
-            or record.get("input_sha256") != sha256_file(input_path)):
+    if not matches:
         raise PlanError(
             "simulation parameters changed since they were confirmed",
             "needs_decision",

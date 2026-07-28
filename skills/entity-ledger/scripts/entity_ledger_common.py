@@ -141,6 +141,51 @@ def sha256_file(path):
     return digest.hexdigest()
 
 
+def site_file_sha256(profile, path):
+    """Fingerprint a file on its Site, locally or over SSH.  Returns "" when
+    the file is absent; raises LedgerError when the Site cannot be queried."""
+    if profile.get("transport", {}).get("kind") == "local":
+        return sha256_file(path) if os.path.isfile(path) else ""
+    script = (
+        "import hashlib,os,sys; p=sys.argv[1]; "
+        "print(hashlib.sha256(open(p,'rb').read()).hexdigest() if os.path.isfile(p) else '')"
+    )
+    code, stdout, stderr = run_on_site(profile, ["python3", "-c", script, path])
+    if code != 0:
+        raise LedgerError(
+            "cannot fingerprint file on Site: %s" % (stderr.strip() or stdout.strip() or path))
+    return stdout.strip()
+
+
+def find_identity(items, identity_id):
+    """Locate an identity payload by id (current key) or identity_id
+    (legacy key); returns None when no item matches."""
+    for item in items:
+        if item.get("id") == identity_id or item.get("identity_id") == identity_id:
+            return item
+    return None
+
+
+def load_simulation_confirmation(input_path):
+    """Read ``<input>.decisions.json`` and compare it against the current
+    input bytes.  Returns ``(record, matches)``: record is the parsed
+    confirmation dict (None when the file is missing, unreadable, or of the
+    wrong kind); matches is True only when the recorded input_sha256 equals
+    the current file digest."""
+    record = None
+    try:
+        with open(input_path + ".decisions.json", "r") as handle:
+            candidate = json.load(handle)
+        if (isinstance(candidate, dict)
+                and candidate.get("kind") == "entity-pgen.simulation-confirmation"):
+            record = candidate
+    except (IOError, OSError, ValueError):
+        record = None
+    if record is None or not os.path.isfile(input_path):
+        return record, False
+    return record, record.get("input_sha256") == sha256_file(input_path)
+
+
 def parse_locator(value):
     if isinstance(value, dict):
         site_id = str(value.get("site_id", "")).strip()

@@ -9,14 +9,17 @@ import shlex
 import shutil
 import tempfile
 
+import entity_ledger_executor
 from entity_ledger_common import (
     LedgerError,
     absolute,
     atomic_write_json,
+    find_identity,
     now_utc,
     run_command,
     run_on_site,
     sha256_file,
+    site_file_sha256,
 )
 
 
@@ -74,14 +77,10 @@ class ExecutorClient(object):
         )
 
     def _remote_hash(self, path):
-        script = (
-            "import hashlib,os,sys; p=sys.argv[1]; "
-            "print(hashlib.sha256(open(p,'rb').read()).hexdigest() if os.path.isfile(p) else '')"
-        )
-        code, stdout, stderr = run_on_site(self.profile, ["python3", "-c", script, path])
-        if code != 0:
-            raise OperationError("cannot verify remote file: %s" % (stderr.strip() or stdout.strip()))
-        return stdout.strip()
+        try:
+            return site_file_sha256(self.profile, path)
+        except LedgerError as exc:
+            raise OperationError("cannot verify remote file: %s" % exc)
 
     def _scp(self, source, target):
         code, unused, stderr = run_command([
@@ -169,7 +168,31 @@ class ExecutorClient(object):
             except OSError:
                 pass
 
+    def _invoke_local(self, command, envelope):
+        """In-process executor call for local Sites: same validate/execute/
+        verify and the same on-disk receipts as the subprocess path, without
+        staging the executor script or the request envelope.  The JSON
+        round-trip mirrors the subprocess boundary (validate_envelope
+        normalizes the copy, not the caller's dict)."""
+        try:
+            request = entity_ledger_executor.validate_envelope(
+                json.loads(json.dumps(envelope)))
+            if command == "execute":
+                result = entity_ledger_executor.execute(request)
+            elif command == "verify":
+                result = entity_ledger_executor.verify(request)
+            else:
+                raise OperationError("unsupported executor command: %s" % command)
+        except (entity_ledger_executor.ExecutorError,
+                IOError, OSError, ValueError, KeyError) as exc:
+            raise OperationError(str(exc))
+        if result.get("status") not in {"completed", "verified"}:
+            raise OperationError(result.get("message") or "Site executor failed")
+        return result
+
     def invoke(self, command, envelope):
+        if self.transport == "local":
+            return self._invoke_local(command, envelope)
         executor = self.ensure_executor()
         request_path = self._stage_envelope(envelope)
         code, stdout, stderr = run_on_site(
@@ -263,11 +286,8 @@ def status_for_project(store, project_root, live=False):
     case = store.resolve_project(project_root)
     current = case["current"]
     run_id = current.get("run_id", "")
-    run_identity = None
-    for item in case.get("identities", {}).get("run", {}).get("items", []):
-        if item.get("id") == run_id or item.get("identity_id") == run_id:
-            run_identity = item
-            break
+    run_identity = find_identity(
+        case.get("identities", {}).get("run", {}).get("items", []), run_id)
     result = {
         "schema_version": 1, "kind": "entity-ledger.status", "ok": True,
         "state_mutated": False, "remote_calls": 0,
