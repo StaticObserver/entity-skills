@@ -9,6 +9,7 @@ import shlex
 import shutil
 import tempfile
 
+import entity_ledger_executor
 from entity_ledger_common import (
     LedgerError,
     absolute,
@@ -20,7 +21,6 @@ from entity_ledger_common import (
     sha256_file,
     site_file_sha256,
 )
-import entity_ledger_executor
 
 
 class OperationError(LedgerError):

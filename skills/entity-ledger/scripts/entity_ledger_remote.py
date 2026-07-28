@@ -16,7 +16,7 @@ import sys
 import tarfile
 import tempfile
 
-from entity_ledger_common import source_manifest
+from entity_ledger_common import LedgerError, source_manifest
 
 
 def make_manifest(source):
@@ -94,7 +94,7 @@ def main(argv=None):
     try:
         args.func(args)
         return 0
-    except (IOError, OSError, ValueError, KeyError, AssertionError) as exc:
+    except (LedgerError, IOError, OSError, ValueError, KeyError, AssertionError) as exc:
         print(json.dumps({"ok": False, "error": str(exc)}, sort_keys=True))
         return 2
 
