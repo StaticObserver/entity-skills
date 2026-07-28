@@ -11,7 +11,6 @@ import argparse
 import hashlib
 import json
 import os
-import shutil
 import stat
 import subprocess
 import sys
@@ -76,16 +75,6 @@ def make_manifest(source):
     return payload
 
 
-def verify(root):
-    with open(os.path.join(root, "snapshot-manifest.json"), "r") as handle:
-        manifest = json.load(handle)
-    for entry in manifest.get("files", []):
-        path = os.path.join(root, entry["path"])
-        if not os.path.isfile(path) or sha256_file(path) != entry["sha256"]:
-            raise ValueError("snapshot verification failed: %s" % entry["path"])
-    return manifest
-
-
 def archive_manifest(archive):
     """Read the manifest recorded inside a snapshot archive; raises
     ValueError when the archive is truncated or carries no manifest, so the
@@ -135,39 +124,6 @@ def snapshot_archive(args):
     return manifest
 
 
-def safe_extract(archive, destination):
-    with tarfile.open(archive, "r") as bundle:
-        members = bundle.getmembers()
-        for member in members:
-            if os.path.isabs(member.name) or ".." in member.name.split("/"):
-                raise ValueError("unsafe archive path")
-        bundle.extractall(destination)
-
-
-def snapshot_install(args):
-    manifest = archive_manifest(args.archive)
-    snapshot_id = manifest["snapshot_id"]
-    root = os.path.abspath(args.target_root)
-    destination = os.path.join(root, snapshot_id)
-    if os.path.exists(destination):
-        current = verify(destination)
-        if current.get("snapshot_id") != snapshot_id:
-            raise ValueError("existing snapshot ID mismatch")
-    else:
-        if not os.path.isdir(root):
-            os.makedirs(root)
-        temp = destination + ".tmp-" + str(os.getpid())
-        os.makedirs(temp)
-        try:
-            safe_extract(args.archive, temp)
-            verify(temp)
-            os.rename(temp, destination)
-        except Exception:
-            shutil.rmtree(temp, ignore_errors=True)
-            raise
-    print(json.dumps({"snapshot_id": snapshot_id, "destination": destination}, sort_keys=True))
-
-
 def build_parser():
     parser = argparse.ArgumentParser()
     sub = parser.add_subparsers(dest="command")
@@ -175,10 +131,6 @@ def build_parser():
     create.add_argument("--source", required=True)
     create.add_argument("--archive", required=True)
     create.set_defaults(func=snapshot_archive)
-    install = sub.add_parser("snapshot-install")
-    install.add_argument("--archive", required=True)
-    install.add_argument("--target-root", required=True)
-    install.set_defaults(func=snapshot_install)
     return parser
 
 

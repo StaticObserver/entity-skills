@@ -16,7 +16,6 @@ class LedgerContractTest(unittest.TestCase):
         required = [
             "SKILL.md",
             "scripts/entity_ledger_common.py",
-            "scripts/entity_ledger_purge.py",
             "scripts/entity_ledger_remote.py",
             "scripts/entity_ledger_store.py",
             "scripts/entity_ledger_facts.py",

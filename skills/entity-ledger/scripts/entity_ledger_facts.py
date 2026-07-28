@@ -282,22 +282,17 @@ def derive_run_paths(case_uid, site_id, roots, scheduler_kind, source_id,
     operation_id = _operation_id(seed)
     run_root = os.path.join(roots["run_root"], case_uid, run_id)
     staging_root = os.path.join(roots["staging_root"], case_uid, operation_id)
-    receipt_root = os.path.join(staging_root, "receipts")
     return {
         "seed": seed,
         "run_id": run_id,
         "operation_id": operation_id,
         "run_root": run_root,
         "staging_root": staging_root,
-        "receipt_root": receipt_root,
         "manifest": os.path.join(run_root, "run-manifest.json"),
         "submit_script": os.path.join(
             run_root, "run.sbatch" if scheduler_kind == "slurm" else "run.sh"),
         "staged_input": os.path.join(staging_root, "payloads", "input.toml"),
-        "launch_receipt": os.path.join(receipt_root, "run-launch.json"),
-        "prepare_receipt": os.path.join(receipt_root, "run-prepare.json"),
-        "preflight_receipt": os.path.join(receipt_root, "run-preflight.json"),
-        "job_name": "entity-%s" % operation_id,
+        "prepare_receipt": os.path.join(staging_root, "receipts", "run-prepare.json"),
     }
 
 

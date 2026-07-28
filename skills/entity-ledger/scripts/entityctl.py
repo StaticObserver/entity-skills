@@ -333,7 +333,7 @@ def doctor(args):
         if entry["exists"] and entry["bundle_hash"] and not entry["matches_runtime"]:
             failures.append(
                 "client install %s (%s) has drifted from the runtime bundle; "
-                "reinstall with entityctl bundle install" % (provider, path)
+                "reinstall with entityctl install" % (provider, path)
             )
     return {
         "schema_version": SCHEMA_VERSION,
@@ -883,7 +883,7 @@ def build_parser():
     # Lazy default: resolving the Ledger home can trigger the one-time
     # ~/.entity-router -> ~/.entity-ledger migration, which must not run as a
     # side effect of merely building the parser (e.g. entityctl --help).
-    parser.add_argument("--ledger-home", "--router-home", dest="ledger_home",
+    parser.add_argument("--ledger-home", dest="ledger_home",
                         default=None)
     add_actor_arguments(parser)
     sub = parser.add_subparsers(
@@ -994,12 +994,6 @@ def build_parser():
     direct_install = sub.add_parser("install")
     direct_install.add_argument("--source-root", default=DEFAULT_BUNDLE_ROOT)
     direct_install.set_defaults(func=install_bundle)
-
-    bundle = sub.add_parser("bundle")
-    bundle_sub = bundle.add_subparsers(dest="bundle_command")
-    install = bundle_sub.add_parser("install")
-    install.add_argument("--source-root", default=DEFAULT_BUNDLE_ROOT)
-    install.set_defaults(func=install_bundle)
     return parser
 
 
