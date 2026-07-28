@@ -15,8 +15,8 @@ run-exit/data/intent）和探测（status --live）。写入类原语自带证�
 - `entity-nt2py`：nt2py 数据访问、绘图和导出。
 
 流程顺序由 Agent 按用户目标自行编排，不单独建立 run skill。SQLite
-`ledger.db`（schema v2）是唯一结构化 controller authority；Local 与
-SSH 使用同一个内容寻址 executor。
+`ledger.db`（schema v2）是唯一结构化 controller authority；Local 在
+进程内执行同一份 executor 逻辑，SSH 使用内容寻址的 executor 副本。
 
 ```text
 entity-skills/

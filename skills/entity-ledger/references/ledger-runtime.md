@@ -56,17 +56,20 @@ entity-router → entity-ledger 改名带来三处兼容边界：
 
 ## 执行器 transport
 
-本地和 SSH 使用相同的 `entity_ledger_executor.py` 内容和请求 envelope。
-远端副本位于：
+本地和 SSH 执行的是同一个 `entity_ledger_executor.py` 的 validate/execute/verify
+逻辑和同一份请求 envelope 协议，但调用方式不同：本地 Site 由
+`ExecutorClient` 在进程内直接调用（receipt 落盘与 allowed_roots 校验完全
+相同，省掉脚本拷贝、请求文件和子进程）;SSH Site 把内容寻址的执行器副本
+部署到远端后按子进程调用：
 
 ```text
 <staging_root>/.entity-ledger-executor/<sha256>/entity_ledger_executor.py
 ```
 
-Transport 只负责暂存精确的 payload/请求 JSON、调用白名单内的动作、
+SSH transport 只负责暂存精确的 payload/请求 JSON、调用白名单内的动作、
 并返回结构化结果。run 提交接受经过校验的 `run_spec`；
 执行器渲染由 Site profile 的 `scheduler.kind` 选定的提交
-脚本——`slurm` 对应 sbatch 脚本，`direct` 对应自包含的 `run.sh`。
+脚本——`slurm` 对应 sbatch 脚本,`direct` 对应自包含的 `run.sh`。
 调用方提供的 shell、命令、前置命令或脚本文本都会被拒绝。
 
 launch 的 effect identity 因后端而异。Slurm 记录

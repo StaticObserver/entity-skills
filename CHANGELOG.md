@@ -66,12 +66,32 @@ evidence — big flows are no longer wrapped in code.
 - Store schema v2: drops the operations/steps tables and the whole
   Operation API; concurrency degrades to the `BEGIN IMMEDIATE` file lock,
   events remain as passive audit.
+- Local Sites run the executor in-process: `ExecutorClient` calls the same
+  validate/execute/verify logic with the same on-disk receipts, skipping
+  the content-addressed script copy, the request envelope file, and two
+  `python3` spawns per record step. SSH Sites are unchanged.
+- The snapshot manifest walk now lives in one place
+  (`entity_ledger_common.source_manifest`). The removed duplicate in
+  `entity_ledger_remote.py` did not exclude `run-*` directories, so a
+  source containing them could get two different snapshot ids depending on
+  the path taken; snapshot ids of such sources change (content addressing
+  simply writes a new archive).
+- Site fingerprinting, identity lookup, and the pgen confirmation
+  comparison are unified into shared helpers
+  (`site_file_sha256`, `find_identity`, `load_simulation_confirmation`)
+  instead of three near-identical copies.
 
 ### Removed
 
 - The plan/apply protocol: `entityctl plan/apply/operation cancel`,
   GoalSpec and plan JSON schemas, the planner, the apply engine, and
   claim/lease machinery. Legacy operations are export-archived on migrate.
+- Plan/apply-era dead code: `entity_ledger_purge.py` (the `data.purge`
+  Action protocol had no producer), the executor kinds
+  `build.register.v1` and the direct-backend preflight (no caller),
+  `entity_ledger_remote.py`'s snapshot-install half, the duplicate
+  `entityctl bundle install` command, and the `--router-home` CLI alias
+  (the `ENTITY_ROUTER_HOME` environment variable is still honoured).
 
 ## [0.5.0] - 2026-07-22
 
