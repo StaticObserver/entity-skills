@@ -10,6 +10,25 @@ compatibility contracts and are not the product version.
 
 ## [Unreleased]
 
+## [0.6.1] - 2026-07-29
+
+### Fixed
+
+- `entity-pgen` write gate no longer routes managed writes into a dead end:
+  the preflight refused every write inside a Ledger-registered Case source
+  ("managed writes require a v5 pgen Goal") and bounced the request to a
+  Ledger record primitive that does not exist — that Goal kind was retired
+  with the plan/apply protocol. Writes inside the Case source authority are
+  now allowed (`managed-write`) — the Ledger does not intervene in the PGen
+  process; once the change settles, `entityctl snapshot-source` re-probes the
+  tree and books the new source identity (re-`confirm` the input TOML before
+  `record run-prepare`). Recorded artifact roots (build/run/data identities,
+  the active run) stay fail-closed (`router-required`).
+- Observability `validate_pgen_preflight` no longer fails real
+  `managed-write` outcomes: it required an Action id, controller root, and
+  Action-request envelope from the retired plan/apply protocol; it now
+  requires only a Case identity.
+
 ## [0.6.0] - 2026-07-28
 
 Skill rename: `entity-router` is now `entity-ledger` — the plan/apply

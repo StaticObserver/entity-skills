@@ -1,10 +1,13 @@
 #!/usr/bin/env python3
-"""Fail-closed registry/Locator preflight for Entity PGen work.
+"""Registry/Locator preflight for Entity PGen work.
 
-Read-only and truly standalone PGen work may run directly.  A write to a
-source tree registered by the Ledger v5 store is currently refused: managed
-writes are booked through the Ledger record primitives, not by this skill.
-No source/control ancestor relationship is assumed.
+Read-only and truly standalone PGen work may run directly.  A write inside a
+Case's registered source authority is a managed write and is allowed: the
+Ledger does not intervene in the PGen process; once the change settles,
+``entityctl snapshot-source`` re-probes the tree and books the new source
+identity.  Recorded artifact roots (build/run/data identities and the active
+run) are Ledger evidence and stay fail-closed.  No source/control ancestor
+relationship is assumed.
 
 Subcommands:
 
@@ -410,28 +413,34 @@ def registered_cases(home):
     return store.export()["cases"], True
 
 
-def case_roots(home, case):
-    roots = []
-    authority = (case.get("source") or {}).get("authority")
-    if authority:
-        roots.append(authority)
-    for dimension in (case.get("identities") or {}).values():
-        for item in dimension.get("items", []):
+def case_match(home, case, target):
+    """Classify how a Case covers target: "artifact" for recorded evidence
+    roots (non-source identities, the active run), "source" for the editable
+    source authority, or None.  Artifact roots win over the authority so a
+    run/build/data root inside the checkout stays protected.  Source
+    identities are skipped: their root IS the authority."""
+    protected = []
+    for dimension, bucket in (case.get("identities") or {}).items():
+        if dimension == "source":
+            continue
+        for item in bucket.get("items", []):
             if item.get("root"):
-                roots.append(item["root"])
+                protected.append(item["root"])
     current = case.get("current") or {}
     if current.get("active_run"):
-        roots.append(current["active_run"])
-    return [canonical_locator(home, root) for root in roots]
-
-
-def case_covers_target(home, case, target):
-    return any(locator_within(target, root) for root in case_roots(home, case))
+        protected.append(current["active_run"])
+    for root in protected:
+        if locator_within(target, canonical_locator(home, root)):
+            return "artifact"
+    authority = (case.get("source") or {}).get("authority")
+    if authority and locator_within(target, canonical_locator(home, authority)):
+        return "source"
+    return None
 
 
 def find_cases(home, target):
     cases, store_present = registered_cases(home)
-    matches = [case for case in cases if case_covers_target(home, case, target)]
+    matches = [case for case in cases if case_match(home, case, target)]
     return matches, store_present
 
 
@@ -457,11 +466,20 @@ def evaluate(args):
                       "could not be checked, treating target as standalone")
         return result(True, "standalone-write", target,
                       reason=reason, store_present=store_present)
+    if case_match(home, case, target) == "source":
+        return result(True, "managed-write", target, case,
+                      "target is inside the Case source authority; write freely, "
+                      "then book the settled source with entityctl snapshot-source "
+                      "(re-run pgen_preflight.py confirm on the input TOML before "
+                      "record run-prepare)",
+                      store_present=store_present)
     # "router-required" is a stable contract string shared with the
     # observability evidence validator (validate_pgen_preflight); it
     # intentionally keeps the pre-rename router name.
     return result(False, "router-required", target, case,
-                  "managed source writes require a v5 pgen Goal, which is not yet implemented",
+                  "target is under a recorded Ledger artifact root (build/run/data "
+                  "identity or the active run); recorded evidence is not editable, "
+                  "route to entity-ledger",
                   store_present=store_present)
 
 
