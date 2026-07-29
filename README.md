@@ -97,7 +97,7 @@ python3 skills/entity-ledger/scripts/entityctl.py ... record intent --project-ro
 `~/.entity-skills/bundles/`；Codex、Claude Code 和 Kimi Code 的 discovery 目录只保留
 指向同一 bundle 的符号链接投影，不再分别维护三套文件。
 
-`entity-pgen` 的直接调用分为只读和 standalone 修改。它在写入前必须运行自身的 preflight；preflight 查询 Ledger store，target 落在注册 Case 的 source/identity/active-run Locator 内即视为受管，受管写入须由 Ledger 的 record 原语登记。Ledger 控制状态位于独立 control root，不依赖源码祖先目录中的 `_case/` 标记。
+`entity-pgen` 的直接调用分为只读、standalone 修改和受管写入。它在写入前必须运行自身的 preflight；preflight 查询 Ledger store：target 落在注册 Case 的 source authority 内为 `managed-write`，允许直接写入——Ledger 不干预 PGen 过程，改动收敛后由 `entityctl snapshot-source` 重新探测并登记新的 source identity；落在已登记的 build/run/data identity 根或活动 run 内则拒绝（`router-required`）。Ledger 控制状态位于独立 control root，不依赖源码祖先目录中的 `_case/` 标记。
 
 ## 仓库与发布
 
