@@ -255,35 +255,12 @@ def validate_pgen_preflight(
         (result_path, "preflight-result", "entity-pgen-preflight", "controller")
     ]
     if wanted and mode == "managed-write":
+        # Post-restructure contract: a managed write is authorized by the
+        # Case's registered source authority, not by an Action envelope, so
+        # action_id/control_root are empty and no Action request exists.
         _check(checks, "managed.identity",
-               bool(result.get("case_uid")) and bool(result.get("action_id")) and bool(result.get("control_root")),
-               "managed write identifies its Case, Action, and controller root")
-        _check(checks, "managed.action-request", action_request_path is not None,
-               "managed write is linked to its Action request")
-        if action_request_path is not None:
-            action_request_path = action_request_path.expanduser().resolve()
-            request = load_json(action_request_path, "PGen Action request")
-            artifacts.append((action_request_path, "action-request", "entity-router-action-request", "controller"))
-            _check(checks, "managed.action-id", request.get("action_id") == result.get("action_id"),
-                   "preflight Action ID matches request")
-            _check(checks, "managed.case-uid", request.get("case_uid") == result.get("case_uid"),
-                   "preflight Case UID matches request")
-            _check(checks, "managed.owner", request.get("owner") == "entity-pgen"
-                   and request.get("execution_domain") == "entity-pgen",
-                   "Action owner and execution domain are entity-pgen")
-            roots = request.get("write_roots") if isinstance(request.get("write_roots"), list) else []
-            covered = False
-            for root in roots:
-                if not isinstance(root, dict) or root.get("site_id") != target.get("site_id"):
-                    continue
-                try:
-                    if _within(Path(str(target.get("path"))), Path(str(root.get("path")))):
-                        covered = True
-                        break
-                except (OSError, ValueError):
-                    pass
-            _check(checks, "managed.envelope", covered,
-                   "target is inside a same-site Action write root")
+               bool(result.get("case_uid")),
+               "managed write identifies its Case")
     if not wanted:
         _check(checks, "denial.mode", mode in {"router-required", "ambiguous"},
                "denied write fails closed with a routing or ambiguity outcome")

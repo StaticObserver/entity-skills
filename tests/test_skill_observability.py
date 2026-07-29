@@ -354,15 +354,14 @@ class SkillObservabilityTest(unittest.TestCase):
             "mode": "managed-write",
             "target": {"site_id": "source-site", "path": str(target)},
             "case_uid": "case-uid",
-            "control_root": str(self.root / "controller" / "case"),
-            "action_id": "action-1",
-            "reason": "active PGen Action authorizes this locator",
+            "control_root": "",
+            "action_id": "",
+            "reason": "target is inside the Case source authority",
         })
         pgen = validate_pgen_preflight(
             run_dir,
             result_path=preflight_path,
             expected="allowed",
-            action_request_path=request_path,
         )
         self.assertEqual(pgen["status"], "pass", pgen)
 

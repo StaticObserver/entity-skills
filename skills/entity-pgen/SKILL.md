@@ -1,6 +1,6 @@
 ---
 name: entity-pgen
-description: 设计、实现、解释、评审和修改 Entity problem generator（PGen），以及配套的 TOML 配置与 docs/design.md。适用于目标明确、边界清晰的 PGen 领域工作，可直接使用，包括独立的新建或既有 PGen、初始场或粒子、边界、自定义行为、输出、归一化以及 PGen-TOML 一致性。当前拒绝在 Ledger 管理的 Case 内写入（受管写入须由 Ledger 的 record 原语登记）；Case 生命周期、跨领域工作、构建、运行、未归类的故障、Entity 核心改动以及科学分析，请路由给对应的负责技能。
+description: 设计、实现、解释、评审和修改 Entity problem generator（PGen），以及配套的 TOML 配置与 docs/design.md。适用于目标明确、边界清晰的 PGen 领域工作，可直接使用，包括独立的新建或既有 PGen、初始场或粒子、边界、自定义行为、输出、归一化以及 PGen-TOML 一致性。可直接在 Ledger 管理的 Case 源（source authority）内写入——Ledger 不干预 PGen 过程，改动收敛后由其 snapshot-source 原语重新探测落账；已登记的 build/run/data 产物根与活动 run 根仍拒绝写入。Case 生命周期、跨领域工作、构建、运行、未归类的故障、Entity 核心改动以及科学分析，请路由给对应的负责技能。
 ---
 
 # Entity PGen
@@ -19,9 +19,11 @@ description: 设计、实现、解释、评审和修改 Entity problem generator
   直接执行。不要创建过程性产物。
 - **独立写入**：仅修改 PGen 所属的产物，且目标位置确切、不在 Ledger 管理的
   Case 之内。可直接执行。
-- **受管写入**：修改已在 Ledger v5 store 中注册的源 Locator。当前一律拒绝：
-  受管写入须由 Ledger 的 record 原语登记，pgen skill 不直接落账。请将请求
-  路由给 `entity-ledger`。
+- **受管写入**：修改已注册 Case 的 source authority 之内的文件。可直接执行：
+  Ledger 不干预 PGen 过程（自由探索）；改动收敛后，由 `entity-ledger` 的
+  `entityctl snapshot-source` 重新探测并登记新的 source identity。TOML 改动
+  后、提交 run 前须重新运行 `confirm`。已登记的 identity 根（build/run/data
+  产物）与活动 run 根是 Ledger 的证据，不属于 PGen 工作面，仍然拒绝写入。
 
 每次写入前，运行：
 
@@ -34,11 +36,13 @@ python3 <entity-pgen-skill>/scripts/pgen_preflight.py \
 
 从本 `SKILL.md` 解析 `<entity-pgen-skill>`；不要假设当前工作目录就是技能目录。
 对每个预期目标运行 preflight，或对它们最窄的共同父目录运行。
-仅当其返回 `"allowed": true` 时才继续。preflight 会查询 Ledger v5 store，
-检查目标 Locator 是否落在已注册的 Case 源、identity 根目录或活动运行之下；
-它绝不从祖先目录推断受管状态。如果报告 `router-required`，则不要写入；将
-目标、检测到的 Case、请求的变更及原因返回给 `entity-ledger`。
-绝不要修改 Ledger 的控制状态。
+仅当其返回 `"allowed": true` 时才继续。preflight 会查询 Ledger store，
+区分目标 Locator 落在 Case 的 source authority（`managed-write`，允许）、
+已登记的产物根（build/run/data identity）或活动运行（`router-required`，
+拒绝），还是未注册（`standalone-write`，允许）；它绝不从祖先目录推断
+受管状态。如果报告 `router-required`，则不要写入；将目标、检测到的
+Case、请求的变更及原因返回给 `entity-ledger`。绝不要修改 Ledger 的
+控制状态。
 
 即使失败（退出码 2）也总会打印 JSON。其中 `store_present` 字段表明注册表
 是否被实际查询过：`true` 表示已确认 `standalone-write` 目标未注册；`false`
