@@ -161,8 +161,9 @@ class DashboardTest(unittest.TestCase):
         connection = self.store._connect()
         try:
             connection.execute(
-                "INSERT INTO projects(project_root,case_uid,updated_at) "
-                "VALUES(NULL,?,'2026-07-24T00:00:00Z')", (self.case_uid,))
+                "INSERT INTO projects(project_uid,slug,project_root,created_at,"
+                "updated_at) VALUES('project-null','null-root',NULL,"
+                "'2026-07-24T00:00:00Z','2026-07-24T00:00:00Z')")
             connection.commit()
         finally:
             connection.close()

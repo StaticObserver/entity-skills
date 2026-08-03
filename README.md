@@ -3,20 +3,25 @@
 一套帮助 Agent 使用 [Entity](https://github.com/entity-toolkit/entity) 完成天体物理模拟的 skills package。
 
 `skills/entity-ledger/SKILL.md` 是模拟项目的确定性记录入口。Ledger 把
-公共模型收敛为 `Project → Case → Identity → Evidence`：Agent 负责与用户对话、
-科学判断和流程编排，Ledger 提供确定性原语——读取（status/show）、生成
-（render-run/snapshot-source）、记录（record build/run-prepare/run-launch/
-run-exit/data/intent）和探测（status --live）。写入类原语自带证据探测，
-先验证、后落账，失败零写入。边界明确的只读或 standalone 领域任务仍可直接
-调用对应 owner skill。
+公共模型收敛为 `Workspace → Project → Case → Identity → Evidence`：Workspace
+是唯一工作目录（projects/ 项目树、sites/ site 档案、.ledger/ 控制器状态，
+自包含可整体迁移）；Project 是持有 source authority 的研究主题容器；Case 是
+项目内一个意图明确的研究线索；Computation Site 是计算机器上的约定文件树
+（`<site_root>/{deps,checkouts,projects}`）加 workspace 里的结构化档案。
+Agent 负责与用户对话、科学判断和流程编排，Ledger 提供确定性原语——读取
+（status/show）、生成（render-run/snapshot-source）、记录（record
+build/run-prepare/run-launch/run-exit/data/intent/relocate）和探测
+（status --live）。写入类原语自带证据探测，先验证、后落账，失败零写入。
+边界明确的只读或 standalone 领域任务仍可直接调用对应 owner skill。
 
 - `entity-pgen`：PGen、匹配 TOML 和设计记录；
 - `entity-env-build`：依赖环境与 Entity 编译；
 - `entity-nt2py`：nt2py 数据访问、绘图和导出。
 
 流程顺序由 Agent 按用户目标自行编排，不单独建立 run skill。SQLite
-`ledger.db`（schema v2）是唯一结构化 controller authority；Local 在
-进程内执行同一份 executor 逻辑，SSH 使用内容寻址的 executor 副本。
+`ledger.db`（schema v3，位于 workspace 的 `.ledger/`）是唯一结构化
+controller authority；Local 在进程内执行同一份 executor 逻辑，SSH 使用
+内容寻址的 executor 副本。
 
 ```text
 entity-skills/
@@ -37,22 +42,28 @@ entity-skills/
 └── legacy/
 ```
 
-当前架构见 `design/router-case-centric-restructure-2026-07-23.md`，迁移计划见
-`design/router-restructure-migration-2026-07-23.md`。`router-v5-*`、
-`architecture-v4.md` 和 `model-efficient-router-flow.md` 是历史设计，不代表当前
+当前架构见 `design/workspace-and-computation-site-2026-08-03.md`，开发计划见
+`design/workspace-development-plan-2026-08-03.md`。`router-case-centric-restructure-2026-07-23.md`
+及更早的 `router-v5-*`、`architecture-v4.md` 是历史设计，不代表当前
 公共入口。skill 执行观测合同见 `design/skill-observability.md`。`design/` 和
 `legacy/` 不属于 Ledger 运行时上下文。
 
 ## 公共控制状态
 
-Codex、Claude Code、Kimi Code 和普通 shell 默认共享控制机上的
-`~/.entity-ledger/ledger.db`（schema v2：Site、Case、项目绑定、identity 与
-审计事件；并发为单写文件锁）。identity、事件和 evidence reference 不写入
-客户端私有目录或源码仓库。远端不可用时仍可读取最后一次控制快照，但缓存
-evidence 不代表当前远端事实。
+Codex、Claude Code、Kimi Code 和普通 shell 默认共享控制器状态：激活
+workspace 的 `.ledger/ledger.db`（schema v3：Site、Project、Case、identity
+与审计事件；并发为单写文件锁）。控制器 home 的解析顺序为
+`--ledger-home` > `ENTITY_WORKSPACE` 环境变量 >
+`~/.entity-ledger/active-workspace` 指针 > 旧 `~/.entity-ledger`（兼容
+回退）。identity、事件和 evidence reference 不写入客户端私有目录或源码
+仓库。远端不可用时仍可读取最后一次控制快照，但缓存 evidence 不代表当前
+远端事实。
 
 ```bash
 python3 skills/entity-ledger/scripts/entityctl.py doctor
+python3 skills/entity-ledger/scripts/entityctl.py workspace init /absolute/workspace
+python3 skills/entity-ledger/scripts/entityctl.py workspace adopt /absolute/workspace
+python3 skills/entity-ledger/scripts/entityctl.py workspace where
 python3 skills/entity-ledger/scripts/entityctl.py \
   --actor-run-id <run-id> --actor-provider <provider> \
   install --source-root /path/to/entity-skills/skills
@@ -64,7 +75,7 @@ python3 skills/entity-ledger/scripts/entityctl.py export --output /absolute/expo
 
 # 读取项目状态（仪表盘：就绪板 + Run 台账 + 待决 + 建议下一步）
 python3 skills/entity-ledger/scripts/entityctl.py status \
-  --project-root /absolute/project [--live] [--json]
+  --project-root /absolute/project [--case <slug>] [--live] [--json]
 python3 skills/entity-ledger/scripts/entityctl.py show --project-root /absolute/project
 
 # 生成（零写入）

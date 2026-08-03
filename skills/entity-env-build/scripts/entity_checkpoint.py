@@ -3,7 +3,7 @@
 
 Subcommands:
   validate <requirements.json>
-  create <requirements.json> [--merge <old.json>] [--from-discovery <discovery.json>]
+  create <requirements.json> [--merge <old.json>] [--from-discovery <discovery.json>] [--from-registry <registry.json>]
   confirm <requirements.json> --checkpoint <entity-deps.local.json> --by <actor> [--confirm-defaults]
   record-install --checkpoint <entity-deps.local.json> --dep <name> ...
 """
@@ -202,6 +202,67 @@ def cmd_validate(args: argparse.Namespace) -> None:
 # ===========================================================================
 
 
+# Shared contract with the Ledger side (entityctl site deps / deps-add): a
+# registry stack matches a requirements.json only when every signature field
+# is equal.  env-build intentionally re-implements these few lines instead
+# of importing Ledger modules — the skill must stay usable on machines
+# without a workspace.
+def registry_signature(req: Dict[str, Any]) -> Dict[str, Any]:
+    environment = req.get("environment", {}) if isinstance(req.get("environment"), dict) else {}
+    entity = req.get("entity", {}) if isinstance(req.get("entity"), dict) else {}
+    compile_cfg = req.get("compile", {}) if isinstance(req.get("compile"), dict) else {}
+    return {
+        "backend": str(environment.get("backend", "")),
+        "mpi": bool(environment.get("mpi", False)),
+        "gpu_aware_mpi": bool(environment.get("gpu_aware_mpi", False)),
+        "output": bool(environment.get("output", True)),
+        "cxx_standard": str(compile_cfg.get("cxx_standard", "")),
+        "dependency_profile": str(entity.get("dependency_profile", "")),
+    }
+
+
+def select_registry_stack(registry: Any, req: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """First verified stack whose signature matches the requirements; None
+    on a miss (the caller then falls back to live probing)."""
+    stacks = registry.get("stacks") if isinstance(registry, dict) else registry
+    if not isinstance(stacks, list):
+        return None
+    wanted = registry_signature(req)
+    for stack in stacks:
+        if not isinstance(stack, dict):
+            continue
+        if stack.get("status") != "verified":
+            continue
+        if stack.get("signature") == wanted:
+            return stack
+    return None
+
+
+def discovery_from_stack(stack: Dict[str, Any]) -> Dict[str, Any]:
+    """Convert a registry stack's packages into discovery entries.  The
+    compatibility check re-verifies them exactly like probed entries, so a
+    stale registry degrades to a normal compatibility failure, never to a
+    silently weakened gate."""
+    selected: Dict[str, Any] = {}
+    for package in stack.get("packages") or []:
+        if not isinstance(package, dict) or not package.get("name"):
+            continue
+        entry: Dict[str, Any] = {
+            "name": package["name"],
+            "provider": "site-stack",
+            "validation": {
+                "installed": True,
+                "source": "site-registry",
+                "stack_id": stack.get("stack_id", ""),
+            },
+        }
+        for key in ("version", "prefix", "bin", "include", "lib", "cmake_config"):
+            if package.get(key):
+                entry[key] = package[key]
+        selected[package["name"]] = entry
+    return selected
+
+
 def detect_target() -> Dict[str, Any]:
     return {
         "hostname": socket.gethostname(),
@@ -307,12 +368,30 @@ def cmd_create(args: argparse.Namespace) -> None:
     if args.from_discovery:
         discovery = load_json(args.from_discovery)
 
+    registry_stack = None
+    if args.from_registry:
+        registry_stack = select_registry_stack(
+            load_json(args.from_registry), req)
+        if registry_stack:
+            # Registry entries win per dependency; probed candidates only
+            # fill the gaps (临场探测补缺).
+            combined = discovery_from_stack(registry_stack)
+            for dep, entry in (discovery or {}).items():
+                combined.setdefault(dep, entry)
+            discovery = combined
+
     merge_from = None
     if args.merge:
         if args.merge.exists():
             merge_from = load_json(args.merge)
 
     checkpoint = build_checkpoint(req, discovery, merge_from)
+    if registry_stack:
+        checkpoint["stack_id"] = registry_stack["stack_id"]
+        checkpoint["status"].setdefault("reuse_notes", []).append(
+            "resolved from site registry stack %s; compatibility check still "
+            "required before build" % registry_stack["stack_id"]
+        )
 
     if args.output:
         output_path = args.output
@@ -331,9 +410,12 @@ def cmd_create(args: argparse.Namespace) -> None:
     )
 
     if args.json:
-        protocol_ok("checkpoint.create", output=str(output_path.resolve()))
+        protocol_ok("checkpoint.create", output=str(output_path.resolve()),
+                    registry_stack=(registry_stack or {}).get("stack_id", ""))
     else:
         print(f"entity-deps.local.json written to {output_path.resolve()}")
+        if registry_stack:
+            print(f"resolved from site registry stack {registry_stack['stack_id']}")
 
 
 # ===========================================================================
@@ -517,6 +599,11 @@ def main() -> None:
     p_cre.add_argument("requirements_json", type=Path, help="Path to requirements.json")
     p_cre.add_argument("--from-discovery", type=Path, dest="from_discovery",
                        help="JSON file with dependency candidate entries")
+    p_cre.add_argument("--from-registry", type=Path, dest="from_registry",
+                       help="Site deps registry JSON exported by "
+                            "`entityctl site deps <site> --json`; a verified "
+                            "stack whose signature matches the requirements "
+                            "prefills selected, probed candidates fill the gaps")
     p_cre.add_argument("--merge", type=Path, dest="merge",
                        help="Existing entity-deps.local.json to merge selected/decisions from")
     p_cre.add_argument("--output", type=Path,

@@ -21,7 +21,7 @@ from entity_ledger_common import (
     site_file_sha256,
     source_manifest,
 )
-from entity_ledger_store import StoreError, canonical_hash
+from entity_ledger_store import CaseResolutionError, canonical_hash
 
 
 class PlanError(LedgerError):
@@ -259,8 +259,64 @@ def _operation_id(seed):
     return "op-" + canonical_hash(seed).split(":", 1)[1][:16]
 
 
+def execution_roots(store, profile, case):
+    """Execution roots for build/run/staging derivation.
+
+    Profiles declaring ``site_root`` use the Computation Site tree
+    ``<site_root>/projects/<project-slug>/{builds,runs,staging}`` and are
+    marked ``site-tree``; legacy profiles (no site_root) keep their
+    independent roots and are marked ``legacy-roots``.  Returns
+    ``(roots, layout)``; every value may be None for the caller's missing-
+    root check.  Old Locators recorded under either layout stay readable —
+    this only decides where *new* resources land."""
+    site_root = profile.get("site_root", "")
+    if site_root:
+        slug = ""
+        if case.get("project_uid"):
+            try:
+                slug = store.get_project(case["project_uid"])["slug"]
+            except StoreError:
+                slug = ""
+        if not slug:
+            slug = os.path.basename(case.get("project_root") or "") \
+                or case["case_uid"]
+        base = os.path.join(site_root, "projects", slug)
+        return ({
+            "build_root": os.path.join(base, "builds"),
+            "run_root": os.path.join(base, "runs"),
+            "staging_root": os.path.join(base, "staging"),
+        }, "site-tree")
+    roots = profile.get("roots", {})
+    return ({
+        "build_root": roots.get("build_root"),
+        "run_root": roots.get("run_root"),
+        "staging_root": roots.get("staging_root"),
+    }, "legacy-roots")
+
+
+def merged_execution_profile(store, profile, case):
+    """A profile copy whose roots are filled from ``execution_roots`` so all
+    downstream derivation (build_root checks, ExecutorClient staging,
+    inventory staging) works unchanged under either layout."""
+    roots, layout = execution_roots(store, profile, case)
+    merged = dict(profile.get("roots", {}))
+    for key, value in roots.items():
+        if value:
+            merged[key] = value
+    profile = dict(profile)
+    profile["roots"] = merged
+    return profile, layout
+
+
+def case_path_segment(layout, case):
+    """Path segment below runs/staging: the human-readable case slug in the
+    site tree, the stable case_uid under legacy roots."""
+    return case["case_id"] if layout == "site-tree" else case["case_uid"]
+
+
 def derive_run_paths(case_uid, site_id, roots, scheduler_kind, source_id,
-                     input_sha256, executable, build_id, compute):
+                     input_sha256, executable, build_id, compute,
+                     case_segment=None):
     """Derive the content-addressed run identity and every path a run
     Operation touches from the run seed and the Site roots."""
     seed = {
@@ -271,8 +327,9 @@ def derive_run_paths(case_uid, site_id, roots, scheduler_kind, source_id,
     }
     run_id = "run-" + canonical_hash(seed).split(":", 1)[1][:16]
     operation_id = _operation_id(seed)
-    run_root = os.path.join(roots["run_root"], case_uid, run_id)
-    staging_root = os.path.join(roots["staging_root"], case_uid, operation_id)
+    segment = case_segment or case_uid
+    run_root = os.path.join(roots["run_root"], segment, run_id)
+    staging_root = os.path.join(roots["staging_root"], segment, operation_id)
     return {
         "seed": seed,
         "run_id": run_id,
@@ -330,10 +387,15 @@ def _simulation_confirmation(input_path):
     return record
 
 
-def _resolve_case(store, project_root, goal):
+def _resolve_case(store, project_root, goal, case_slug=None):
     try:
-        return store.resolve_project(project_root), False
-    except StoreError:
+        return store.resolve_project(project_root, case_slug), False
+    except CaseResolutionError as exc:
+        # Only a missing Project (or a Project without any case) auto-creates
+        # on first run; an ambiguous or unknown --case selection is a user
+        # decision, never a silent new Case.
+        if exc.reason not in ("no_project", "no_cases"):
+            raise
         source_site = _source_site(store, project_root)
         case_uid = "case-" + canonical_hash({"project_root": project_root}).split(":", 1)[1][:16]
         case = {

@@ -2,6 +2,11 @@
 > last_updated: <YYYY-MM-DD>
 
 <!--
+  【deprecated】site-notes 已被 workspace 的 sites/<site>.yaml 档案取代:
+  散文进档案的 notes 节,结构化信息(transport/scheduler/site_root/deps
+  注册表)进对应节;`entityctl site import-notes` 可把旧 notes 一次性
+  迁入。本模板仅为旧流程参考保留,新站点请直接维护 sites/<site>.yaml。
+
   ~/.entity-env-build/site-notes/<hostname>.md 的模板
   由 AI agent 在运行时生成——不随技能源码发布。
 

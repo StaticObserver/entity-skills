@@ -36,6 +36,9 @@ python3 <entity-pgen-skill>/scripts/pgen_preflight.py \
 
 从本 `SKILL.md` 解析 `<entity-pgen-skill>`；不要假设当前工作目录就是技能目录。
 对每个预期目标运行 preflight，或对它们最窄的共同父目录运行。
+`--ledger-home` 可省略：省略时控制器位置按 workspace 解析顺序确定
+（`ENTITY_WORKSPACE` 环境变量 > `~/.entity-ledger/active-workspace` 指针
+> 旧 `~/.entity-ledger` 兼容回退），指向 workspace 的 `.ledger/`。
 仅当其返回 `"allowed": true` 时才继续。preflight 会查询 Ledger store，
 区分目标 Locator 落在 Case 的 source authority（`managed-write`，允许）、
 已登记的产物根（build/run/data identity）或活动运行（`router-required`，

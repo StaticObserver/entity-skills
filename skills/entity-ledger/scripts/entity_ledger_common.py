@@ -71,6 +71,34 @@ def ledger_home(value=None):
     return home
 
 
+def active_workspace_pointer():
+    """Path of the active-workspace pointer file.  Reading it has no side
+    effects (in particular it never triggers the legacy home migration)."""
+    return os.path.join(absolute("~/.entity-ledger"), "active-workspace")
+
+
+def read_active_workspace():
+    """Return the adopted workspace path from the active-workspace pointer,
+    or None when no pointer exists.  A corrupt pointer fails loudly instead
+    of silently falling back to the legacy home."""
+    path = active_workspace_pointer()
+    if not os.path.isfile(path):
+        return None
+    record = load_json(path, "active-workspace pointer")
+    workspace = str(record.get("workspace", "")).strip()
+    if not workspace:
+        raise LedgerError(
+            "active-workspace pointer has no workspace path: %s" % path)
+    return absolute(workspace)
+
+
+def write_active_workspace(workspace):
+    """Write the active-workspace pointer atomically; returns the record."""
+    record = {"workspace": absolute(workspace), "adopted_at": now_utc()}
+    atomic_write_json(active_workspace_pointer(), record)
+    return record
+
+
 def actor_identity(values=None):
     """Return a stable, non-secret Agent run identity for state provenance.
 
@@ -213,6 +241,16 @@ def locator_within(locator, root):
         return False
 
 
+def validate_slug(value, label="slug"):
+    """Directory-name slug: readable, filesystem-safe, no separators."""
+    text = str(value or "").strip()
+    if not text or any(
+            char not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_"
+            for char in text):
+        raise LedgerError("invalid %s: %s" % (label, value))
+    return text
+
+
 def validate_site_profile(profile):
     if profile.get("schema_version") != SITE_SCHEMA_VERSION:
         raise LedgerError("unsupported site profile schema")
@@ -233,6 +271,9 @@ def validate_site_profile(profile):
     scheduler = profile.get("scheduler", {})
     if scheduler.get("kind", "none") not in {"none", "slurm", "pbs", "custom"}:
         raise LedgerError("unsupported scheduler kind")
+    site_root = profile.get("site_root")
+    if site_root and not str(site_root).startswith("/"):
+        raise LedgerError("site_root must be absolute")
     for name, path in profile.get("roots", {}).items():
         if path and not str(path).startswith("/"):
             raise LedgerError("site root %s must be absolute" % name)

@@ -32,7 +32,10 @@ description: 使用 nt2py 读取、检查、可视化和导出 Entity 模拟输�
 2. 在 `.values`、`.load()`、`.compute()` 或绘图之前先选取场和能谱。
    在 `ParticleDataset.load()` 之前先选取粒子时间/物种和所需列。
 3. 将 Entity 数据根目录视为只读。绘图、帧、notebook、脚本和导出
-   一律写到别处。
+   一律写到别处。数据的权威位置是 run 目录本身：新布局
+   `<site_root>/projects/<project>/runs/<case>/<run_id>`（旧布局
+   `<run_root>/<case_uid>/<run_id>`）;`record data` 的盘点 manifest
+   引用 run 目录内路径，取回的子集进 workspace 的 project 区。
 4. 将 API 事实与物理解释分开。没有必要的模拟上下文时，不要把
    某个视觉模式或变量名提升为科学结论。
 5. 创建产物时，运行相关代码并确认所请求的输出确实存在。用户没有

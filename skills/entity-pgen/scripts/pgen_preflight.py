@@ -42,9 +42,12 @@ from entity_ledger_common import (  # noqa: E402
     absolute,
     locator_within,
     parse_locator,
-    ledger_home,
 )
-from entity_ledger_store import OperationStore, StoreError  # noqa: E402
+from entity_ledger_store import (  # noqa: E402
+    OperationStore,
+    StoreError,
+    resolve_ledger_home,
+)
 
 
 # --- Simulation parameter card / confirmation record -----------------------
@@ -445,7 +448,7 @@ def find_cases(home, target):
 
 
 def evaluate(args):
-    home = ledger_home(args.ledger_home)
+    home, unused_resolution = resolve_ledger_home(args.ledger_home)
     target = target_locator(args.target, args.site_id, home)
     matches, store_present = find_cases(home, target)
     if len(matches) > 1:

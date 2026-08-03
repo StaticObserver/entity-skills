@@ -129,6 +129,39 @@ override 记录用户决策，可以把一个已知检查降级为警告。它�
 的路径、源码/构建站点不匹配、不受支持的 schema/版本，或缺失的可执行
 文件。
 
+## site deps 注册表与 stack_id
+
+checkpoint 可带顶层 `stack_id`：它引用该 checkpoint 消费（或产生）的
+site deps 栈。注册表由 Ledger 侧维护（workspace `sites/<site>.yaml` 的
+deps 节），通过 `entityctl site deps <site> --json` 导出：
+
+```json
+{
+  "site_id": "cluster-a",
+  "stacks": [
+    {
+      "stack_id": "gcc12.3.0-kokkos5.1.0-1a2b3c4d",
+      "status": "verified",
+      "signature": {"backend": "cuda", "mpi": false, "gpu_aware_mpi": false,
+                    "output": true, "cxx_standard": "20",
+                    "dependency_profile": "modern"},
+      "packages": [{"name": "kokkos", "version": "5.1.0",
+                    "prefix": "/site/deps/<stack_id>/kokkos", "provider": "module"}],
+      "recipe": {"providers": {"kokkos": "module"}, "parameter_digest": "sha256:..."},
+      "env_sh": "/site/deps/<stack_id>/env.sh"
+    }
+  ]
+}
+```
+
+`entity_checkpoint.py create --from-registry <registry.json>` 时，签名
+与当前 requirements 完全匹配且 `status=verified` 的第一个栈预填
+`selected`（provider `site-stack`)，并把 `stack_id` 写进 checkpoint；
+未覆盖的依赖由 `--from-discovery`/临场探测补缺。注册表条目随后与探测
+条目一样接受兼容性检查。新栈在 confirm + compatibility `pass` 后用
+`entityctl site deps-add <site> --from-checkpoint <entity-deps.local.json>`
+回写注册表（证据不符零写入）。
+
 ## 派生产物
 
 - `env.sh` 从 checkpoint 导出依赖/工具链路径，包括

@@ -282,8 +282,8 @@ def _slurm_reconcile_job(profile, scheduler, job_id, live_state, observed_at):
     return divergences, remote_calls
 
 
-def status_for_project(store, project_root, live=False):
-    case = store.resolve_project(project_root)
+def status_for_project(store, project_root, live=False, case_slug=None):
+    case = store.resolve_project(project_root, case_slug)
     current = case["current"]
     run_id = current.get("run_id", "")
     run_identity = find_identity(
@@ -292,6 +292,8 @@ def status_for_project(store, project_root, live=False):
         "schema_version": 1, "kind": "entity-ledger.status", "ok": True,
         "state_mutated": False, "remote_calls": 0,
         "project_root": case.get("project_root"), "case_uid": case["case_uid"],
+        "case_id": case.get("case_id", ""),
+        "project_uid": case.get("project_uid"),
         "current": current, "run": run_identity, "live": None, "divergences": [],
     }
     if not live or not run_identity:

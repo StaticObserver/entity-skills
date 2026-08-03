@@ -5,12 +5,19 @@
 
 ## 控制器
 
-`$ENTITY_LEDGER_HOME/ledger.db`（默认 `~/.entity-ledger/ledger.db`）是
-唯一的结构化权威。schema v2 在 SQLite 中存储 Site、Case、项目绑定、
-identity、紧凑证据和事件（events 为被动审计）。大型
+`ledger.db` 是唯一的结构化权威。schema v3 在 SQLite 中存储 Site、
+Project（project_uid + slug + root,1:N Case）、Case（带 project_uid
+外键）、identity、紧凑证据和事件（events 为被动审计）。大型
 产物和日志保留在其 owner Site。并发控制是 `BEGIN IMMEDIATE`
 文件锁；旧 plan/apply 协议的 Operation/Step 记录已随 v1→v2 迁移
 归档到 `<ledger_home>/archive/`。
+
+控制器 home（ledger.db 所在目录）的解析顺序：显式参数
+（`--ledger-home` 或 `ENTITY_LEDGER_HOME`）> `ENTITY_WORKSPACE`
+环境变量（`<workspace>/.ledger`）>
+`~/.entity-ledger/active-workspace` 指针 > 旧 `~/.entity-ledger`
+（兼容回退，stderr 打一次 deprecation 警告）。snapshots 目录随 db
+解析到同一 home 下。
 
 在不改变控制器状态的情况下导出：
 
@@ -90,21 +97,29 @@ launch 的 effect identity 因后端而异。Slurm 记录
 
 ## Site profile
 
-Site 直接注册进 store：
+site 信息的权威是 workspace 的 `sites/<site>.yaml` 档案（transport、
+scheduler、machine、site_root、projects、deps 注册表、notes）;
+`entityctl site sync` 把档案刷新进 store,`site list/show` 给出
+db + 档案的合并视图。旧流程的 `site add` 仍可直接写 db（在合并视图中
+标注 db-only)。
 
 ```bash
-python3 scripts/entityctl.py site add --profile /absolute/site-profile.json
+python3 scripts/entityctl.py site sync
 python3 scripts/entityctl.py site list
 ```
 
-必需的运行根目录是 `build_root`、`run_root` 和 `staging_root`；run
+profile 带 `site_root` 时，新 build/run/staging 落在
+`<site_root>/projects/<project>/{builds,runs,staging}/<case>/<id>`
+（layout `site-tree`)；没有 `site_root` 的旧 profile 需要
+`build_root`、`run_root` 和 `staging_root` 三个独立根（layout
+`legacy-roots`)，旧 Locator 保持可引用。run
 Site 还要声明 transport 和 scheduler（`slurm`，或对无
 scheduler 的 Site 使用 `none`）。策略可以提供 `default_cpus_per_gpu`、
 `default_partition`、`default_qos`、`default_submit_user` 和
 `max_cpu_per_gpu`。direct 后端忽略 `default_partition` 和
 `default_qos`（它们归一化为空字符串），并将提交用户
 默认为当前用户。密钥和集群修复命令绝不应出现在
-profile 中。
+profile 或档案中。
 
 ## live status 探测
 

@@ -10,6 +10,66 @@ compatibility contracts and are not the product version.
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-08-03
+
+Workspace 与 Computation Site 顶层模型落地（设计：
+`design/workspace-and-computation-site-2026-08-03.md`，开发计划：
+`design/workspace-development-plan-2026-08-03.md`）。公开模型变为
+`Workspace → Project → Case → Identity → Evidence`：Workspace 是唯一
+工作目录（projects/ 项目树、sites/ site 档案、.ledger/ 控制器状态，
+自包含、可整体迁移后 `workspace adopt` 继续）；Project 是持有 source
+authority 的容器；Case 拆为项目内一个意图明确的研究线索（Project
+1:N Case）；Computation Site 是计算机器上的约定文件树
+（`<site_root>/{deps,checkouts,projects}`）加 workspace 里的权威档案。
+store schema 升级为 v3（projects 变为 project 实体，cases 带
+project_uid 外键；`store migrate` 链式 v1→v2→v3，旧 root→case 1:1
+绑定升级为每 project 一个默认 case）。
+
+### Added
+
+- Workspace 容器：`workspace init/adopt/where`；控制器 home 解析顺序
+  `--ledger-home` > `ENTITY_WORKSPACE` > `~/.entity-ledger/active-workspace`
+  指针 > 旧 `~/.entity-ledger`（兼容回退，打一次 deprecation 警告），
+  snapshots 随 db 解析。workspace.yaml/project.yaml/sites/*.yaml 统一
+  使用标准库实现的 flat+flow YAML 子集（无 PyYAML 依赖）。
+- Project/Case 拆分：`project init`、`case init`（intent.md 与
+  decisions.json 骨架）；`--case <slug>` 寻址贯穿
+  status/show/render-run/snapshot-source/record/submission，单 case
+  项目自动解析，多 case 省略时报错并列出可选 case。
+- `record intent` 以 db 为准同步 case 目录的 intent.md，手工改动在
+  dashboard 待决中标注漂移。
+- Site 档案与文件树：`sites/<site>.yaml` 成为 site 信息权威（transport/
+  scheduler/machine/site_root/projects/deps/notes）；`site sync`
+  （档案 → db，db-only 只报告不删）、`site list/show` 合并视图、
+  `site init`（目标机建 `<site_root>` 骨架 + `entity-site.yaml` 标记，
+  幂等）、`site discover` 扩展（machine 节落档案、认领既有标记）。
+- 新树路径推导：profile 带 `site_root` 时新 build/run/staging 落在
+  `<site_root>/projects/<project>/{builds,runs,staging}/<case>/<id>`
+  （layout `site-tree`）；无 `site_root` 的旧 profile 保持独立 roots
+  推导并标注 `legacy-roots`，旧 Locator 保持可引用。
+- deps 注册表：`site deps <site>`（人读 + `--json`）与
+  `site deps-add --from-checkpoint`（confirm + compatibility pass +
+  env.sh 证据齐备才落账，零写入否则）；env-build
+  `entity_checkpoint.py create --from-registry` 按签名匹配 verified
+  栈预填 selected（临场探测补缺，兼容性门禁不变）；`record build`
+  的 payload 与 identity 带 `stack_id` 并在栈未登记时提示 deps-add。
+- 迁移原语（agent 驱动迁移）：`workspace import`（本地收编 projects/
+  ledger.db+snapshots/site-notes/旧绑定，dry-run 默认、冲突只报告不
+  覆盖）、`site plan-migration`（只读盘点旧树 → 新树计划，在途 run
+  标记 skip）、`record relocate`（移动后重新探测证据并更新 Locator，
+  在途 run 拒绝，证据不符零写入，写 record.relocate 审计事件）。
+- `references/migration-guide.md` 迁移指南。
+
+### Changed
+
+- `references/workspace-layout.md` 重写为 Workspace + Computation Site
+  布局契约；四个 SKILL.md 与 README 同步新模型；env-build 文档同步
+  deps 注册表查找顺序与回写流程。
+- `pgen_preflight.py` 的控制器定位改走统一的 `resolve_ledger_home`
+  （workspace 感知，`--ledger-home` 显式入口不变）。
+- `site-notes` 散文由 `site import-notes` 迁入档案 notes 节；
+  `references/site-notes-template.md` 标注 deprecated。
+
 ## [0.6.1] - 2026-07-29
 
 ### Fixed

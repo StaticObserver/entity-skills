@@ -87,8 +87,30 @@ python3 scripts/entity_checkpoint.py validate /artifacts/requirements.json
 
 ### 2. 复用或构建依赖 checkpoint
 
-先读取 `~/.entity-env-build/site-notes/<site_id>.md` 下的站点笔记，然后
-检查确切的 `artifacts_root/entity-deps.local.json`（如果存在）。只有当
+解析 requirements.json 的依赖时按以下查找顺序，命中即用、逐层补缺：
+
+1. **Site deps 注册表**(workspace 的 `sites/<site>.yaml` 权威):在控制
+   器上导出注册表并传给 create——
+   ```bash
+   entityctl site deps <site_id> --json > /tmp/site-deps.json
+   python3 scripts/entity_checkpoint.py create /artifacts/requirements.json \
+     --from-registry /tmp/site-deps.json \
+     --output /artifacts/entity-deps.local.json
+   ```
+   签名（backend/mpi/gpu_aware_mpi/output/cxx_standard/
+   dependency_profile）与当前 requirements 完全匹配且
+   `status=verified` 的栈直接预填 `selected`(provider
+   `site-stack`)，其 `env.sh` 位于站点 `deps/<stack_id>/env.sh`。
+   注册表命中不豁免任何门禁：compatibility 必须仍为 `pass` 才能编译。
+2. **`entity-site.yaml` 标记**：在没有 workspace 的机器上，找
+   `<site_root>/entity-site.yaml`（agent 找到它即知道 roots 清单）,
+   再读 `deps/<stack_id>/stack.yaml` 了解既有栈；命中的栈可整理成
+   registry JSON 走 `--from-registry`。
+3. **临场探测补缺**：注册表未覆盖的依赖仍按原流程搜索 modules、系
+   统软件包、已有前缀与用户管理的安装，用 `--from-discovery` 或
+   `record-install` 补齐缺口。
+
+然后检查确切的 `artifacts_root/entity-deps.local.json`（如果存在）。只有当
 其内嵌的 requirements 与所有解析后的站点路径都匹配时才复用它。
 
 ```bash
@@ -97,10 +119,8 @@ python3 scripts/entity_checkpoint.py create /artifacts/requirements.json \
   --output /artifacts/entity-deps.local.json
 ```
 
-在提议源码构建之前，先搜索 modules、系统软件包、已有前缀以及用户管理
-的安装。记录选定的编译器/依赖路径、版本、提供方、签名、验证结果以及
-必要的站点前置命令。机器特有的修复属于站点笔记/checkpoint 数据，不
-属于本技能。
+记录选定的编译器/依赖路径、版本、提供方、签名、验证结果以及必要的站
+点前置命令。机器特有的修复属于站点笔记/checkpoint 数据，不属于本技能。
 
 如果源码构建已获批准：
 
@@ -113,6 +133,19 @@ bash /deps/scripts/build-<dependency>.sh
 前缀与源码下载保留在 `deps_root` 下；临时依赖构建与日志保留在
 `artifacts_root` 下。按选定的依赖图确定构建顺序；ADIOS2 等待它所消费
 的 Kokkos/HDF5 前缀。
+
+**新栈回写（先验证后落账）**：一个新依赖栈走完 confirm 且兼容性
+为 `pass` 后，把它登记进 site 注册表，下次解析即可直接命中：
+
+```bash
+# 在控制器上执行;env.sh 必须先存在于 <site_root>/deps/<stack_id>/env.sh
+entityctl site deps-add <site_id> --from-checkpoint /artifacts/entity-deps.local.json
+```
+
+deps-add 会把栈条目（stack_id、signature、packages、recipe、
+status=verified）写进 `sites/<site>.yaml` 的 deps 注册表，并在站点上生
+成 `deps/<stack_id>/stack.yaml`;证据不符（checkpoint 未验证、env.sh
+缺失）时零写入。
 
 ### 3. 兼容性与环境
 

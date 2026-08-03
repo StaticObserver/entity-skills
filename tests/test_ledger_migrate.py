@@ -16,7 +16,7 @@ ENTITYCTL = os.path.join(SCRIPTS, "entityctl.py")
 if SCRIPTS not in sys.path:
     sys.path.insert(0, SCRIPTS)
 
-from entity_ledger_store import OperationStore, STORE_SCHEMA_VERSION
+from entity_ledger_store import OperationStore, SCHEMA_V2, STORE_SCHEMA_VERSION
 from entity_ledger_common import LedgerError, ledger_home
 
 from unittest import mock
@@ -212,6 +212,101 @@ class StoreMigrateTest(unittest.TestCase):
         stdout, unused = process.communicate()
         self.assertEqual(process.returncode, 2)
         self.assertIn("newer than this bundle supports", stdout)
+
+
+class V2ToV3MigrateTest(unittest.TestCase):
+    """A v2 store (root->case 1:1 bindings) migrates to v3: every binding
+    becomes a Project entity with its case attached."""
+
+    def setUp(self):
+        self.temp = tempfile.mkdtemp(prefix="entity-ledger-migrate-v3-")
+        self.home = os.path.join(self.temp, "controller")
+        os.makedirs(self.home)
+        self.database = os.path.join(self.home, "ledger.db")
+        self.project = os.path.join(self.temp, "project")
+        self._build_v2_store()
+
+    def tearDown(self):
+        shutil.rmtree(self.temp)
+
+    def _build_v2_store(self):
+        connection = sqlite3.connect(self.database)
+        try:
+            connection.executescript(SCHEMA_V2)
+            connection.execute(
+                "INSERT INTO meta(key,value) VALUES('schema_version','2')")
+            connection.execute(
+                "INSERT INTO sites(site_id,profile_json,updated_at) VALUES(?,?,?)",
+                ("local", json.dumps({"site_id": "local"}), "2026-08-01T00:00:00Z"))
+            connection.execute(
+                """INSERT INTO cases(case_uid,case_id,project_root,source_json,
+                       current_json,legacy_json,created_at,updated_at)
+                   VALUES(?,?,?,?,?,?,?,?)""",
+                ("case-1", "demo", self.project, "{}", '{"run_id": "run-1"}',
+                 "{}", "2026-08-01T00:00:00Z", "2026-08-02T00:00:00Z"))
+            connection.execute(
+                "INSERT INTO projects(project_root,case_uid,updated_at) VALUES(?,?,?)",
+                (self.project, "case-1", "2026-08-02T00:00:00Z"))
+            connection.execute(
+                """INSERT INTO identities(case_uid,dimension,identity_id,payload_json,
+                       is_current,created_at) VALUES(?,?,?,?,?,?)""",
+                ("case-1", "run", "run-1", '{"id": "run-1", "status": "submitted"}',
+                 1, "2026-08-02T00:00:00Z"))
+            connection.execute(
+                """INSERT INTO events(case_uid,operation_id,event_type,payload_json,
+                       actor_json,created_at) VALUES(?,?,?,?,?,?)""",
+                ("case-1", None, "record.intent", '{"text": "x"}', "{}",
+                 "2026-08-02T00:00:00Z"))
+            connection.commit()
+        finally:
+            connection.close()
+
+    def cli(self, *args):
+        process = subprocess.Popen(
+            [sys.executable, ENTITYCTL, "--ledger-home", self.home] + list(args),
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            universal_newlines=True)
+        stdout, stderr = process.communicate()
+        self.assertTrue(stdout.strip(), stderr)
+        return process.returncode, json.loads(stdout)
+
+    def test_v2_store_migrates_to_v3_project_entities(self):
+        # the v3 runtime refuses the v2 store before migration
+        with self.assertRaises(Exception) as caught:
+            OperationStore(self.home, create=False)._initialize()
+        self.assertIn("unsupported Ledger store schema", str(caught.exception))
+        code, payload = self.cli("store", "migrate")
+        self.assertEqual(code, 0, payload)
+        self.assertTrue(payload["state_mutated"])
+        self.assertEqual(payload["store_schema_version"], STORE_SCHEMA_VERSION)
+        self.assertEqual(payload["projects_created"], 1)
+        self.assertEqual(payload["cases_linked"], 1)
+        self.assertTrue(os.path.isfile(payload["database_backup"]))
+        # the binding became a Project entity; the case is attached to it
+        store = OperationStore(self.home, create=False)
+        projects = store.find_projects()
+        self.assertEqual(len(projects), 1)
+        project = projects[0]
+        self.assertTrue(project["project_uid"].startswith("project-"))
+        self.assertEqual(project["slug"], os.path.basename(self.project))
+        self.assertEqual(project["project_root"], self.project)
+        case = store.get_case("case-1")
+        self.assertEqual(case["project_uid"], project["project_uid"])
+        self.assertEqual(case["identities"]["run"]["current_id"], "run-1")
+        # the path-covering lookup semantics are unchanged
+        resolved = store.resolve_project(self.project)
+        self.assertEqual(resolved["case_uid"], "case-1")
+        exported = store.export()
+        self.assertEqual(exported["schema_version"], STORE_SCHEMA_VERSION)
+        self.assertEqual(len(exported["cases"]), 1)
+        self.assertEqual(len(exported["projects"]), 1)
+        self.assertEqual([event["event_type"] for event in exported["events"]],
+                         ["record.intent"])
+        # re-running the migration is an idempotent no-op
+        code, again = self.cli("store", "migrate")
+        self.assertEqual(code, 0, again)
+        self.assertFalse(again["state_mutated"])
+        self.assertIn("already at the current schema", again["message"])
 
 
 class LegacyStorageMigrationTest(unittest.TestCase):

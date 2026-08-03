@@ -14,6 +14,8 @@ import os
 
 from entity_ledger_common import find_identity, load_simulation_confirmation
 from entity_ledger_facts import _git_revision
+from entity_ledger_store import StoreError
+from entity_ledger_workspace import workspace_for_ledger_home
 
 
 BOARD_ORDER = ["source", "pgen", "build", "run", "data", "analysis"]
@@ -165,10 +167,37 @@ def derive_next_steps(board, run_id):
     return steps[:4]
 
 
-def build_dashboard(store, project_root, status=None):
+def _intent_drift(store, case, db_intent):
+    """Detect a hand-edited intent.md that diverged from the db intent (the
+    db is the authority).  Returns the drift note or ""."""
+    if not db_intent:
+        return ""
+    workspace = workspace_for_ledger_home(store.home)
+    if not workspace or not case.get("project_uid"):
+        return ""
+    try:
+        project = store.get_project(case["project_uid"])
+    except StoreError:
+        return ""
+    path = os.path.join(
+        workspace, "projects", project["slug"], "cases",
+        case["case_id"], "intent.md")
+    if not os.path.isfile(path):
+        return ""
+    try:
+        with open(path, "r") as handle:
+            text = handle.read().strip()
+    except (IOError, OSError):
+        return ""
+    if text == db_intent:
+        return ""
+    return "intent.md 与 db 记录不一致（以 db 为准）: %s" % path
+
+
+def build_dashboard(store, project_root, status=None, case_slug=None):
     """Assemble the dashboard from controller-local facts.  ``status`` is an
     optional status_for_project result supplying live probes and divergences."""
-    case = store.resolve_project(project_root)
+    case = store.resolve_project(project_root, case_slug)
     current = case.get("current", {})
     live = (status or {}).get("live")
     alerts = []
@@ -199,13 +228,21 @@ def build_dashboard(store, project_root, status=None):
     if intent_record.get("recorded_at") and intent_record.get("text"):
         intent += "（记录于 %s）" % intent_record["recorded_at"]
     pending = list(alerts)
+    drift = _intent_drift(store, case, intent_record.get("text", ""))
+    if drift:
+        pending.append(drift)
     if board["pgen"]["state"] in {"unconfirmed", "partial"}:
         pending.append("模拟参数未确认：%s" % board["pgen"]["detail"])
+    project = None
+    if case.get("project_uid"):
+        project = store.get_project(case["project_uid"])
     return {
         "schema_version": 1, "kind": "entity-ledger.dashboard",
         "state_mutated": False,
         "remote_calls": (status or {}).get("remote_calls", 0),
         "case_uid": case["case_uid"], "case_id": case.get("case_id", ""),
+        "project_uid": case.get("project_uid"),
+        "project": project,
         "project_root": case.get("project_root") or project_root,
         "updated_at": case.get("updated_at", ""),
         "intent": intent, "board": board, "runs": ledger,
@@ -215,13 +252,20 @@ def build_dashboard(store, project_root, status=None):
     }
 
 
+def _project_line(dashboard):
+    project = dashboard.get("project")
+    if project:
+        return "项目  %s（%s）" % (project["slug"], dashboard["project_root"])
+    return "项目  %s" % dashboard["project_root"]
+
+
 def render_text(dashboard):
     """Compact human-readable rendering; normal output stays well under 4 KiB."""
     lines = [
         "Case %s（%s）  更新于 %s" % (dashboard["case_id"],
                                       dashboard["case_uid"],
                                       dashboard["updated_at"] or "?"),
-        "项目  %s" % dashboard["project_root"],
+        _project_line(dashboard),
         "目标  %s" % dashboard["intent"],
         "",
         "就绪板",

@@ -22,7 +22,7 @@ from entity_ledger_operation import status_for_project
 from entity_ledger_record import record_run_launch, record_run_prepare
 from entity_ledger_common import atomic_write_json
 import entity_ledger_common
-from entity_ledger_store import OperationStore
+from entity_ledger_store import OperationStore, STORE_SCHEMA_VERSION
 
 
 class LedgerV5Test(unittest.TestCase):
@@ -497,7 +497,8 @@ print('|'.join([r['job_id'], r['job_name'], r['user'], r['run_root'],
         version_file = os.path.join(ROOT, "skills", "entity-ledger", "VERSION")
         with open(version_file, "r") as handle:
             self.assertEqual(payload["runtime_bundle"]["version"], handle.read().strip())
-        self.assertEqual(payload["controller"]["store_schema_version"], 2)
+        self.assertEqual(payload["controller"]["store_schema_version"],
+                         STORE_SCHEMA_VERSION)
         self.assertEqual(payload["failures"], [])
 
     def test_doctor_fails_on_client_bundle_drift(self):
@@ -515,7 +516,7 @@ print('|'.join([r['job_id'], r['job_name'], r['user'], r['run_root'],
     def test_store_migrate_shell_reports_current_schema(self):
         code, payload = self.cli("store", "migrate")
         self.assertEqual(code, 0, payload)
-        self.assertEqual(payload["store_schema_version"], 2)
+        self.assertEqual(payload["store_schema_version"], STORE_SCHEMA_VERSION)
         self.assertFalse(payload["state_mutated"])
         empty_home = os.path.join(self.temp, "empty-controller")
         process = __import__("subprocess").Popen(
