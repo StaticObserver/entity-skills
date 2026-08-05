@@ -198,6 +198,24 @@ class RegistryResolutionTests(unittest.TestCase):
             self.assertTrue(any("stack_id unset" in note
                                 for note in data["status"]["reuse_notes"]))
 
+    def test_analysis_kind_stack_never_matches_a_build_request(self):
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            # a registry mixing analysis stacks must not feed a build
+            # request, even when the signature matches
+            registry = registry_json()
+            registry["stacks"][0]["kind"] = "analysis"
+            checkpoint = self.create(tmp, base_requirements(tmp), registry)
+            data = json.loads(checkpoint.read_text(encoding="utf-8"))
+            self.assertNotIn("stack_id", data)
+            self.assertEqual(data["selected"], {})
+            # the same registry with a build stack appended hits the build one
+            registry["stacks"].append(registry_json()["stacks"][0])
+            checkpoint = self.create(tmp, base_requirements(tmp), registry)
+            data = json.loads(checkpoint.read_text(encoding="utf-8"))
+            self.assertEqual(data["stack_id"],
+                             "gcc12.3.0-kokkos5.1.0-1a2b3c4d")
+
     def test_handwritten_archive_with_int_scalars_still_matches(self):
         with tempfile.TemporaryDirectory() as td:
             tmp = Path(td)

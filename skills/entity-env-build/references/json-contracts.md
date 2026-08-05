@@ -147,6 +147,7 @@ deps 节），通过 `entityctl site deps <site> --json` 导出：
   "stacks": [
     {
       "stack_id": "gcc12.3.0-kokkos5.1.0-1a2b3c4d",
+      "kind": "build",
       "status": "verified",
       "signature": {"backend": "cuda", "mpi": false, "gpu_aware_mpi": false,
                     "output": true, "cxx_standard": "20",
@@ -161,8 +162,10 @@ deps 节），通过 `entityctl site deps <site> --json` 导出：
 ```
 
 `entity_checkpoint.py create --from-registry <registry.json>` 时，签名
-与当前 requirements 完全匹配且 `status=verified` 的第一个栈预填
-`selected`（provider `site-stack`)，并把 `stack_id` 写进 checkpoint；
+与当前 requirements 完全匹配且 `status=verified`、`kind=build`（缺省
+视为 build；注册表可能混有 `kind=analysis` 的 Python 环境栈，build
+消费不匹配它们）的第一个栈预填
+`selected`（保留各包原始 provider，来源记 `validation.source`)，并把 `stack_id` 写进 checkpoint；
 未覆盖的依赖由 `--from-discovery`/临场探测补缺。注册表条目随后与探测
 条目一样接受兼容性检查。新栈在 confirm + compatibility `pass` 后用
 `entityctl site deps-add <site> --from-checkpoint <entity-deps.local.json>`

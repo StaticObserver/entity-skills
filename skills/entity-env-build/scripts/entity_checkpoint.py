@@ -256,6 +256,11 @@ def select_registry_stack(registry: Any, req: Dict[str, Any]) -> Optional[Dict[s
     for stack in stacks:
         if not isinstance(stack, dict):
             continue
+        # the registry may mix analysis (Python environment) stacks; a build
+        # request only ever consumes build stacks (missing kind == build,
+        # for archives written before the field existed)
+        if stack.get("kind", "build") != "build":
+            continue
         if stack.get("status") != "verified":
             continue
         # normalize both sides: a hand-written archive may carry e.g. an

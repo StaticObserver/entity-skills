@@ -1563,8 +1563,12 @@ def _resolve_analysis_data(case, data_ref):
 
 def _analysis_script(store, case, script):
     """The script must live in the project's analysis script library
-    (projects/<p>/analysis/scripts/); returns (relative path, sha256)."""
-    if not script or os.path.isabs(script) or ".." in script.split(os.sep):
+    (projects/<p>/analysis/scripts/); returns (normalized relative path,
+    sha256)."""
+    if not script or os.path.isabs(script):
+        raise PlanError("--script must be a path relative to analysis/scripts/")
+    script = os.path.normpath(script)
+    if ".." in script.split(os.sep):
         raise PlanError("--script must be a path relative to analysis/scripts/")
     project_root = case.get("project_root") or ""
     if case.get("project_uid"):
@@ -1643,9 +1647,9 @@ def record_analysis(store, project_root, case_slug, script, data_ref, params,
     profile_merged, layout = merged_execution_profile(store, profile, case)
     conventional = ""
     if layout == "site-tree":
-        conventional = os.path.join(
+        conventional = os.path.normpath(os.path.join(
             profile_merged["roots"]["analysis_root"],
-            case_path_segment(layout, case), analysis_id)
+            case_path_segment(layout, case), analysis_id))
     identity = {
         "id": analysis_id, "kind": "analysis", "site_id": site_id,
         "root": {"site_id": site_id, "path": output_root},
@@ -1658,24 +1662,32 @@ def record_analysis(store, project_root, case_slug, script, data_ref, params,
         "manifest": manifest_path,
         "status": "registered",
     }
+    # A parent that already left current still records (history has value),
+    # but as a historical entry: current.analysis_id and the is_current
+    # marker are not rolled back to it.
+    parent_current = data_id == case.get("current", {}).get("data_id", "")
+    warnings = []
+    if not parent_current:
+        warnings.append(
+            "父 data %s 已不是 current;本次登记为历史条目,"
+            "current.analysis_id 未改变" % data_id)
     current = dict(case["current"])
-    current["analysis_id"] = analysis_id
-    readiness = dict(current.get("readiness", {}))
-    readiness["analysis"] = "established"
-    current["readiness"] = readiness
     with store.transaction() as connection:
         store.add_identity(
-            case["case_uid"], "analysis", analysis_id, identity, True,
-            connection)
-        connection.execute(
-            "UPDATE cases SET current_json=?,updated_at=? WHERE case_uid=?",
-            (canonical_json(current), now_utc(), case["case_uid"]),
-        )
+            case["case_uid"], "analysis", analysis_id, identity,
+            parent_current, connection)
+        if parent_current:
+            current["analysis_id"] = analysis_id
+            connection.execute(
+                "UPDATE cases SET current_json=?,updated_at=? WHERE case_uid=?",
+                (canonical_json(current), now_utc(), case["case_uid"]),
+            )
         store.record_event(
             case["case_uid"], None, "record.analysis",
             {"analysis_id": analysis_id, "data_id": data_id,
              "script": script, "env_stack": env_stack or "",
-             "hardcoded_paths": bool(hardcoded_paths)},
+             "hardcoded_paths": bool(hardcoded_paths),
+             "parent_current": parent_current},
             actor, connection)
     return {
         "schema_version": 1,
@@ -1691,6 +1703,8 @@ def record_analysis(store, project_root, case_slug, script, data_ref, params,
         "output_root": output_root,
         "env_stack": env_stack or "",
         "hardcoded_paths": bool(hardcoded_paths),
+        "parent_current": parent_current,
+        "warnings": warnings,
         "conventional_root": conventional,
         "at_conventional_root": bool(conventional) and output_root == conventional,
     }

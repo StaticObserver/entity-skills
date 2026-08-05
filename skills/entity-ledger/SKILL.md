@@ -142,12 +142,16 @@ python3 scripts/entityctl.py record relocate --project-root <project> \
   在哪跑怎么跑 Ledger 不管，登记做事后证据探测：脚本必须来自项目通
   用脚本库 `projects/<p>/analysis/scripts/`（内容哈希；case 级一次性
   脚本 agent 自管不入台账），产物目录的 `analysis-manifest.json` 必须
-  存在且 data_id 与声称一致。`analysis_id = hash(data_id, 脚本哈希,
-  参数)`，幂等；父 data 不再是 current 时 analysis 自动显示 stale
-  （历史 identity 保留不删）。硬编码存量脚本不拒绝登记，用
-  `--hardcoded-paths` 标记，dashboard 提醒。Python 分析环境用
-  `site deps-add --kind analysis` 登记进 deps 注册表（只要求解释器在
-  site 上存在），`record analysis --env-stack` 引用。
+  存在且 data_id 与声称一致；manifest 一旦写了 `script`/
+  `script_sha256`/`params` 字段，登记时会被逐一交叉核对。
+  `--params` 可选、默认 `{}`；注意 JSON 数字类型影响
+  analysis_id(`1` 与 `1.0` 是不同参数)。
+  `analysis_id = hash(data_id, 脚本哈希, 参数)`，幂等；父 data 不再是
+  current 时 analysis 自动显示 stale（历史 identity 保留不删；父 data
+  已非 current 的新登记作为历史条目入账，不拨回 current）。硬编码存
+  量脚本不拒绝登记，用 `--hardcoded-paths` 标记，dashboard 提醒。
+  Python 分析环境用 `site deps-add --kind analysis` 登记进 deps 注册
+  表（只要求解释器在 site 上存在），`record analysis --env-stack` 引用。
 - `record build` 要求 env-build checkpoint 为 `compatibility: pass`
   且参数已确认；登记后 run 原语可省略 `--executable`。
 - `record intent` 记录当前研究目标（仪表盘"目标"行）。意图是唯一

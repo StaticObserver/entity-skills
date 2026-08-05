@@ -155,6 +155,8 @@ def _analysis_cell(case, current):
     stale = bool(parent_data) and parent_data != current.get("data_id", "")
     detail = "%s @ %s" % (payload.get("script", analysis_id),
                           payload.get("site_id", "?"))
+    if payload.get("manifest"):
+        detail += "（manifest %s）" % payload["manifest"]
     if payload.get("env_stack"):
         detail += "（env %s）" % payload["env_stack"]
     if payload.get("hardcoded_paths"):

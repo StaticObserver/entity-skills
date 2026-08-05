@@ -101,6 +101,8 @@ python3 scripts/entity_checkpoint.py validate /artifacts/requirements.json
    dependency_profile）与当前 requirements 完全匹配且
    `status=verified` 的栈直接预填 `selected`（保留各包的原始
    provider，来源由 `validation.source=site-registry` 承担）。注册表
+   可能混有 `kind=analysis` 的 Python 环境栈——build 消费只匹配
+   `kind=build`（缺省视为 build）。注册表
    里的 `env_sh` 路径仅供人读与审计——环境始终由
    `entity_generate.py env` 从当前 checkpoint 的 packages 重建。
    注册表命中不豁免任何门禁：compatibility 必须仍为 `pass` 才能编译。

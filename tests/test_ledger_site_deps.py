@@ -288,6 +288,40 @@ class SiteDepsAnalysisKindTest(DepsTestBase):
         self.assertEqual(code, 2)
         self.assertIn("selected.python", payload["error"])
 
+    def test_analysis_kind_semantics_pinned(self):
+        # the interpreter may be a directory (selected.python.prefix, e.g. a
+        # conda env root): existence is the gate, not file-ness
+        env_dir = os.path.join(self.temp, "conda-env")
+        os.makedirs(env_dir)
+        checkpoint = self.analysis_checkpoint("")
+        with open(checkpoint, "r") as handle:
+            data = json.load(handle)
+        data["selected"]["python"] = {"name": "python", "version": "3.11",
+                                      "prefix": env_dir, "provider": "conda"}
+        with open(checkpoint, "w") as handle:
+            json.dump(data, handle)
+        code, payload = self.cli_json(
+            "site", "deps-add", "m87", "--kind", "analysis",
+            "--from-checkpoint", checkpoint)
+        self.assertEqual(code, 0, payload)
+        # re-registering the same analysis stack replaces, never appends
+        code, again = self.cli_json(
+            "site", "deps-add", "m87", "--kind", "analysis",
+            "--from-checkpoint", checkpoint)
+        self.assertEqual(code, 0, again)
+        archives = list_site_archives(self.workspace)
+        self.assertEqual(len(archives["m87"]["deps"]), 1)
+        # a foreign checkpoint is refused for analysis stacks too
+        data["requirements"]["embedded"]["entity"]["site_id"] = "other"
+        data["entity"]["site_id"] = "other"
+        with open(checkpoint, "w") as handle:
+            json.dump(data, handle)
+        code, payload = self.cli_json(
+            "site", "deps-add", "m87", "--kind", "analysis",
+            "--from-checkpoint", checkpoint)
+        self.assertEqual(code, 2)
+        self.assertIn("other", payload["error"])
+
 
 class SiteDepsViewTest(DepsTestBase):
     def test_site_deps_json_and_text(self):
@@ -306,6 +340,8 @@ class SiteDepsViewTest(DepsTestBase):
         self.assertIn("deps 注册表", text)
         self.assertIn(self.stack_id(), text)
         self.assertIn("verified", text)
+        # build is the default kind: no redundant tag
+        self.assertNotIn("[build]", text)
         # empty registry renders a hint, unknown site is an error
         write_site_yaml(self.workspace, {"site_id": "empty",
                                          "transport": {"kind": "local"}})

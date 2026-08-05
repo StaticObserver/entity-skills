@@ -97,6 +97,13 @@ python3 skills/entity-ledger/scripts/entityctl.py ... record build --project-roo
 python3 skills/entity-ledger/scripts/entityctl.py ... record data   --project-root ...
 python3 skills/entity-ledger/scripts/entityctl.py ... record intent --project-root ... \
   --text "<当前研究目标>"
+python3 skills/entity-ledger/scripts/entityctl.py ... record analysis --project-root ... \
+  --script <scripts/ 相对路径> --data <run_id|data_id> --params '<json>' \
+  --output-root <site 产物目录>
+python3 skills/entity-ledger/scripts/entityctl.py ... record run-abort --project-root ... \
+  --reason "<site 永久不可达等原因>"
+python3 skills/entity-ledger/scripts/entityctl.py ... record relocate --project-root ... \
+  --dimension <build|run|data> --identity-id <id> --to <新绝对路径>
 ```
 
 `record run-prepare` 要求模拟参数已确认（`pgen_preflight.py confirm` 写入的
