@@ -1,0 +1,105 @@
+{
+  "schema_version": 1,
+  "experiment_id": "e2e-streaming-official-v1",
+  "pgen": "streaming",
+  "official_pgen": {
+    "name": "streaming",
+    "source": "entity-v1.4.4 pgens/streaming/pgen.hpp (source-cache)",
+    "sha256": "debea2712c6bb4f8b2229886fbaea6dcbdc3b0dd59010d92e522d30d5d44361a",
+    "note": "the official PGen must be used unmodified; Gate B pins this fingerprint"
+  },
+  "engine": "SRPIC",
+  "metric": "Minkowski",
+  "coordinates": "Cartesian",
+  "dimension": 1,
+  "domain": {
+    "x1": [0.0, 16.0],
+    "active_cells": [128],
+    "field_boundaries": ["periodic", "periodic"],
+    "particle_boundaries": ["periodic", "periodic"]
+  },
+  "species": [
+    {
+      "name": "e-stream-plus",
+      "charge_sign": -1,
+      "mass_ratio": 1.0,
+      "density": 0.5,
+      "ppc0": 32,
+      "temperature": 0.0001,
+      "four_velocity": [0.2, 0.0, 0.0]
+    },
+    {
+      "name": "e-bg-1",
+      "charge_sign": 1,
+      "mass_ratio": 1.0,
+      "density": 0.5,
+      "ppc0": 32,
+      "temperature": 0.0001,
+      "four_velocity": [0.0, 0.0, 0.0]
+    },
+    {
+      "name": "e-stream-minus",
+      "charge_sign": -1,
+      "mass_ratio": 1.0,
+      "density": 0.5,
+      "ppc0": 32,
+      "temperature": 0.0001,
+      "four_velocity": [-0.2, 0.0, 0.0]
+    },
+    {
+      "name": "e-bg-2",
+      "charge_sign": 1,
+      "mass_ratio": 1.0,
+      "density": 0.5,
+      "ppc0": 32,
+      "temperature": 0.0001,
+      "four_velocity": [0.0, 0.0, 0.0]
+    }
+  ],
+  "initial_fields": {
+    "E": [0.0, 0.0, 0.0],
+    "B": [0.0, 0.0, 0.0],
+    "note": "classic unmagnetized two-stream (official twostream.toml has no background B); the streaming PGen defaults Bmag=0"
+  },
+  "random_seed": {
+    "value": 20260805,
+    "calibration": "pending-gold-run",
+    "note": "freeze the seed where the build/pgen exposes a seed knob; otherwise record the effective default in the gold run"
+  },
+  "compile": {
+    "backend": "cuda",
+    "precision": "single",
+    "deposit": "zigzag",
+    "shape_order": 1,
+    "output": true,
+    "mpi": false,
+    "debug": false,
+    "tests": false,
+    "cxx_standard": 20
+  },
+  "resource_ceiling": {
+    "nodes": 1,
+    "tasks": 1,
+    "gpus": 1,
+    "walltime": "00:10:00"
+  },
+  "required_outputs": {
+    "field_snapshots_min": 2,
+    "particle_snapshots_min": 2,
+    "field_quantities": ["E", "B", "J", "Rho"],
+    "particle_quantities": ["x1", "ux1", "ux2", "ux3", "weight", "species"]
+  },
+  "output": {
+    "particle_stride_max": 20
+  },
+  "runtime": {
+    "status": "calibration-pending-gold-run",
+    "final_time": 50.0,
+    "timestep": null,
+    "cfl": 0.5,
+    "field_interval": 5.0,
+    "particle_interval": 5.0,
+    "stats_interval": 10,
+    "note": "cells/ppc/drift magnitude follow the neutral-streaming set validated at RTX 4070 Ti scale; final_time and instability-growth thresholds are provisional until the gold run"
+  }
+}
