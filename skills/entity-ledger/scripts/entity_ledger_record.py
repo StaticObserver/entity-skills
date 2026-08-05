@@ -69,6 +69,21 @@ def show_case(store, project_root, case_slug=None):
     project = None
     if case.get("project_uid"):
         project = store.get_project(case["project_uid"])
+    current_data = case.get("current", {}).get("data_id", "")
+    analyses = []
+    for item in case.get("identities", {}).get("analysis", {}).get(
+            "items", []):
+        parent_data = item.get("parents", {}).get("data_id", "")
+        analyses.append({
+            "analysis_id": item.get("id", ""),
+            "script": item.get("script", ""),
+            "params": item.get("params", {}),
+            "data_id": parent_data,
+            "env_stack": item.get("env_stack", ""),
+            "hardcoded_paths": bool(item.get("hardcoded_paths")),
+            "status": item.get("status", ""),
+            "stale": bool(parent_data) and parent_data != current_data,
+        })
     return {
         "schema_version": 1,
         "kind": "entity-ledger.show",
@@ -82,6 +97,7 @@ def show_case(store, project_root, case_slug=None):
         "source": case["source"],
         "current": case["current"],
         "identities": case["identities"],
+        "analyses": analyses,
         "created_at": case["created_at"],
         "updated_at": case["updated_at"],
     }
@@ -1515,6 +1531,168 @@ def record_run_abort(store, project_root, run_id, reason, actor,
         "state": "aborted",
         "reason": reason.strip(),
         "previous_status": status,
+    }
+
+
+def _resolve_analysis_data(case, data_ref):
+    """--data accepts a data_id directly or a run_id, which resolves to that
+    run's recorded data identity (record data first otherwise)."""
+    data_items = case.get("identities", {}).get("data", {}).get("items", [])
+    identity = find_identity(data_items, data_ref)
+    if identity is not None:
+        return identity
+    run = find_identity(
+        case.get("identities", {}).get("run", {}).get("items", []), data_ref)
+    if run is None:
+        raise PlanError(
+            "unknown run/data identity: %s" % data_ref,
+            "needs_decision",
+            [{"field": "data",
+              "question": "select a recorded run or data identity"}],
+        )
+    for item in data_items:
+        if item.get("parents", {}).get("run_id") == run.get("id"):
+            return item
+    raise PlanError(
+        "run %s has no recorded data identity" % data_ref,
+        "needs_decision",
+        [{"field": "data",
+          "question": "run entityctl record data first"}],
+    )
+
+
+def _analysis_script(store, case, script):
+    """The script must live in the project's analysis script library
+    (projects/<p>/analysis/scripts/); returns (relative path, sha256)."""
+    if not script or os.path.isabs(script) or ".." in script.split(os.sep):
+        raise PlanError("--script must be a path relative to analysis/scripts/")
+    project_root = case.get("project_root") or ""
+    if case.get("project_uid"):
+        try:
+            project_root = store.get_project(
+                case["project_uid"]).get("project_root") or project_root
+        except StoreError:
+            pass
+    if not project_root:
+        raise PlanError("case has no project root for the script library")
+    scripts_root = os.path.join(absolute(project_root), "analysis", "scripts")
+    path = os.path.join(scripts_root, script)
+    try:
+        inside = os.path.commonpath(
+            [os.path.realpath(path), os.path.realpath(scripts_root)]
+        ) == os.path.realpath(scripts_root)
+    except ValueError:
+        inside = False
+    if not inside or not os.path.isfile(path):
+        raise PlanError(
+            "analysis script not found in the project script library: %s "
+            "(expected under %s)" % (script, scripts_root))
+    return script, sha256_file(path)
+
+
+def record_analysis(store, project_root, case_slug, script, data_ref, params,
+                    output_root, env_stack, hardcoded_paths, actor):
+    """Book an analysis execution (identity chain dimension 6).  Execution
+    itself is the agent's free exploration; this primitive only re-probes
+    the evidence and registers the fact — zero writes on any mismatch.
+
+    Evidence gates: the script must exist in the project script library
+    (content-hashed at booking time); ``<output_root>/analysis-manifest.json``
+    must exist on its Site and name the claimed data_id (and, when the
+    manifest carries script/params fields, they must match).  The
+    analysis_id is derived deterministically from (data_id, script hash,
+    params), so re-registering the same analysis is idempotent."""
+    case = _require_case(store, project_root, case_slug)
+    try:
+        params = json.loads(params) if isinstance(params, str) else params
+    except ValueError as exc:
+        raise PlanError("--params must be a JSON object: %s" % exc)
+    if not isinstance(params, dict):
+        raise PlanError("--params must be a JSON object")
+    data_identity = _resolve_analysis_data(case, data_ref)
+    data_id = data_identity.get("id") or data_identity.get("identity_id", "")
+    script, script_sha256 = _analysis_script(store, case, script)
+    if not output_root or not str(output_root).startswith("/"):
+        raise PlanError("--output-root must be an absolute path on its Site")
+    output_root = os.path.normpath(output_root)
+    site_id = data_identity.get("root", {}).get("site_id") \
+        or data_identity.get("site_id", "")
+    profile = store.get_site(site_id)
+    manifest_path = os.path.join(output_root, "analysis-manifest.json")
+    manifest = _read_site_json(profile, manifest_path, "analysis manifest")
+    if manifest.get("data_id") != data_id:
+        raise PlanError(
+            "analysis manifest at the output root names data %s, not %s"
+            % (manifest.get("data_id"), data_id))
+    if manifest.get("script") and manifest["script"] != script:
+        raise PlanError(
+            "analysis manifest names script %s, not %s"
+            % (manifest["script"], script))
+    if manifest.get("script_sha256") \
+            and manifest["script_sha256"] != script_sha256:
+        raise PlanError("analysis manifest script hash differs from the "
+                        "script library copy")
+    if manifest.get("params") is not None \
+            and manifest["params"] != params:
+        raise PlanError("analysis manifest params differ from --params")
+    analysis_id = "analysis-" + canonical_hash({
+        "data_id": data_id, "script_sha256": script_sha256,
+        "params": params,
+    }).split(":", 1)[1][:16]
+    run_id = data_identity.get("parents", {}).get("run_id", "")
+    profile_merged, layout = merged_execution_profile(store, profile, case)
+    conventional = ""
+    if layout == "site-tree":
+        conventional = os.path.join(
+            profile_merged["roots"]["analysis_root"],
+            case_path_segment(layout, case), analysis_id)
+    identity = {
+        "id": analysis_id, "kind": "analysis", "site_id": site_id,
+        "root": {"site_id": site_id, "path": output_root},
+        "parents": {"data_id": data_id, "run_id": run_id},
+        "script": script,
+        "script_sha256": script_sha256,
+        "params": params,
+        "env_stack": env_stack or "",
+        "hardcoded_paths": bool(hardcoded_paths),
+        "manifest": manifest_path,
+        "status": "registered",
+    }
+    current = dict(case["current"])
+    current["analysis_id"] = analysis_id
+    readiness = dict(current.get("readiness", {}))
+    readiness["analysis"] = "established"
+    current["readiness"] = readiness
+    with store.transaction() as connection:
+        store.add_identity(
+            case["case_uid"], "analysis", analysis_id, identity, True,
+            connection)
+        connection.execute(
+            "UPDATE cases SET current_json=?,updated_at=? WHERE case_uid=?",
+            (canonical_json(current), now_utc(), case["case_uid"]),
+        )
+        store.record_event(
+            case["case_uid"], None, "record.analysis",
+            {"analysis_id": analysis_id, "data_id": data_id,
+             "script": script, "env_stack": env_stack or "",
+             "hardcoded_paths": bool(hardcoded_paths)},
+            actor, connection)
+    return {
+        "schema_version": 1,
+        "kind": "entity-ledger.record.analysis",
+        "ok": True,
+        "state_mutated": True,
+        "case_uid": case["case_uid"],
+        "analysis_id": analysis_id,
+        "data_id": data_id,
+        "run_id": run_id,
+        "script": script,
+        "script_sha256": script_sha256,
+        "output_root": output_root,
+        "env_stack": env_stack or "",
+        "hardcoded_paths": bool(hardcoded_paths),
+        "conventional_root": conventional,
+        "at_conventional_root": bool(conventional) and output_root == conventional,
     }
 
 

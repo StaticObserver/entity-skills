@@ -99,6 +99,9 @@ python3 scripts/entityctl.py record build --project-root <project> --site <site>
   --checkpoint <deps-checkpoint.json> --executable <path>
 python3 scripts/entityctl.py record data --project-root <project> [--run-id <id>]
 python3 scripts/entityctl.py record intent --project-root <project> --text "<当前研究目标>"
+python3 scripts/entityctl.py record analysis --project-root <project> \
+  --script <scripts/ 相对路径> --data <run_id|data_id> --params '<json>' \
+  --output-root <site 产物目录> [--env-stack <stack_id>] [--hardcoded-paths]
 
 # site 档案、文件树与 deps 注册表
 python3 scripts/entityctl.py site sync [site]        # 档案 → db
@@ -135,6 +138,16 @@ python3 scripts/entityctl.py record relocate --project-root <project> \
   写入）。aborted 是终态：可 relocate、可迁移，status --live 不再探
   测。`--reclassify` 不适用于 aborted;site 恢复后输出仍可用
   `record data` 盘点。
+- `record analysis` 是 identity 链第六维：**执行自由、登记严格**——
+  在哪跑怎么跑 Ledger 不管，登记做事后证据探测：脚本必须来自项目通
+  用脚本库 `projects/<p>/analysis/scripts/`（内容哈希；case 级一次性
+  脚本 agent 自管不入台账），产物目录的 `analysis-manifest.json` 必须
+  存在且 data_id 与声称一致。`analysis_id = hash(data_id, 脚本哈希,
+  参数)`，幂等；父 data 不再是 current 时 analysis 自动显示 stale
+  （历史 identity 保留不删）。硬编码存量脚本不拒绝登记，用
+  `--hardcoded-paths` 标记，dashboard 提醒。Python 分析环境用
+  `site deps-add --kind analysis` 登记进 deps 注册表（只要求解释器在
+  site 上存在），`record analysis --env-stack` 引用。
 - `record build` 要求 env-build checkpoint 为 `compatibility: pass`
   且参数已确认；登记后 run 原语可省略 `--executable`。
 - `record intent` 记录当前研究目标（仪表盘"目标"行）。意图是唯一

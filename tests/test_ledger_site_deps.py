@@ -221,6 +221,74 @@ class SiteDepsAddTest(DepsTestBase):
                          "stack.yaml")))
 
 
+class SiteDepsAnalysisKindTest(DepsTestBase):
+    def analysis_checkpoint(self, interpreter):
+        checkpoint = {
+            "schema_version": 2,
+            "requirements": {"path": "", "embedded": {
+                "entity": {"site_id": "m87"},
+                "environment": {},
+                "compile": {},
+            }},
+            "entity": {"site_id": "m87"},
+            # no compatibility pass / no parameter confirmation: the
+            # analysis-kind gate only probes the interpreter on the Site
+            "selected": {
+                "python": {"name": "python", "version": "3.11",
+                           "bin": interpreter, "provider": "conda"},
+                "nt2py": {"name": "nt2py", "version": "1.5.3",
+                          "provider": "pip"},
+            },
+        }
+        path = os.path.join(self.temp, "analysis-env.json")
+        with open(path, "w") as handle:
+            json.dump(checkpoint, handle)
+        return path
+
+    def test_deps_add_analysis_kind(self):
+        interpreter = os.path.join(self.temp, "venv", "bin", "python")
+        os.makedirs(os.path.dirname(interpreter))
+        with open(interpreter, "w") as handle:
+            handle.write("#!/bin/sh\n")
+        checkpoint = self.analysis_checkpoint(interpreter)
+        code, payload = self.cli_json(
+            "site", "deps-add", "m87", "--kind", "analysis",
+            "--from-checkpoint", checkpoint)
+        self.assertEqual(code, 0, payload)
+        self.assertEqual(payload["stack_kind"], "analysis")
+        archives = list_site_archives(self.workspace)
+        stack = archives["m87"]["deps"][0]
+        self.assertEqual(stack["kind"], "analysis")
+        self.assertNotIn("env_sh", stack)
+        names = [p["name"] for p in stack["packages"]]
+        self.assertEqual(names, ["nt2py", "python"])
+        # stack.yaml written on the site tree with the kind field
+        stack_yaml = load_flat_yaml(payload["stack_yaml"], "stack.yaml")
+        self.assertEqual(stack_yaml["kind"], "analysis")
+        # the human view groups by kind
+        code, text, unused = self.cli("site", "deps", "m87")
+        self.assertEqual(code, 0)
+        self.assertIn("[analysis]", text)
+
+    def test_deps_add_analysis_requires_existing_interpreter(self):
+        checkpoint = self.analysis_checkpoint(
+            os.path.join(self.temp, "no-such-python"))
+        code, payload = self.cli_json(
+            "site", "deps-add", "m87", "--kind", "analysis",
+            "--from-checkpoint", checkpoint)
+        self.assertEqual(code, 2)
+        self.assertIn("analysis interpreter", payload["error"])
+        archives = list_site_archives(self.workspace)
+        self.assertEqual(archives["m87"].get("deps") or [], [])
+        # and a checkpoint without any python entry fails before probing
+        bare = self.analysis_checkpoint("")
+        code, payload = self.cli_json(
+            "site", "deps-add", "m87", "--kind", "analysis",
+            "--from-checkpoint", bare)
+        self.assertEqual(code, 2)
+        self.assertIn("selected.python", payload["error"])
+
+
 class SiteDepsViewTest(DepsTestBase):
     def test_site_deps_json_and_text(self):
         self.write_env_sh()

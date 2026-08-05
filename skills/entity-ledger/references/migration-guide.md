@@ -117,3 +117,17 @@ site: <site_id>
 - 所有 current identity 的 Locator 指向新树;
 - 旧路径不再被任何 current identity 引用;
 - 旧目录验证为空后删除;`entityctl doctor` 全绿。
+
+## 分析脚本与环境收编
+
+- **通用脚本**(跨 case/run 复用的方法层)进
+  `projects/<p>/analysis/scripts/`,数据路径必须 CLI 参数化;硬编码存
+  量进 `scripts/legacy/` 子目录,不拒绝登记——record 时加
+  `--hardcoded-paths`,dashboard 会提醒。各处手动同步的副本以
+  workspace 为权威去重。
+- **case 级一次性脚本**不入库、不登记,agent 自管。
+- **历史分析产物不追溯登记**;新分析从 `record analysis` 开始。
+- 存量分析环境(venv/conda)用 `entityctl site deps-add <site>
+  --kind analysis --from-checkpoint <json>` 登记进 deps 注册表
+  (checkpoint 的 `selected.python` 记录解释器路径;只要求它在 site
+  上真实存在)。

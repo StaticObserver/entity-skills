@@ -141,6 +141,29 @@ def _data_cell(case, current):
             "detail": "%s 个文件" % payload.get("files", "?")}
 
 
+def _analysis_cell(case, current):
+    """Readiness of the current analysis identity.  Staleness is derived at
+    read time (the board is always computed from stored facts): an analysis
+    is stale exactly when its parent data is no longer the current data."""
+    analysis_id = current.get("analysis_id", "")
+    payload = find_identity(
+        case.get("identities", {}).get("analysis", {}).get("items", []),
+        analysis_id)
+    if not analysis_id or payload is None:
+        return {"state": "none", "detail": "—"}
+    parent_data = payload.get("parents", {}).get("data_id", "")
+    stale = bool(parent_data) and parent_data != current.get("data_id", "")
+    detail = "%s @ %s" % (payload.get("script", analysis_id),
+                          payload.get("site_id", "?"))
+    if payload.get("env_stack"):
+        detail += "（env %s）" % payload["env_stack"]
+    if payload.get("hardcoded_paths"):
+        detail += "；脚本含硬编码路径（legacy，建议参数化）"
+    if stale:
+        detail += "；父 data 已不是 current"
+    return {"state": "stale" if stale else "established", "detail": detail}
+
+
 def derive_next_steps(board, run_id):
     """The deriver: map board facts to suggested next steps.  These rules
     replace a stored state machine — they are computed on every read and can
@@ -215,8 +238,7 @@ def build_dashboard(store, project_root, status=None, case_slug=None):
         "build": _build_cell(case, current),
         "run": _run_cell(case, current, live),
         "data": _data_cell(case, current),
-        "analysis": {"state": "none" if not current.get("analysis_id") else "ready",
-                     "detail": current.get("analysis_id") or "—"},
+        "analysis": _analysis_cell(case, current),
     }
     ledger = []
     for item in case.get("identities", {}).get("run", {}).get("items", []):

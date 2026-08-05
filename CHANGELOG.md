@@ -64,6 +64,18 @@ project_uid 外键；`store migrate` 链式 v1→v2→v3，旧 root→case 1:1
   终态词表：可 relocate、plan-migration 不再 skip、status --live 不
   再探测；`--reclassify` 不适用于 aborted(site 恢复后输出仍可用
   `record data` 盘点）。
+- analysis 管理（identity 链第六维，`design/analysis-management-2026-08-05.md`）：
+  `record analysis --script/--data/--params/--output-root
+  [--env-stack] [--hardcoded-paths]`——执行自由、登记严格：脚本须来自
+  项目通用脚本库 `projects/<p>/analysis/scripts/`（内容哈希），产物目
+  录的 `analysis-manifest.json` 须存在且 data_id 与声称一致；
+  `analysis_id = hash(data_id, script_hash, params)` 确定性推导、幂
+  等；父 data 非 current 时 dashboard analysis 格显示 stale（读取时
+  推导，历史 identity 保留）。dashboard analysis 格升级
+  none/established/stale + hardcoded_paths 提醒；`show` 增加 analyses
+  列表。deps 注册表加 `kind` 字段（build 默认 / analysis），
+  `site deps-add --kind analysis` 以解释器存在性为门禁登记 Python 分
+  析环境。
 - `references/migration-guide.md` 迁移指南。
 
 ### Changed

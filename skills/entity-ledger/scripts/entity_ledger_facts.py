@@ -260,11 +260,11 @@ def _operation_id(seed):
 
 
 def execution_roots(store, profile, case):
-    """Execution roots for build/run/staging derivation.
+    """Execution roots for build/run/staging/analysis derivation.
 
     Profiles declaring ``site_root`` use the Computation Site tree
-    ``<site_root>/projects/<project-slug>/{builds,runs,staging}`` and are
-    marked ``site-tree``; legacy profiles (no site_root) keep their
+    ``<site_root>/projects/<project-slug>/{builds,runs,staging,analysis}``
+    and are marked ``site-tree``; legacy profiles (no site_root) keep their
     independent roots and are marked ``legacy-roots``.  Returns
     ``(roots, layout)``; every value may be None for the caller's missing-
     root check.  Old Locators recorded under either layout stay readable —
@@ -285,12 +285,14 @@ def execution_roots(store, profile, case):
             "build_root": os.path.join(base, "builds"),
             "run_root": os.path.join(base, "runs"),
             "staging_root": os.path.join(base, "staging"),
+            "analysis_root": os.path.join(base, "analysis"),
         }, "site-tree")
     roots = profile.get("roots", {})
     return ({
         "build_root": roots.get("build_root"),
         "run_root": roots.get("run_root"),
         "staging_root": roots.get("staging_root"),
+        "analysis_root": roots.get("analysis_root"),
     }, "legacy-roots")
 
 

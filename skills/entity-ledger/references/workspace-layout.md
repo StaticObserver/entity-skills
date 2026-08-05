@@ -13,8 +13,11 @@ entity-workspace/                    # 位置用户自选;entityctl workspace in
 │   └── <project>/                   # 人可读的树,用户日常工作的地方
 │       ├── project.yaml             # project_uid、slug、source authority 登记
 │       ├── source/                  # source authority(名字登记在 project.yaml)
+│       ├── analysis/
+│       │   └── scripts/             # 通用分析脚本库(权威;硬编码存量进 legacy/)
 │       └── cases/
 │           └── <case>/              # 意图边界:intent.md、decisions.json
+│               └── analysis/<analysis_id>/  # 取回的分析产物副本(轻量)
 ├── sites/
 │   └── <site>.yaml                  # site 档案(权威):见下
 └── .ledger/                         # 控制器状态(机器读写)
@@ -68,7 +71,8 @@ site(旧 `site add` 登记的)在 `site list` 中标注 db-only,保持可用,
     └── <project>/                    # 每个 project 一棵独立子树
         ├── builds/<case>/<build_id>/ #   不可变
         ├── runs/<case>/<run_id>/     #   不可变;原始数据权威位置
-        └── staging/<case>/<op_id>/   #   暂存 + receipt
+        ├── staging/<case>/<op_id>/   #   暂存 + receipt
+        └── analysis/<case>/<analysis_id>/  # 分析产物 + analysis-manifest.json
 ```
 
 profile 带 `site_root` 时,新资源的路径推导用这棵树(layout

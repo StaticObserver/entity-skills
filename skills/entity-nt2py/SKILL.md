@@ -40,6 +40,10 @@ description: 使用 nt2py 读取、检查、可视化和导出 Entity 模拟输�
    某个视觉模式或变量名提升为科学结论。
 5. 创建产物时，运行相关代码并确认所请求的输出确实存在。用户没有
    要求时，不要强加报告、notebook、脚本或目录格式。
+6. 分析执行由你自由组织；**登记**找 Ledger：分析完成后用
+   `entityctl record analysis` 落账（脚本来自项目
+   `analysis/scripts/` 库，产物目录放 `analysis-manifest.json`）。
+   本技能不管登记，也不判断模拟在物理上是否正确。
 
 ## 探测实际输出
 

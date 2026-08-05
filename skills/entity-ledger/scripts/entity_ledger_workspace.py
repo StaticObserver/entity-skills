@@ -466,7 +466,7 @@ def site_marker_record(site_id, site_root):
 
 STACK_SCHEMA_VERSION = 1
 STACK_YAML_FIELDS = (
-    "stack_id", "schema_version", "site_id", "status", "signature",
+    "stack_id", "schema_version", "site_id", "kind", "status", "signature",
     "packages", "recipe", "env_sh", "recorded_at", "recorded_by",
 )
 # Shared contract with entity_checkpoint.py (env-build side, which stays

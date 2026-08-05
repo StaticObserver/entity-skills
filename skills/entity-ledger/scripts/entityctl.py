@@ -44,6 +44,7 @@ from entity_ledger_facts import (
 from entity_ledger_operation import status_for_project
 from entity_ledger_record import (
     TERMINAL_RUN_STATES,
+    record_analysis,
     record_build,
     record_data,
     record_intent,
@@ -726,8 +727,10 @@ def _render_deps_text(site_id, origin, stacks):
     if not stacks:
         lines.append("  （空）新栈验证通过后用 entityctl site deps-add 落账")
     for stack in stacks:
-        lines.append("  %s  %s" % (stack.get("stack_id", "?"),
-                                     stack.get("status", "?")))
+        kind = stack.get("kind", "build")
+        tag = "  [%s]" % kind if kind != "build" else ""
+        lines.append("  %s  %s%s" % (stack.get("stack_id", "?"),
+                                     stack.get("status", "?"), tag))
         packages = ", ".join(
             "%s %s" % (package.get("name", "?"), package.get("version", "?"))
             for package in stack.get("packages", []))
@@ -811,11 +814,27 @@ def _write_site_file(profile, path, fields, record):
             pass
 
 
+def _require_site_path(profile, path, label):
+    """Evidence gate for either a file or a directory on the Site."""
+    if profile.get("transport", {}).get("kind") == "local":
+        if os.path.exists(path):
+            return
+    else:
+        code, unused, unused_err = run_on_site(profile, ["test", "-e", path])
+        if code == 0:
+            return
+    raise EntityCtlError(
+        "%s not found on Site %s: %s; refusing to register (zero writes)"
+        % (label, profile["site_id"], path))
+
+
 def site_deps_add(args):
     """Register a verified dependency stack into the site archive registry
     and write deps/<stack_id>/stack.yaml on the Site.  Gates (zero writes
-    on failure): the checkpoint must be confirmed + compatibility pass, its
-    site_id must match, and deps/<stack_id>/env.sh must exist on the Site."""
+    on failure): a ``build`` stack needs a confirmed checkpoint with
+    compatibility pass plus deps/<stack_id>/env.sh on the Site; an
+    ``analysis`` stack (Python environment) skips the build gates and only
+    requires its interpreter path to really exist on the Site."""
     actor = require_attributed_actor(actor_identity(args))
     home, unused_resolution = resolve_ledger_home(args.ledger_home)
     workspace = require_workspace(home)
@@ -827,7 +846,8 @@ def site_deps_add(args):
             "no site archive for %s; create sites/%s.yaml first "
             "(site import-notes or an editor)" % (args.site_id, args.site_id))
     checkpoint = load_json(args.from_checkpoint, "build checkpoint")
-    require_verified_checkpoint(checkpoint)
+    if args.kind == "build":
+        require_verified_checkpoint(checkpoint)
     embedded = checkpoint.get("requirements", {}).get("embedded", {})
     entity = embedded.get("entity", {})
     if entity.get("site_id") and entity["site_id"] != args.site_id:
@@ -847,10 +867,23 @@ def site_deps_add(args):
             "site %s has no site_root; the stack tree cannot be placed"
             % args.site_id)
     profile = profile_from_archive(record)
-    env_sh = os.path.join(site_root, "deps", stack_id, "env.sh")
-    _require_site_file(profile, env_sh, "stack env.sh")
+    env_sh = ""
+    if args.kind == "build":
+        env_sh = os.path.join(site_root, "deps", stack_id, "env.sh")
+        _require_site_file(profile, env_sh, "stack env.sh")
+    else:
+        python = selected.get("python", {})
+        interpreter = ""
+        if isinstance(python, dict):
+            interpreter = python.get("bin") or python.get("prefix") or ""
+        if not interpreter:
+            raise EntityCtlError(
+                "analysis stack checkpoint has no python entry with bin/"
+                "prefix; record the interpreter in selected.python")
+        _require_site_path(profile, interpreter, "analysis interpreter")
     stack_entry = {
         "stack_id": stack_id,
+        "kind": args.kind,
         "status": "verified",
         "signature": signature,
         "packages": stack_packages(selected),
@@ -861,10 +894,11 @@ def site_deps_add(args):
             "parameter_digest": checkpoint.get("decisions", {}).get(
                 "parameters", {}).get("digest", ""),
         },
-        "env_sh": env_sh,
         "recorded_at": now_utc(),
         "recorded_by": actor.get("run_id", ""),
     }
+    if env_sh:
+        stack_entry["env_sh"] = env_sh
     # write order: the on-site stack.yaml first, then the archive, then the
     # db mirror — a failed site write leaves every record untouched
     stack_yaml = os.path.join(site_root, "deps", stack_id, "stack.yaml")
@@ -880,6 +914,7 @@ def site_deps_add(args):
         "actor": actor,
         "site_id": args.site_id,
         "stack_id": stack_id,
+        "stack_kind": args.kind,
         "packages": len(stack_entry["packages"]),
         "archive": site_yaml_path(workspace, args.site_id),
         "stack_yaml": stack_yaml,
@@ -1308,6 +1343,15 @@ def record_run_abort_command(args):
     store = OperationStore(args.ledger_home, create=False)
     return record_run_abort(store, args.project_root, args.run_id,
                             args.reason, actor, case_slug=args.case_slug)
+
+
+def record_analysis_command(args):
+    actor = require_attributed_actor(actor_identity(args))
+    store = OperationStore(args.ledger_home, create=False)
+    return record_analysis(
+        store, args.project_root, args.case_slug, args.script, args.data,
+        args.params, args.output_root, args.env_stack, args.hardcoded_paths,
+        actor)
 
 
 def record_build_command(args):
@@ -2277,6 +2321,28 @@ def build_parser():
     add_case_argument(record_relocate_parser)
     record_relocate_parser.set_defaults(func=record_relocate_command)
 
+    record_analysis_parser = record_sub.add_parser("analysis")
+    record_analysis_parser.add_argument("--project-root", required=True)
+    record_analysis_parser.add_argument(
+        "--script", required=True,
+        help="script path relative to the project's analysis/scripts/ library")
+    record_analysis_parser.add_argument(
+        "--data", required=True, help="run_id or data_id the analysis consumed")
+    record_analysis_parser.add_argument("--params", default="{}",
+                                        help="JSON object of analysis parameters")
+    record_analysis_parser.add_argument(
+        "--output-root", required=True,
+        help="absolute output directory on the data Site holding "
+             "analysis-manifest.json")
+    record_analysis_parser.add_argument(
+        "--env-stack", default="",
+        help="stack_id of the registered analysis environment (optional)")
+    record_analysis_parser.add_argument(
+        "--hardcoded-paths", action="store_true",
+        help="mark a legacy script whose data paths are not CLI-parameterized")
+    add_case_argument(record_analysis_parser)
+    record_analysis_parser.set_defaults(func=record_analysis_command)
+
     site = sub.add_parser("site")
     site_sub = site.add_subparsers(dest="site_command")
     site_add_parser = site_sub.add_parser("add")
@@ -2312,6 +2378,11 @@ def build_parser():
     site_deps_add_parser.add_argument("site_id")
     site_deps_add_parser.add_argument("--from-checkpoint", required=True,
                                       help="verified entity-deps.local.json")
+    site_deps_add_parser.add_argument(
+        "--kind", default="build", choices=["build", "analysis"],
+        help="build: toolchain stack (default; requires confirmed + compat "
+             "pass checkpoint and env.sh on the Site); analysis: Python "
+             "environment (only requires the interpreter to exist on-site)")
     site_deps_add_parser.set_defaults(func=site_deps_add)
     site_plan_migration_parser = site_sub.add_parser("plan-migration")
     site_plan_migration_parser.add_argument("site_id")
