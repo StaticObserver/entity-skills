@@ -298,6 +298,10 @@ def status_for_project(store, project_root, live=False, case_slug=None):
     }
     if not live or not run_identity:
         return result
+    if run_identity.get("status") == "aborted":
+        # human-declared dead (record run-abort): the Site is presumed
+        # unreachable, so probing it would only produce divergence noise
+        return result
     scheduler = run_identity.get("scheduler", {})
     if not scheduler:
         return result

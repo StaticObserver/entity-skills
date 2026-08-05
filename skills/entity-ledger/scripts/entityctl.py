@@ -48,6 +48,7 @@ from entity_ledger_record import (
     record_data,
     record_intent,
     record_relocate,
+    record_run_abort,
     record_run_exit,
     record_run_launch,
     record_run_prepare,
@@ -1302,6 +1303,13 @@ def record_run_exit_command(args):
                            case_slug=args.case_slug)
 
 
+def record_run_abort_command(args):
+    actor = require_attributed_actor(actor_identity(args))
+    store = OperationStore(args.ledger_home, create=False)
+    return record_run_abort(store, args.project_root, args.run_id,
+                            args.reason, actor, case_slug=args.case_slug)
+
+
 def record_build_command(args):
     actor = require_attributed_actor(actor_identity(args))
     store = OperationStore(args.ledger_home, create=False)
@@ -2240,6 +2248,15 @@ def build_parser():
              "(skip the scheduler probe); rewrites to completed only when "
              "a known harmless teardown abort is confirmed")
     record_run_exit_parser.set_defaults(func=record_run_exit_command)
+    record_run_abort_parser = record_sub.add_parser("run-abort")
+    record_run_abort_parser.add_argument("--project-root", required=True)
+    record_run_abort_parser.add_argument("--run-id", default="")
+    record_run_abort_parser.add_argument(
+        "--reason", required=True,
+        help="why the run is declared dead (e.g. the Site is permanently "
+             "unreachable); recorded in the identity and the audit event")
+    add_case_argument(record_run_abort_parser)
+    record_run_abort_parser.set_defaults(func=record_run_abort_command)
 
     record_intent_parser = record_sub.add_parser("intent")
     record_intent_parser.add_argument("--project-root", required=True)

@@ -110,6 +110,8 @@ def _run_cell(case, current, live):
         detail += "；exit %s" % payload["exit_code"]
     if payload.get("exit_anomaly"):
         detail += "；退出阶段已知无害 abort"
+    if payload.get("abort"):
+        detail += "；已人工中止（%s）" % payload["abort"].get("reason", "")
     if live:
         live_state = live.get("state", "")
         if live_state == "EXITED":
@@ -149,6 +151,9 @@ def derive_next_steps(board, run_id):
         steps.append("run %s 已到终态；用 entityctl record data 盘点输出" % run_id)
     elif run_state == "failed":
         steps.append("run %s 失败；检查 run_root 日志定位原因，修复后重跑" % run_id)
+    elif run_state == "aborted":
+        steps.append("run %s 已人工中止；如需继续，改输入/参数派生新 run 重跑"
+                     % run_id)
     elif run_state in {"submitted", "running"}:
         steps.append("run %s 运行中；用 status --live 或 record run-exit 跟踪终态"
                      % run_id)

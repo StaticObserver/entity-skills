@@ -12,7 +12,10 @@ agent 决定顺序与节奏,原语保证每一步可验证、可重跑、失败�
 ## 顺序与禁忌
 
 - **在途 run 不动。**没有终态的 run(prepared/submitted/running)原地留
-  置,等 `entityctl record run-exit` 落出终态后再迁。
+  置,等 `entityctl record run-exit` 落出终态后再迁。唯一的逃逸口:
+  site 永久不可达或确认死亡时,用 `entityctl record run-abort --reason
+  "..."` 人工声明放弃(落账 aborted,属终态,可迁移;滥用会丢掉真实
+  在途 run 的跟踪,仅在确认无退出证据可探测时使用)。
 - **先盘点哈希再移动。**移动前以 `site plan-migration` 的计划为准;
   移动后 `record relocate` 会重新探测证据,证据不符零写入——所以绝不
   要先删旧路径再落账。
@@ -103,7 +106,7 @@ site: <site_id>
 [ ] deps 注册表:既有已验证栈已 deps-add
 [ ] plan-migration 计划已审阅;moves=N skips=M(在途)
 [ ] 逐项:移动 → record relocate → status 校验
-[ ] 在途 run:record run-exit 终态后补齐迁移
+[ ] 在途 run:record run-exit 终态后补齐迁移;确认死亡的用 record run-abort
 [ ] untracked 目录已人工核对处置
 [ ] 旧目录验证为空,用户已手动删除
 [ ] doctor 无 failure;current identity Locator 全部指向新树

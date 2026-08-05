@@ -58,6 +58,12 @@ project_uid 外键；`store migrate` 链式 v1→v2→v3，旧 root→case 1:1
   覆盖）、`site plan-migration`（只读盘点旧树 → 新树计划，在途 run
   标记 skip）、`record relocate`（移动后重新探测证据并更新 Locator，
   在途 run 拒绝，证据不符零写入，写 record.relocate 审计事件）。
+- `record run-abort`:site 永久不可达或确认死亡的在途 run 的显式逃逸
+  口——`--reason` 必填并落进 identity 与审计事件（actor 归因沿用
+  现有机制）；仅对在途 run 可用，已终态报错零写入。`aborted` 加入
+  终态词表：可 relocate、plan-migration 不再 skip、status --live 不
+  再探测；`--reclassify` 不适用于 aborted(site 恢复后输出仍可用
+  `record data` 盘点）。
 - `references/migration-guide.md` 迁移指南。
 
 ### Changed

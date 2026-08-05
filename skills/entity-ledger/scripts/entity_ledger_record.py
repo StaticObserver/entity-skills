@@ -219,7 +219,8 @@ def _rewrite_locator_paths(value, old_root, new_root):
 
 # Run states from which a resource may be relocated; anything else is an
 # in-flight run and must reach its terminal state first (record run-exit).
-TERMINAL_RUN_STATES = {"completed", "failed", "exited"}
+# "aborted" is the human-declared terminal state (record run-abort).
+TERMINAL_RUN_STATES = {"completed", "failed", "exited", "aborted"}
 
 
 def _read_site_json(profile, path, label):
@@ -1441,6 +1442,79 @@ def record_run_exit(store, project_root, run_id, actor, reclassify=False,
         "state": final,
         "exit_code": exit_code,
         "exit_anomaly": anomaly,
+    }
+
+
+def record_run_abort(store, project_root, run_id, reason, actor,
+                     case_slug=None):
+    """Declare an in-flight run dead by human decision — the escape hatch
+    for a run whose Site is permanently unreachable (retired machine, dead
+    SSH), where no exit evidence can ever be probed.  Gates before any
+    write: the run must exist and be in flight; a terminal run fails with
+    zero writes.  ``reason`` is mandatory and lands in the identity payload
+    and the audit event.  Aborted is terminal: the run can be relocated and
+    migrated, and live status no longer probes it.  ``--reclassify`` does
+    not apply to an aborted run; if the Site comes back, the outputs can
+    still be inventoried with ``record data``."""
+    if not reason or not reason.strip():
+        raise PlanError("--reason must be non-empty")
+    case = _require_case(store, project_root, case_slug)
+    run_id = run_id or case.get("current", {}).get("run_id", "")
+    if not run_id:
+        raise PlanError(
+            "Case has no current run",
+            "needs_decision",
+            [{"field": "run", "question": "select the run to abort"}],
+        )
+    identity = _run_identity(case, run_id)
+    if identity is None:
+        raise PlanError(
+            "unknown run identity: %s" % run_id,
+            "needs_decision",
+            [{"field": "run", "question": "select a known run id"}],
+        )
+    status = identity.get("status", "")
+    if status in TERMINAL_RUN_STATES:
+        raise PlanError(
+            "run %s is already terminal (%s); run-abort only applies to an "
+            "in-flight run" % (run_id, status))
+    payload = dict(identity)
+    payload["status"] = "aborted"
+    payload["abort"] = {"reason": reason.strip(),
+                        "aborted_at": now_utc(),
+                        "aborted_by": actor.get("run_id", "")}
+    current = dict(case["current"])
+    active = current.get("active_run") or {}
+    if active.get("path") == identity.get("root", {}).get("path", ""):
+        current["active_run"] = None
+    readiness = dict(current.get("readiness", {}))
+    readiness["run"] = "aborted"
+    current["readiness"] = readiness
+    with store.transaction() as connection:
+        connection.execute(
+            "UPDATE identities SET payload_json=? WHERE case_uid=? AND "
+            "dimension='run' AND identity_id=?",
+            (canonical_json(payload), case["case_uid"], run_id),
+        )
+        connection.execute(
+            "UPDATE cases SET current_json=?,updated_at=? WHERE case_uid=?",
+            (canonical_json(current), now_utc(), case["case_uid"]),
+        )
+        store.record_event(
+            case["case_uid"], None, "record.run-abort",
+            {"run_id": run_id, "reason": reason.strip(),
+             "previous_status": status},
+            actor, connection)
+    return {
+        "schema_version": 1,
+        "kind": "entity-ledger.record.run-abort",
+        "ok": True,
+        "state_mutated": True,
+        "case_uid": case["case_uid"],
+        "run_id": run_id,
+        "state": "aborted",
+        "reason": reason.strip(),
+        "previous_status": status,
     }
 
 

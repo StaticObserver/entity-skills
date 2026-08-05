@@ -94,6 +94,7 @@ python3 scripts/entityctl.py \
   record run-prepare --project-root <project> --toml <input.toml> --site <site> [...]
 python3 scripts/entityctl.py record run-launch --project-root <project> [--run-id <id>]
 python3 scripts/entityctl.py record run-exit  --project-root <project> [--run-id <id>] [--reclassify]
+python3 scripts/entityctl.py record run-abort --project-root <project> [--run-id <id>] --reason "<原因>"
 python3 scripts/entityctl.py record build --project-root <project> --site <site> \
   --checkpoint <deps-checkpoint.json> --executable <path>
 python3 scripts/entityctl.py record data --project-root <project> [--run-id <id>]
@@ -128,6 +129,12 @@ python3 scripts/entityctl.py record relocate --project-root <project> \
   `exit_anomaly`（真实 exit_code 保留），缺一维持 failed。已落账为
   failed 的 run 事后拿到日志证据时用 `--reclassify` 重判（跳过调度器
   探测，仅 failed 可用，其余状态报错零写入）。
+- `record run-abort` 是卡死 run 的显式逃逸口：site 永久不可达（机器
+  退役、SSH 失效）或确认死亡的在途 run，由人工声明放弃。`--reason`
+  必填并落进 identity 与审计事件；仅对在途 run 可用（已终态报错零
+  写入）。aborted 是终态：可 relocate、可迁移，status --live 不再探
+  测。`--reclassify` 不适用于 aborted;site 恢复后输出仍可用
+  `record data` 盘点。
 - `record build` 要求 env-build checkpoint 为 `compatibility: pass`
   且参数已确认；登记后 run 原语可省略 `--executable`。
 - `record intent` 记录当前研究目标（仪表盘"目标"行）。意图是唯一

@@ -559,5 +559,137 @@ class RelocateTest(MigrationTestBase):
                          os.path.normpath(self.old_run))
 
 
+class RunAbortTest(MigrationTestBase):
+    def setUp(self):
+        super(RunAbortTest, self).setUp()
+        self.home = os.path.join(self.temp, "controller")
+        self.store = OperationStore(self.home)
+        self.site_root = os.path.join(self.temp, "compute")
+        self.store.upsert_site({
+            "schema_version": 1, "site_id": "local",
+            "transport": {"kind": "local"}, "scheduler": {"kind": "none"},
+            "site_root": self.site_root, "roots": {}, "policy": {}})
+        self.project_root = os.path.join(self.temp, "project")
+        os.makedirs(self.project_root)
+        self.store.upsert_project("project-1", "demo", self.project_root)
+        self.run_root = os.path.join(self.temp, "old-runs", "case-1", "run-1")
+        os.makedirs(self.run_root)
+        self.store.upsert_case(
+            "case-1", "alpha", self.project_root,
+            {"authority": {"site_id": "local", "path": self.project_root}},
+            {"source_id": "", "build_id": "", "run_id": "run-1",
+             "active_run": {"site_id": "local", "path": self.run_root},
+             "data_id": "", "analysis_id": ""},
+            project_uid="project-1")
+        self.store.add_identity(
+            "case-1", "run", "run-1",
+            {"id": "run-1", "kind": "run", "site_id": "local",
+             "root": {"site_id": "local", "path": self.run_root},
+             "scheduler": {"pid": 4321, "run_root": self.run_root},
+             "status": "submitted"}, True)
+
+    def abort(self, *extra):
+        return self.cli("--ledger-home", self.home,
+                        "--actor-run-id", "abort-test",
+                        "record", "run-abort",
+                        "--project-root", self.project_root, *extra)
+
+    def test_abort_inflight_run(self):
+        code, payload = self.abort("--reason", "m87 退役,site 永久不可达")
+        self.assertEqual(code, 0, payload)
+        self.assertEqual(payload["state"], "aborted")
+        self.assertEqual(payload["previous_status"], "submitted")
+        case = self.store.get_case("case-1")
+        identity = case["identities"]["run"]["items"][0]
+        self.assertEqual(identity["status"], "aborted")
+        self.assertEqual(identity["abort"]["reason"],
+                         "m87 退役,site 永久不可达")
+        self.assertEqual(identity["abort"]["aborted_by"], "abort-test")
+        self.assertIsNone(case["current"]["active_run"])
+        self.assertEqual(case["current"]["readiness"]["run"], "aborted")
+        events = self.store.export()["events"]
+        self.assertEqual(events[-1]["event_type"], "record.run-abort")
+        self.assertEqual(events[-1]["payload"]["reason"],
+                         "m87 退役,site 永久不可达")
+        self.assertEqual(events[-1]["actor"]["run_id"], "abort-test")
+
+    def test_abort_terminal_run_is_refused_with_zero_writes(self):
+        code, payload = self.abort("--reason", "第一次")
+        self.assertEqual(code, 0, payload)
+        events_before = len(self.store.export()["events"])
+        code, again = self.abort("--reason", "重复中止")
+        self.assertEqual(code, 2)
+        self.assertIn("already terminal", again["error"])
+        case = self.store.get_case("case-1")
+        identity = case["identities"]["run"]["items"][0]
+        self.assertEqual(identity["abort"]["reason"], "第一次")
+        self.assertEqual(len(self.store.export()["events"]), events_before)
+
+    def test_abort_unknown_run_and_missing_reason(self):
+        code, payload = self.abort("--run-id", "run-9", "--reason", "x")
+        self.assertEqual(code, 2)
+        self.assertEqual(payload["status"], "needs_decision")
+        process = subprocess.Popen(
+            [sys.executable, ENTITYCTL, "--ledger-home", self.home,
+             "record", "run-abort", "--project-root", self.project_root],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            universal_newlines=True)
+        stdout, stderr = process.communicate()
+        self.assertEqual(process.returncode, 2)
+        self.assertIn("--reason", stderr)
+        identity = self.store.get_case("case-1")["identities"]["run"]["items"][0]
+        self.assertEqual(identity["status"], "submitted")
+
+    def test_abort_unblocks_plan_migration_and_relocate(self):
+        code, plan = self.cli("--ledger-home", self.home,
+                              "site", "plan-migration", "local")
+        self.assertEqual(code, 0, plan)
+        self.assertEqual(plan["items"][0]["action"], "skip")
+        self.assertIn("在途", plan["items"][0]["reason"])
+        code, payload = self.cli(
+            "--ledger-home", self.home, "record", "relocate",
+            "--project-root", self.project_root, "--dimension", "run",
+            "--identity-id", "run-1", "--to", "/tmp/nowhere")
+        self.assertEqual(code, 2)
+        self.assertIn("在途", payload["error"])
+        code, unused = self.abort("--reason", "site 退役")
+        self.assertEqual(code, 0)
+        code, plan = self.cli("--ledger-home", self.home,
+                              "site", "plan-migration", "local")
+        self.assertEqual(code, 0, plan)
+        self.assertEqual(plan["items"][0]["action"], "move")
+        # relocate is allowed once the manifest evidence is in place
+        with open(os.path.join(self.run_root, "run-manifest.json"),
+                  "w") as handle:
+            json.dump({"run_id": "run-1"}, handle)
+        new_root = os.path.join(self.site_root, "projects", "demo",
+                                "runs", "alpha", "run-1")
+        os.makedirs(os.path.dirname(new_root))
+        shutil.move(self.run_root, new_root)
+        code, payload = self.cli(
+            "--ledger-home", self.home, "record", "relocate",
+            "--project-root", self.project_root, "--dimension", "run",
+            "--identity-id", "run-1", "--to", new_root)
+        self.assertEqual(code, 0, payload)
+
+    def test_dashboard_and_live_status_treat_aborted_as_terminal(self):
+        code, unused = self.abort("--reason", "确认死亡")
+        self.assertEqual(code, 0)
+        from entity_ledger_dashboard import build_dashboard
+        dashboard = build_dashboard(
+            OperationStore(self.home, create=False), self.project_root)
+        self.assertEqual(dashboard["board"]["run"]["state"], "aborted")
+        self.assertIn("已人工中止", dashboard["board"]["run"]["detail"])
+        self.assertTrue(any("人工中止" in step
+                            for step in dashboard["next_steps"]))
+        from entity_ledger_operation import status_for_project
+        status = status_for_project(
+            OperationStore(self.home, create=False), self.project_root,
+            live=True)
+        self.assertIsNone(status["live"])
+        self.assertEqual(status["remote_calls"], 0)
+        self.assertEqual(status["divergences"], [])
+
+
 if __name__ == "__main__":
     unittest.main()
