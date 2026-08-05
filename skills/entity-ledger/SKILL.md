@@ -40,8 +40,9 @@ Case/identity ID、哈希、Locator 和路径由控制器推导，不要让用�
 python3 scripts/entityctl.py workspace where
 ```
 
-控制器 home 的解析顺序：`--ledger-home` > `ENTITY_WORKSPACE` 环境变量
-> `~/.entity-ledger/active-workspace` 指针 > 旧 `~/.entity-ledger`
+控制器 home 的解析顺序：`--ledger-home`（以及 `ENTITY_LEDGER_HOME`/
+`ENTITY_ROUTER_HOME` 环境变量，同属显式档）> `ENTITY_WORKSPACE` 环境
+变量 > `~/.entity-ledger/active-workspace` 指针 > 旧 `~/.entity-ledger`
 （兼容回退）。没有激活的 workspace 时用 `workspace init <path>` 创建、
 `workspace adopt <path>` 激活；旧布局（散落的项目目录、旧
 `~/.entity-ledger`、site-notes）用 `workspace import` 一次性收编，见

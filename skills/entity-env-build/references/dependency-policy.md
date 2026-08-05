@@ -7,8 +7,10 @@
 对于 C++ 编译器与库，按以下顺序搜索：
 
 0. **Site deps 注册表** — `entityctl site deps <site> --json` 导出的
-   verified 栈（签名与当前 requirements 匹配）直接复用
-   `deps/<stack_id>/env.sh`;见 SKILL.md 第 2 节的查找顺序
+   verified 栈（签名与当前 requirements 匹配）直接复用其 packages;
+   见 SKILL.md 第 2 节的查找顺序。注册表里的 `env_sh` 路径仅供人读与
+   审计——env-build 的环境始终由 `entity_generate.py env` 从当前
+   checkpoint 的 packages 重建，不直接 source 注册表的 env.sh
 1. **系统 modules/软件包** — `module load`、`dnf`/`apt`/`brew` 或系统路径
 2. **Spack** — `spack find`、`spack load`
 3. **源码构建** — 最后手段；用 `entity_generate.py deps` 生成脚本

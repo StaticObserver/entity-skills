@@ -387,6 +387,18 @@ def _simulation_confirmation(input_path):
     return record
 
 
+def case_resolution_plan_error(exc):
+    """Uniform needs_decision mapping for Case-resolution failures shared by
+    facts._resolve_case and record._require_case."""
+    question = ("select the case with --case <%s>" % "|".join(exc.cases)
+                if exc.cases
+                else "create the case with entityctl case init")
+    return PlanError(
+        str(exc), "needs_decision",
+        [{"field": "case", "question": question}],
+    )
+
+
 def _resolve_case(store, project_root, goal, case_slug=None):
     try:
         return store.resolve_project(project_root, case_slug), False
@@ -395,7 +407,7 @@ def _resolve_case(store, project_root, goal, case_slug=None):
         # on first run; an ambiguous or unknown --case selection is a user
         # decision, never a silent new Case.
         if exc.reason not in ("no_project", "no_cases"):
-            raise
+            raise case_resolution_plan_error(exc)
         source_site = _source_site(store, project_root)
         case_uid = "case-" + canonical_hash({"project_root": project_root}).split(":", 1)[1][:16]
         case = {

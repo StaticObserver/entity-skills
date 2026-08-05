@@ -254,6 +254,29 @@ class ResolutionOrderTest(WorkspaceTestBase):
         with self.assertRaises(LedgerError):
             resolve_ledger_home()
 
+    def test_dangling_workspace_env_var_errors_without_creating(self):
+        ghost = os.path.join(self.temp, "ghost-ws")
+        os.environ["ENTITY_WORKSPACE"] = ghost
+        with self.assertRaises(LedgerError) as raised:
+            resolve_ledger_home()
+        self.assertIn("workspace", str(raised.exception))
+        # never silently makedirs a fresh empty store at a dangling path
+        self.assertFalse(os.path.exists(ghost))
+
+    def test_dangling_workspace_pointer_errors(self):
+        ghost = os.path.join(self.temp, "ghost-ws")
+        os.makedirs(ghost)
+        init_workspace(ghost)
+        write_active_workspace(ghost)
+        shutil.rmtree(ghost)
+        with self.assertRaises(LedgerError):
+            resolve_ledger_home()
+        self.assertFalse(os.path.exists(ghost))
+        code, payload, unused = self.cli("workspace", "where")
+        self.assertEqual(code, 2)
+        self.assertIn("workspace", payload["error"])
+        self.assertFalse(os.path.exists(ghost))
+
     def test_where_reports_environment_source(self):
         workspace = self._workspace()
         code, where, unused = self.cli(

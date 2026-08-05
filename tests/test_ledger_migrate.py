@@ -270,6 +270,35 @@ class V2ToV3MigrateTest(unittest.TestCase):
         self.assertTrue(stdout.strip(), stderr)
         return process.returncode, json.loads(stdout)
 
+    def test_trailing_slash_roots_merge_into_one_project(self):
+        connection = sqlite3.connect(self.database)
+        try:
+            connection.execute(
+                """INSERT INTO cases(case_uid,case_id,project_root,source_json,
+                       current_json,legacy_json,created_at,updated_at)
+                   VALUES(?,?,?,?,?,?,?,?)""",
+                ("case-2", "demo-b", self.project + os.sep, "{}", "{}", "{}",
+                 "2026-08-01T00:00:00Z", "2026-08-02T00:00:00Z"))
+            connection.execute(
+                "INSERT INTO projects(project_root,case_uid,updated_at) "
+                "VALUES(?,?,?)",
+                (self.project + os.sep, "case-2", "2026-08-02T00:00:00Z"))
+            connection.commit()
+        finally:
+            connection.close()
+        code, payload = self.cli("store", "migrate")
+        self.assertEqual(code, 0, payload)
+        store = OperationStore(self.home, create=False)
+        projects = store.find_projects()
+        # normalized roots collide -> a single Project, both Cases attached
+        self.assertEqual(len(projects), 1)
+        project = projects[0]
+        self.assertTrue(project["slug"])
+        self.assertEqual(project["slug"], os.path.basename(self.project))
+        cases = store.project_cases(project["project_uid"])
+        self.assertEqual(sorted(case["case_uid"] for case in cases),
+                         ["case-1", "case-2"])
+
     def test_v2_store_migrates_to_v3_project_entities(self):
         # the v3 runtime refuses the v2 store before migration
         with self.assertRaises(Exception) as caught:
@@ -289,7 +318,7 @@ class V2ToV3MigrateTest(unittest.TestCase):
         project = projects[0]
         self.assertTrue(project["project_uid"].startswith("project-"))
         self.assertEqual(project["slug"], os.path.basename(self.project))
-        self.assertEqual(project["project_root"], self.project)
+        self.assertEqual(project["project_root"], os.path.realpath(self.project))
         case = store.get_case("case-1")
         self.assertEqual(case["project_uid"], project["project_uid"])
         self.assertEqual(case["identities"]["run"]["current_id"], "run-1")
@@ -316,7 +345,8 @@ class LegacyStorageMigrationTest(unittest.TestCase):
         self.temp = tempfile.mkdtemp(prefix="entity-ledger-legacy-")
         self._env = mock.patch.dict(os.environ, {"HOME": self.temp})
         self._env.start()
-        for key in ("ENTITY_LEDGER_HOME", "ENTITY_ROUTER_HOME"):
+        for key in ("ENTITY_LEDGER_HOME", "ENTITY_ROUTER_HOME",
+                    "ENTITY_WORKSPACE"):
             os.environ.pop(key, None)
 
     def tearDown(self):

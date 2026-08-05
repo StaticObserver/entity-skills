@@ -10,6 +10,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
+REPO = ROOT.parents[1]
 
 
 def run_cmd(*args, env=None):
@@ -85,6 +86,24 @@ def registry_json(signature_overrides=None, status="verified") -> dict:
     }
 
 
+class SignatureVectorsTests(unittest.TestCase):
+    """env-build side of the shared signature contract; the same vectors
+    are consumed by tests/test_ledger_site_deps.py (ledger side)."""
+
+    def test_shared_vectors(self):
+        sys.path.insert(0, str(ROOT / "scripts"))
+        try:
+            from entity_checkpoint import registry_signature
+        finally:
+            sys.path.remove(str(ROOT / "scripts"))
+        vectors = json.loads(
+            (REPO / "tests" / "vectors" / "stack-signature.json").read_text(
+                encoding="utf-8"))["vectors"]
+        for vector in vectors:
+            self.assertEqual(registry_signature(vector["requirements"]),
+                             vector["expected"], vector["name"])
+
+
 class RegistryResolutionTests(unittest.TestCase):
     def write_json(self, path: Path, data: dict) -> None:
         path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
@@ -110,7 +129,9 @@ class RegistryResolutionTests(unittest.TestCase):
             data = json.loads(checkpoint.read_text(encoding="utf-8"))
             self.assertEqual(data["stack_id"], "gcc12.3.0-kokkos5.1.0-1a2b3c4d")
             kokkos = data["selected"]["kokkos"]
-            self.assertEqual(kokkos["provider"], "site-stack")
+            # the original provider is a fact and is preserved; the origin
+            # is carried by validation.source
+            self.assertEqual(kokkos["provider"], "module")
             self.assertEqual(kokkos["version"], "5.1.0")
             self.assertEqual(kokkos["prefix"], "/site/deps/stack/kokkos")
             self.assertEqual(kokkos["validation"]["source"], "site-registry")
@@ -169,8 +190,46 @@ class RegistryResolutionTests(unittest.TestCase):
             data = json.loads(checkpoint.read_text(encoding="utf-8"))
             # registry wins per dependency; the probe only fills the gaps
             self.assertEqual(data["selected"]["kokkos"]["version"], "5.1.0")
-            self.assertEqual(data["selected"]["kokkos"]["provider"], "site-stack")
+            self.assertEqual(data["selected"]["kokkos"]["provider"], "module")
             self.assertEqual(data["selected"]["adios2"]["prefix"], "/probed/adios2")
+            # gap-filling changed selected beyond the stack's packages, so
+            # the stack_id reference is downgraded to a note
+            self.assertNotIn("stack_id", data)
+            self.assertTrue(any("stack_id unset" in note
+                                for note in data["status"]["reuse_notes"]))
+
+    def test_handwritten_archive_with_int_scalars_still_matches(self):
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            # a hand-maintained archive may carry e.g. an integer
+            # cxx_standard; normalization must still hit the stack
+            registry = registry_json()
+            registry["stacks"][0]["signature"]["cxx_standard"] = 20
+            checkpoint = self.create(tmp, base_requirements(tmp), registry)
+            data = json.loads(checkpoint.read_text(encoding="utf-8"))
+            self.assertEqual(data["stack_id"],
+                             "gcc12.3.0-kokkos5.1.0-1a2b3c4d")
+
+    def test_record_install_invalidates_stack_id(self):
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            checkpoint = self.create(tmp, base_requirements(tmp),
+                                     registry_json())
+            data = json.loads(checkpoint.read_text(encoding="utf-8"))
+            self.assertIn("stack_id", data)
+            prefix = tmp / "new-dep"
+            prefix.mkdir()
+            proc = run_cmd(
+                "scripts/entity_checkpoint.py", "record-install",
+                "--checkpoint", str(checkpoint),
+                "--dep", "mpi", "--provider", "module",
+                "--prefix", str(prefix),
+            )
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            data = json.loads(checkpoint.read_text(encoding="utf-8"))
+            self.assertNotIn("stack_id", data)
+            self.assertTrue(any("record-install" in note
+                                for note in data["status"]["reuse_notes"]))
 
 
 if __name__ == "__main__":

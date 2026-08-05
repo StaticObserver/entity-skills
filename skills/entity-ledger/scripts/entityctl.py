@@ -530,15 +530,25 @@ def _scp_to_site(profile, source, target):
 
 def _read_site_marker(profile, marker_path):
     """Read entity-site.yaml off a Site; returns the parsed record, None
-    when absent, and raises only on a present-but-unparseable marker."""
+    when absent.  A transport failure is an error (never silently treated
+    as "absent", which would make site init overwrite a live marker)."""
     if profile.get("transport", {}).get("kind") == "local":
         if not os.path.isfile(marker_path):
             return None
         return load_flat_yaml(marker_path, "site marker")
-    code, stdout, unused = run_on_site(profile, ["cat", marker_path])
+    code, stdout, stderr = run_on_site(profile, [
+        "bash", "-c",
+        'if [ -f "$1" ]; then echo __PRESENT__; cat "$1"; '
+        'else echo __ABSENT__; fi', "bash", marker_path,
+    ])
     if code != 0:
+        raise EntityCtlError(
+            "cannot read the site marker on %s: %s"
+            % (profile["site_id"], stderr.strip() or stdout.strip()))
+    lines = stdout.splitlines()
+    if lines and lines[0].strip() == "__ABSENT__":
         return None
-    return parse_flat_yaml_text(stdout, marker_path)
+    return parse_flat_yaml_text("\n".join(lines[1:]), marker_path)
 
 
 def site_init_command(args):
@@ -854,11 +864,12 @@ def site_deps_add(args):
         "recorded_at": now_utc(),
         "recorded_by": actor.get("run_id", ""),
     }
-    updated = upsert_deps_stack(workspace, args.site_id, stack_entry)
+    # write order: the on-site stack.yaml first, then the archive, then the
+    # db mirror — a failed site write leaves every record untouched
     stack_yaml = os.path.join(site_root, "deps", stack_id, "stack.yaml")
     _write_site_file(profile, stack_yaml, STACK_YAML_FIELDS,
                      dict(stack_entry, schema_version=1, site_id=args.site_id))
-    # keep the db mirror fresh (site sync remains the batch path)
+    updated = upsert_deps_stack(workspace, args.site_id, stack_entry)
     store.upsert_site(validate_site_profile(profile_from_archive(updated)))
     return {
         "schema_version": SCHEMA_VERSION,
@@ -989,7 +1000,7 @@ def site_plan_migration(args):
         slug = slugs.get(case.get("project_uid") or "") \
             or os.path.basename(case.get("project_root") or "") \
             or case["case_uid"]
-        for dimension in ("build", "run"):
+        for dimension in ("build", "run", "data"):
             dimension_info = case.get("identities", {}).get(dimension, {})
             for identity in dimension_info.get("items", []):
                 root = identity.get("root", {})
@@ -998,10 +1009,19 @@ def site_plan_migration(args):
                     continue
                 recorded_paths.add(os.path.normpath(old_path))
                 identity_id = identity.get("id") or identity.get("identity_id", "")
-                new_path = os.path.join(
-                    site_root, "projects", slug,
-                    "builds" if dimension == "build" else "runs",
-                    case["case_id"], identity_id)
+                if dimension == "data":
+                    # the data root is the run root: it moves to the same
+                    # new-tree location as its parent run
+                    run_id = identity.get("parents", {}).get("run_id") \
+                        or identity_id
+                    new_path = os.path.join(
+                        site_root, "projects", slug, "runs",
+                        case["case_id"], run_id)
+                else:
+                    new_path = os.path.join(
+                        site_root, "projects", slug,
+                        "builds" if dimension == "build" else "runs",
+                        case["case_id"], identity_id)
                 action = "move"
                 reason = ""
                 if identity.get("layout") == "site-tree":
@@ -1064,6 +1084,7 @@ def site_import_notes(args):
         raise EntityCtlError("site-notes directory does not exist: %s" % notes_dir)
     targets = None
     if args.site_id:
+        validate_slug(args.site_id, "site_id")
         if not os.path.isfile(os.path.join(notes_dir, args.site_id + ".md")):
             raise EntityCtlError("no site notes for %s in %s"
                                  % (args.site_id, notes_dir))
@@ -1470,14 +1491,25 @@ def _migrate_v2_to_v3(database, home):
             "SELECT project_root,case_uid,updated_at FROM projects")]
     finally:
         source.close()
-    # one Project per v2 binding; the uid is deterministic in the root
+    # one Project per v2 binding; the uid is deterministic in the root.
+    # Roots are normalized first — trailing-slash/casing variants of the
+    # same directory merge into one Project instead of splitting.
     case_project = {}
     projects = []
+    merged_roots = {}
     for root, case_uid, updated_at in bindings:
-        seed = {"project_root": root or "", "case_uid": case_uid}
-        project_uid = "project-" + canonical_hash(seed).split(":", 1)[1][:16]
-        slug = os.path.basename(root) if root else case_uid
-        projects.append((project_uid, slug, root, updated_at, updated_at))
+        normalized_root = absolute(root) if root else None
+        if normalized_root and normalized_root in merged_roots:
+            project_uid = merged_roots[normalized_root]
+        else:
+            seed = {"project_root": normalized_root or "", "case_uid": case_uid}
+            project_uid = "project-" + canonical_hash(seed).split(":", 1)[1][:16]
+            slug = (os.path.basename(normalized_root)
+                    if normalized_root else "") or case_uid
+            projects.append((project_uid, slug, normalized_root,
+                             updated_at, updated_at))
+            if normalized_root:
+                merged_roots[normalized_root] = project_uid
         case_project[case_uid] = project_uid
     backup = os.path.join(archive_dir, "ledger-v2-%s.db" % stamp)
     shutil.copy2(database, backup)
@@ -1694,7 +1726,7 @@ def _import_file_step(kind, source, target, empty_target_ok=False):
 def _store_is_empty(database):
     connection = sqlite3.connect(database)
     try:
-        for table in ("sites", "cases", "events"):
+        for table in ("sites", "cases", "events", "projects", "identities"):
             row = connection.execute(
                 "SELECT COUNT(*) FROM %s" % table).fetchone()
             if row and row[0]:
@@ -1816,6 +1848,17 @@ def _register_imported_projects(workspace, store, eligible_slugs):
             })
             entry["action"] = "registered"
             bound_slugs.add(slug)
+        if entry["action"] in ("ok", "registered"):
+            # re-point the binding at the workspace copy: the Project root
+            # and every Case project_root move off the old layout paths
+            store.upsert_project(
+                project["project_uid"], slug, project_dir)
+            for case in store.project_cases(project["project_uid"]):
+                if (case.get("project_root") or "") != absolute(project_dir):
+                    store.upsert_case(
+                        case["case_uid"], case["case_id"], project_dir,
+                        case["source"], case["current"], case["legacy"],
+                        project_uid=project["project_uid"])
         bindings.append(entry)
     for name in sorted(eligible_slugs):
         project_dir = os.path.join(workspace, "projects", name)
@@ -1968,33 +2011,42 @@ def case_init_command(args):
     case_uid = "case-" + canonical_hash(
         {"project_uid": project["project_uid"], "case_id": case_slug}
     ).split(":", 1)[1][:16]
-    project_dir = os.path.join(workspace, "projects", project["slug"])
-    source_rel = load_project_yaml(project_dir).get("source") or "source"
-    source_path = os.path.join(project_dir, source_rel)
-    source_site = _source_site(store, source_path)
-    current = {"source_id": "", "build_id": "", "run_id": "",
-               "active_run": None, "data_id": "", "analysis_id": ""}
-    store.upsert_case(
-        case_uid, case_slug, project["project_root"],
-        {"authority": {"site_id": source_site, "path": source_path},
-         "transfer_policy": "snapshot",
-         "revision": _git_revision(source_path)
-         if os.path.isdir(source_path)
-         else {"kind": "path", "root": source_path}},
-        current,
-        project_uid=project["project_uid"])
+    # re-running must never reset an existing Case's booked state: only the
+    # directory skeleton is topped up, the store write is skipped
+    try:
+        store.get_case(case_uid)
+        already_exists = True
+    except LedgerError:
+        already_exists = False
+    if not already_exists:
+        project_dir = os.path.join(workspace, "projects", project["slug"])
+        source_rel = load_project_yaml(project_dir).get("source") or "source"
+        source_path = os.path.join(project_dir, source_rel)
+        source_site = _source_site(store, source_path)
+        current = {"source_id": "", "build_id": "", "run_id": "",
+                   "active_run": None, "data_id": "", "analysis_id": ""}
+        store.upsert_case(
+            case_uid, case_slug, project["project_root"],
+            {"authority": {"site_id": source_site, "path": source_path},
+             "transfer_policy": "snapshot",
+             "revision": _git_revision(source_path)
+             if os.path.isdir(source_path)
+             else {"kind": "path", "root": source_path}},
+            current,
+            project_uid=project["project_uid"])
     return {
         "schema_version": SCHEMA_VERSION,
         "ok": True,
         "kind": "entityctl.case.init",
-        "state_mutated": True,
+        "state_mutated": result["created"] or not already_exists,
         "actor": actor,
         "workspace": workspace,
         "project_uid": project["project_uid"],
         "case_uid": case_uid,
         "case_id": case_slug,
         "case_dir": result["case_dir"],
-        "created": result["created"],
+        "created": result["created"] and not already_exists,
+        "already_exists": already_exists,
     }
 
 

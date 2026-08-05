@@ -30,6 +30,22 @@ from entity_ledger_workspace import (
 )
 
 
+class SignatureVectorsTest(unittest.TestCase):
+    """Ledger side of the shared signature contract; the same vectors are
+    consumed by skills/entity-env-build/tests/test_registry_resolution.py."""
+
+    def test_shared_vectors(self):
+        vectors_path = os.path.join(ROOT, "tests", "vectors",
+                                    "stack-signature.json")
+        with open(vectors_path, "r") as handle:
+            vectors = json.load(handle)["vectors"]
+        for vector in vectors:
+            req = vector["requirements"]
+            signature = stack_signature(
+                req.get("environment"), req.get("entity"), req.get("compile"))
+            self.assertEqual(signature, vector["expected"], vector["name"])
+
+
 class DepsTestBase(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.mkdtemp(prefix="entity-ledger-deps-")
@@ -186,6 +202,24 @@ class SiteDepsAddTest(DepsTestBase):
         self.assertEqual(code, 2)
         self.assertIn("other-site", payload["error"])
 
+    def test_deps_add_site_write_failure_leaves_archive_untouched(self):
+        env_sh = self.write_env_sh()
+        checkpoint = self.write_checkpoint()
+        # make the stack directory unwritable: the on-site stack.yaml write
+        # must fail BEFORE the archive registry is touched
+        os.chmod(os.path.dirname(env_sh), 0o500)
+        try:
+            code, payload = self.cli_json(
+                "site", "deps-add", "m87", "--from-checkpoint", checkpoint)
+        finally:
+            os.chmod(os.path.dirname(env_sh), 0o700)
+        self.assertEqual(code, 2)
+        archives = list_site_archives(self.workspace)
+        self.assertEqual(archives["m87"].get("deps") or [], [])
+        self.assertFalse(os.path.exists(
+            os.path.join(self.site_root, "deps", self.stack_id(),
+                         "stack.yaml")))
+
 
 class SiteDepsViewTest(DepsTestBase):
     def test_site_deps_json_and_text(self):
@@ -288,6 +322,150 @@ class RecordBuildStackTest(DepsTestBase):
         case = self.store.get_case("case-1")
         identity = case["identities"]["build"]["items"][0]
         self.assertNotIn("stack_id", identity)
+
+
+class CrossSkillRegistryTest(RecordBuildStackTest):
+    """Cross-skill closure: ledger deps registry -> env-build
+    --from-registry -> record build must keep one stack_id."""
+
+    ENV_BUILD = os.path.join(ROOT, "skills", "entity-env-build")
+
+    def write_requirements(self, selected_site="local"):
+        root = os.path.join(self.temp, "req")
+        for name in ("src", "build", "deps", "artifacts"):
+            os.makedirs(os.path.join(root, name))
+        requirements = {
+            "schema_version": 2,
+            "entity": {
+                "site_id": selected_site,
+                "source_checkout": os.path.join(root, "src"),
+                "source_revision": {"kind": "git", "commit": "a", "tree": "b"},
+                "build_root": os.path.join(root, "build"),
+                "deps_root": os.path.join(root, "deps"),
+                "artifacts_root": os.path.join(root, "artifacts"),
+                "version_bucket": "1.4.3",
+                "dependency_profile": "modern",
+            },
+            "environment": {"backend": "cpu", "output": True, "mpi": False,
+                            "dependency_policy": "reuse-existing"},
+            "compile": {"pgen": "smoke", "cxx_standard": "20"},
+        }
+        path = os.path.join(root, "requirements.json")
+        with open(path, "w") as handle:
+            json.dump(requirements, handle)
+        return path
+
+    def env_create(self, requirements, registry, output):
+        env = dict((key, value) for key, value in os.environ.items()
+                   if not key.startswith("ENTITY_"))
+        process = subprocess.Popen(
+            [sys.executable,
+             os.path.join("scripts", "entity_checkpoint.py"),
+             "create", requirements,
+             "--from-registry", registry,
+             "--output", output],
+            cwd=self.ENV_BUILD, env=env,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            universal_newlines=True)
+        stdout, stderr = process.communicate()
+        self.assertEqual(process.returncode, 0, stderr)
+        with open(output, "r") as handle:
+            return json.load(handle)
+
+    def export_registry(self):
+        registry = os.path.join(self.temp, "registry.json")
+        code, stdout, unused = self.cli("site", "deps", "local", "--json")
+        self.assertEqual(code, 0)
+        with open(registry, "w") as handle:
+            handle.write(stdout)
+        return registry
+
+    def test_registry_hit_closes_stack_id_loop(self):
+        write_site_yaml(self.workspace, {
+            "site_id": "local", "transport": {"kind": "local"},
+            "site_root": self.site_root})
+        self.write_env_sh()
+        checkpoint = self.write_checkpoint(site_id="local")
+        code, payload = self.cli_json(
+            "site", "deps-add", "local", "--from-checkpoint", checkpoint)
+        self.assertEqual(code, 0, payload)
+        stack_id = payload["stack_id"]
+        # env-build consumes the exported registry
+        requirements = self.write_requirements()
+        created = self.env_create(
+            requirements, self.export_registry(),
+            os.path.join(self.temp, "checkpoint-from-registry.json"))
+        self.assertEqual(created["stack_id"], stack_id)
+        # the original providers are preserved (origin is validation.source)
+        self.assertEqual(created["selected"]["compiler"]["provider"],
+                         "system")
+        self.assertEqual(created["selected"]["kokkos"]["provider"], "module")
+        self.assertEqual(
+            created["selected"]["kokkos"]["validation"]["source"],
+            "site-registry")
+        # a verified checkpoint from that stack records the same stack_id
+        # with no spurious "stack not registered" hint
+        created["compatibility"] = {"status": "pass"}
+        created["decisions"] = {"parameters": {"digest": "sha256:" + "1" * 64}}
+        verified = os.path.join(self.temp, "checkpoint-verified.json")
+        with open(verified, "w") as handle:
+            json.dump(created, handle)
+        code, built = self.record_build(verified)
+        self.assertEqual(code, 0, built)
+        self.assertEqual(built["stack_id"], stack_id)
+        self.assertEqual(built["warnings"], [])
+
+    def test_cmake_config_only_dependency_roundtrips(self):
+        selected = {
+            "cmake": {"name": "cmake", "version": "3.28.0",
+                      "cmake_config": "/opt/cmake/lib/cmake",
+                      "provider": "system"},
+        }
+        signature = self.signature()
+        stack_id = derive_stack_id(selected, signature)
+        checkpoint = {
+            "schema_version": 2,
+            "requirements": {"path": "", "embedded": {
+                "entity": {"site_id": "local",
+                           "dependency_profile": "modern"},
+                "environment": {"backend": "cpu", "mpi": False,
+                                "gpu_aware_mpi": False, "output": True},
+                "compile": {"cxx_standard": "20"},
+            }},
+            "entity": {"site_id": "local"},
+            "selected": selected,
+            "compatibility": {"status": "pass"},
+            "decisions": {"parameters": {"digest": "sha256:" + "1" * 64}},
+        }
+        checkpoint_path = os.path.join(self.temp, "checkpoint-cmake.json")
+        with open(checkpoint_path, "w") as handle:
+            json.dump(checkpoint, handle)
+        env_sh = os.path.join(self.site_root, "deps", stack_id, "env.sh")
+        os.makedirs(os.path.dirname(env_sh))
+        with open(env_sh, "w") as handle:
+            handle.write("export X=1\n")
+        write_site_yaml(self.workspace, {
+            "site_id": "local", "transport": {"kind": "local"},
+            "site_root": self.site_root})
+        code, payload = self.cli_json(
+            "site", "deps-add", "local", "--from-checkpoint", checkpoint_path)
+        self.assertEqual(code, 0, payload)
+        archives = list_site_archives(self.workspace)
+        package = archives["local"]["deps"][0]["packages"][0]
+        # cmake-config-only dependencies keep their config path; no
+        # prefix<-bin fallback invents one
+        self.assertEqual(package["cmake_config"], "/opt/cmake/lib/cmake")
+        self.assertNotIn("prefix", package)
+        self.assertNotIn("bin", package)
+        # ...and env-build can consume the stack again (--from-registry)
+        requirements = self.write_requirements()
+        created = self.env_create(
+            requirements, self.export_registry(),
+            os.path.join(self.temp, "checkpoint-cmake-out.json"))
+        self.assertEqual(created["stack_id"], stack_id)
+        self.assertEqual(created["selected"]["cmake"]["cmake_config"],
+                         "/opt/cmake/lib/cmake")
+        self.assertEqual(created["selected"]["cmake"]["provider"], "system")
 
 
 if __name__ == "__main__":

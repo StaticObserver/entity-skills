@@ -53,7 +53,8 @@ entity-skills/
 Codex、Claude Code、Kimi Code 和普通 shell 默认共享控制器状态：激活
 workspace 的 `.ledger/ledger.db`（schema v3：Site、Project、Case、identity
 与审计事件；并发为单写文件锁）。控制器 home 的解析顺序为
-`--ledger-home` > `ENTITY_WORKSPACE` 环境变量 >
+`--ledger-home`（以及 `ENTITY_LEDGER_HOME`/`ENTITY_ROUTER_HOME`，同属
+显式档）> `ENTITY_WORKSPACE` 环境变量 >
 `~/.entity-ledger/active-workspace` 指针 > 旧 `~/.entity-ledger`（兼容
 回退）。identity、事件和 evidence reference 不写入客户端私有目录或源码
 仓库。远端不可用时仍可读取最后一次控制快照，但缓存 evidence 不代表当前

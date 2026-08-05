@@ -87,6 +87,21 @@ def _warn_legacy_fallback_once(home):
     )
 
 
+def _require_valid_workspace(workspace, source):
+    """environment/pointer sources must name a valid workspace — never
+    silently create a fresh empty store at a dangling path (split-brain).
+    Checked lazily to avoid a store <-> workspace module import cycle."""
+    from entity_ledger_workspace import WorkspaceError, is_workspace
+    path = absolute(workspace)
+    if not is_workspace(path):
+        raise WorkspaceError(
+            "解析来源 %s 指向的 workspace 无效(不存在或已损坏): %s;"
+            "请用 entityctl workspace init <path> 重建后 adopt,或修正/"
+            "删除该来源(环境变量 ENTITY_WORKSPACE 或 "
+            "~/.entity-ledger/active-workspace 指针)" % (source, path))
+    return workspace_ledger_home(path)
+
+
 def resolve_ledger_home(explicit=None):
     """Resolve the controller home (the directory holding ledger.db).
 
@@ -95,7 +110,8 @@ def resolve_ledger_home(explicit=None):
     ``ENTITY_WORKSPACE`` environment variable > the
     ``~/.entity-ledger/active-workspace`` pointer > the legacy
     ``~/.entity-ledger`` home (compatibility fallback, warns once on
-    stderr).  Returns ``(home, source)`` where source is one of
+    stderr).  environment/pointer sources must name a valid workspace.
+    Returns ``(home, source)`` where source is one of
     ``explicit``, ``environment``, ``pointer``, ``legacy``.
     """
     if (explicit or os.environ.get("ENTITY_LEDGER_HOME")
@@ -103,10 +119,10 @@ def resolve_ledger_home(explicit=None):
         return ledger_home(explicit), "explicit"
     workspace = os.environ.get("ENTITY_WORKSPACE")
     if workspace:
-        return workspace_ledger_home(workspace), "environment"
+        return _require_valid_workspace(workspace, "environment"), "environment"
     pointer = read_active_workspace()
     if pointer:
-        return workspace_ledger_home(pointer), "pointer"
+        return _require_valid_workspace(pointer, "pointer"), "pointer"
     home = ledger_home(None)
     _warn_legacy_fallback_once(home)
     return home, "legacy"
@@ -443,11 +459,16 @@ class OperationStore(object):
                 project_uid = self._ensure_project(
                     normalized_project, connection, timestamp)
             existing = connection.execute(
-                "SELECT created_at FROM cases WHERE case_uid=?", (case_uid,)
+                "SELECT created_at,project_uid FROM cases WHERE case_uid=?",
+                (case_uid,),
             ).fetchone()
             if existing:
                 # UPDATE in place: INSERT OR REPLACE is DELETE+INSERT, which
                 # can trip the foreign keys from projects/identities/events.
+                # A call without project context (project_uid=None) keeps the
+                # existing binding instead of silently unbinding the Case.
+                if project_uid is None:
+                    project_uid = existing["project_uid"]
                 connection.execute(
                     """UPDATE cases SET case_id=?,project_uid=?,project_root=?,
                            source_json=?,current_json=?,legacy_json=?,updated_at=?

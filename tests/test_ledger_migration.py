@@ -158,6 +158,13 @@ class WorkspaceImportTest(MigrationTestBase):
         self.assertEqual(case["project_uid"], project["project_uid"])
         record = load_project_yaml(copied)
         self.assertEqual(record["project_uid"], project["project_uid"])
+        # the binding is re-pointed at the workspace copy, not the old path
+        self.assertEqual(project["project_root"], os.path.realpath(copied))
+        self.assertEqual(case["project_root"], os.path.realpath(copied))
+        # ...so the old Case resolves under the new workspace (no new Case)
+        resolved = store.resolve_project(copied)
+        self.assertEqual(resolved["case_uid"], "case-1")
+        self.assertEqual(len(exported["cases"]), 1)
         # the old db file itself was migrated in place inside .ledger
         self.assertTrue(payload["store_migrations"])
         backup = os.path.join(self.ledger, "ledger.db.pre-import")
@@ -174,6 +181,22 @@ class WorkspaceImportTest(MigrationTestBase):
         actions = set(step["action"] for step in again["steps"])
         self.assertNotIn("copy", actions)
         self.assertNotIn("replace", actions)
+
+    def test_import_after_project_init_does_not_replace_store(self):
+        # a project entity in the workspace store means it is NOT empty:
+        # the foreign ledger.db must conflict, never replace
+        code, unused = self.cli("project", "init", "demo")
+        self.assertEqual(code, 0)
+        code, payload = self.cli(*(self.import_args() + ["--apply"]))
+        self.assertEqual(code, 0, payload)
+        ledger_steps = [step for step in payload["steps"]
+                        if step["kind"] == "ledger.db"]
+        self.assertEqual(ledger_steps[0]["action"], "skip-conflict")
+        store = OperationStore(self.ledger, create=False)
+        self.assertEqual(
+            [project["slug"] for project in store.find_projects()], ["demo"])
+        self.assertEqual(
+            [site["site_id"] for site in store.export()["sites"]], [])
 
     def test_conflicting_project_dir_is_skipped_never_overwritten(self):
         target = os.path.join(self.workspace, "projects", "demo")
@@ -214,6 +237,40 @@ class WorkspaceImportTest(MigrationTestBase):
     def store_site_ids(self, home):
         return [site["site_id"]
                 for site in OperationStore(home, create=False).export()["sites"]]
+
+    def test_import_chains_v1_store_to_current(self):
+        from test_ledger_migrate import V1_SCHEMA
+        os.unlink(os.path.join(self.old_home, "ledger.db"))
+        database = os.path.join(self.old_home, "ledger.db")
+        demo = os.path.join(self.old_projects, "demo")
+        connection = sqlite3.connect(database)
+        try:
+            connection.executescript(V1_SCHEMA)
+            connection.execute(
+                "INSERT INTO meta(key,value) VALUES('schema_version','1')")
+            connection.execute(
+                """INSERT INTO cases(case_uid,case_id,project_root,source_json,
+                       current_json,legacy_json,active_operation_id,created_at,
+                       updated_at) VALUES(?,?,?,?,?,?,?,?,?)""",
+                ("case-1", "demo", demo, "{}", "{}", "{}", None,
+                 "2026-07-20T00:00:00Z", "2026-07-21T00:00:00Z"))
+            connection.execute(
+                "INSERT INTO projects(project_root,case_uid,updated_at) "
+                "VALUES(?,?,?)", (demo, "case-1", "2026-07-21T00:00:00Z"))
+            connection.commit()
+        finally:
+            connection.close()
+        code, payload = self.cli(*(self.import_args() + ["--apply"]))
+        self.assertEqual(code, 0, payload)
+        # the copied store went through the whole v1 -> v2 -> v3 chain
+        self.assertEqual(len(payload["store_migrations"]), 2)
+        store = OperationStore(self.ledger, create=False)
+        exported = store.export()
+        self.assertEqual(exported["schema_version"], STORE_SCHEMA_VERSION)
+        self.assertEqual(len(exported["cases"]), 1)
+        resolved = store.resolve_project(
+            os.path.join(self.workspace, "projects", "demo"))
+        self.assertEqual(resolved["case_uid"], "case-1")
 
 
 class PlanMigrationTest(MigrationTestBase):
@@ -262,6 +319,12 @@ class PlanMigrationTest(MigrationTestBase):
             {"id": "run-2", "kind": "run", "site_id": "local",
              "root": {"site_id": "local", "path": self.inflight_run},
              "status": "submitted"}, False)
+        self.store.add_identity(
+            "case-1", "data", "data-1",
+            {"id": "data-1", "kind": "data", "site_id": "local",
+             "root": {"site_id": "local", "path": self.old_run},
+             "parents": {"run_id": "run-1"},
+             "status": "inventoried"}, True)
 
     def test_plan_maps_old_tree_to_new_tree(self):
         code, payload = self.cli("--ledger-home", self.home,
@@ -283,10 +346,15 @@ class PlanMigrationTest(MigrationTestBase):
         self.assertEqual(run["new"]["path"], os.path.join(
             os.path.normpath(self.site_root),
             "projects", "demo", "runs", "alpha", "run-1"))
+        # the data identity moves with its parent run (data root == run root)
+        data = by_id["data-1"]
+        self.assertEqual(data["dimension"], "data")
+        self.assertEqual(data["action"], "move")
+        self.assertEqual(data["new"]["path"], run["new"]["path"])
         inflight = by_id["run-2"]
         self.assertEqual(inflight["action"], "skip")
         self.assertIn("在途", inflight["reason"])
-        self.assertEqual(payload["moves"], 2)
+        self.assertEqual(payload["moves"], 3)
         self.assertEqual(payload["skips"], 1)
         self.assertEqual(payload["untracked"],
                          [os.path.join(self.run_root, "case-1", "run-9")])
@@ -366,7 +434,9 @@ class RelocateTest(MigrationTestBase):
         self.assertEqual(identity["root"]["path"], os.path.normpath(new_root))
         self.assertEqual(identity["scheduler"]["run_root"],
                          os.path.normpath(new_root))
-        self.assertEqual(identity["layout"], "site-tree")
+        # the site has no site_root: the relocated path is outside the site
+        # tree convention and stays legacy-roots
+        self.assertEqual(identity["layout"], "legacy-roots")
         self.assertEqual(case["current"]["active_run"]["path"],
                          os.path.normpath(new_root))
         events = self.store.export()["events"]
@@ -419,6 +489,74 @@ class RelocateTest(MigrationTestBase):
         self.assertIn("fingerprint mismatch", payload["error"])
         identity = self.store.get_case("case-1")["identities"]["build"]["items"][0]
         self.assertEqual(identity["root"]["path"], os.path.normpath(new_root))
+
+    def test_relocate_marks_site_tree_only_under_convention(self):
+        # same move, but the site declares site_root and the target sits
+        # under <site_root>/projects -> site-tree
+        site_root = os.path.join(self.temp, "compute")
+        self.store.upsert_site({
+            "schema_version": 1, "site_id": "local",
+            "transport": {"kind": "local"}, "scheduler": {"kind": "none"},
+            "site_root": site_root, "roots": {}, "policy": {}})
+        new_root = os.path.join(site_root, "projects", "demo",
+                                "runs", "alpha", "run-1")
+        os.makedirs(os.path.dirname(new_root))
+        shutil.move(self.old_run, new_root)
+        code, payload = self.relocate("run", "run-1", new_root)
+        self.assertEqual(code, 0, payload)
+        identity = self.store.get_case("case-1")["identities"]["run"]["items"][0]
+        self.assertEqual(identity["layout"], "site-tree")
+
+    def test_relocate_data_inventory_evidence(self):
+        with open(os.path.join(self.old_run, "data-inventory.json"), "w") as handle:
+            json.dump({"files": []}, handle)
+        self.store.add_identity(
+            "case-1", "data", "data-1",
+            {"id": "data-1", "kind": "data", "site_id": "local",
+             "root": {"site_id": "local", "path": self.old_run},
+             "parents": {"run_id": "run-1"},
+             "manifest": os.path.join(self.old_run, "data-inventory.json"),
+             "status": "inventoried"}, True)
+        new_root = os.path.join(self.temp, "moved", "run-1")
+        os.makedirs(os.path.dirname(new_root))
+        shutil.move(self.old_run, new_root)
+        code, payload = self.relocate("data", "data-1", new_root)
+        self.assertEqual(code, 0, payload)
+        identity = self.store.get_case("case-1")["identities"]["data"]["items"][0]
+        self.assertEqual(identity["root"]["path"], os.path.normpath(new_root))
+        self.assertEqual(identity["manifest"], os.path.join(
+            os.path.normpath(new_root), "data-inventory.json"))
+        # missing inventory manifest -> zero writes
+        empty = os.path.join(self.temp, "empty-data")
+        os.makedirs(empty)
+        code, payload = self.relocate("data", "data-1", empty)
+        self.assertEqual(code, 2)
+        self.assertIn("data inventory manifest", payload["error"])
+        identity = self.store.get_case("case-1")["identities"]["data"]["items"][0]
+        self.assertEqual(identity["root"]["path"], os.path.normpath(new_root))
+
+    def test_relocate_error_paths(self):
+        # unknown identity
+        code, payload = self.relocate("run", "run-9", self.old_run)
+        self.assertEqual(code, 2)
+        self.assertEqual(payload["status"], "needs_decision")
+        self.assertIn("unknown run identity", payload["error"])
+        # non-absolute target
+        code, payload = self.relocate("run", "run-1", "relative/path")
+        self.assertEqual(code, 2)
+        self.assertIn("absolute", payload["error"])
+        # unsupported dimension string is rejected by argparse choices
+        process = subprocess.Popen(
+            [sys.executable, ENTITYCTL, "--ledger-home", self.home,
+             "record", "relocate", "--project-root", self.project_root,
+             "--dimension", "source", "--identity-id", "x", "--to", "/tmp/x"],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            universal_newlines=True)
+        stdout, stderr = process.communicate()
+        self.assertEqual(process.returncode, 2)
+        identity = self.store.get_case("case-1")["identities"]["run"]["items"][0]
+        self.assertEqual(identity["root"]["path"],
+                         os.path.normpath(self.old_run))
 
 
 if __name__ == "__main__":

@@ -111,6 +111,15 @@ class SiteArchiveTest(SiteTestBase):
         with self.assertRaises(WorkspaceError):
             load_site_yaml(path)
 
+    def test_bracket_prefixed_scalars_roundtrip_quoted(self):
+        # a scalar starting with [ or { would parse as a flow collection;
+        # the writer must quote it
+        record = self.write_archive("m87", site_root="/[bracket]/compute",
+                                    notes="单行 notes")
+        loaded = load_site_yaml(site_yaml_path(self.workspace, "m87"))
+        self.assertEqual(loaded["site_root"], "/[bracket]/compute")
+        self.assertEqual(loaded["notes"], "单行 notes")
+
     def test_profile_from_archive_maps_to_db_shape(self):
         record = self.write_archive(
             "m87", transport={"kind": "ssh", "alias": "m87"},
@@ -222,6 +231,23 @@ class SiteInitTest(SiteTestBase):
         self.assertEqual(code, 2)
         self.assertIn("site_root", payload["error"])
 
+    def test_site_init_transport_failure_is_not_treated_as_absent(self):
+        # an ssh failure must abort site init, never rewrite a live marker
+        self.write_archive("m87",
+                           transport={"kind": "ssh", "alias": "ghost-host"},
+                           site_root="/remote/compute")
+        import argparse
+        import entityctl
+        args = argparse.Namespace(site_id="m87", ledger_home=None,
+                                  actor_run_id="t", actor_provider="",
+                                  actor_client="", actor_session_id="",
+                                  actor_model="", actor_bundle_hash="")
+        with mock.patch("entityctl.run_on_site",
+                        return_value=(255, "", "ssh: connect to host failed")):
+            with self.assertRaises(Exception) as raised:
+                entityctl.site_init_command(args)
+        self.assertIn("cannot read the site marker", str(raised.exception))
+
 
 class SiteDiscoverTest(SiteTestBase):
     def test_discover_records_machine_and_claims_marker(self):
@@ -297,6 +323,10 @@ class SiteImportNotesTest(SiteTestBase):
                                  "--notes-dir", self.notes)
         self.assertEqual(code, 2)
         self.assertIn("no site notes", missing["error"])
+        code, invalid = self.cli("site", "import-notes", "--site", "bad/name",
+                                 "--notes-dir", self.notes)
+        self.assertEqual(code, 2)
+        self.assertIn("invalid site_id", invalid["error"])
 
 
 class SiteTreeDerivationTest(SiteTestBase):

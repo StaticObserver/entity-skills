@@ -1,0 +1,61 @@
+{
+  "comment": "Shared signature contract vectors consumed by BOTH sides: tests/test_ledger_site_deps.py (ledger stack_signature) and skills/entity-env-build/tests/test_registry_resolution.py (registry_signature). Each vector maps a requirements fragment to the expected effective signature; keep in sync with entity_ledger_workspace.stack_signature and entity_checkpoint.registry_signature.",
+  "vectors": [
+    {
+      "name": "fully explicit values pass through",
+      "requirements": {
+        "environment": {"backend": "cuda", "mpi": true, "gpu_aware_mpi": true, "output": true},
+        "entity": {"dependency_profile": "modern", "version_bucket": "1.4.3"},
+        "compile": {"cxx_standard": "20"}
+      },
+      "expected": {
+        "backend": "cuda", "mpi": true, "gpu_aware_mpi": true,
+        "output": true, "cxx_standard": "20", "dependency_profile": "modern"
+      }
+    },
+    {
+      "name": "omitted cxx_standard and dependency_profile resolve to profile defaults",
+      "requirements": {
+        "environment": {"backend": "cpu", "mpi": false, "output": false},
+        "entity": {"version_bucket": "1.4.0"},
+        "compile": {}
+      },
+      "expected": {
+        "backend": "cpu", "mpi": false, "gpu_aware_mpi": false,
+        "output": false, "cxx_standard": "20", "dependency_profile": "modern"
+      }
+    },
+    {
+      "name": "null fields behave like omitted fields",
+      "requirements": {
+        "environment": {"backend": "cpu", "mpi": null, "gpu_aware_mpi": null, "output": null},
+        "entity": {"dependency_profile": null},
+        "compile": {"cxx_standard": null}
+      },
+      "expected": {
+        "backend": "cpu", "mpi": false, "gpu_aware_mpi": false,
+        "output": true, "cxx_standard": "20", "dependency_profile": "modern"
+      }
+    },
+    {
+      "name": "mpi and output booleans normalize",
+      "requirements": {
+        "environment": {"backend": "hip", "mpi": true, "gpu_aware_mpi": false, "output": true},
+        "entity": {"dependency_profile": "modern"},
+        "compile": {"cxx_standard": "20"}
+      },
+      "expected": {
+        "backend": "hip", "mpi": true, "gpu_aware_mpi": false,
+        "output": true, "cxx_standard": "20", "dependency_profile": "modern"
+      }
+    },
+    {
+      "name": "missing sections sign as empty backend with defaults elsewhere",
+      "requirements": {},
+      "expected": {
+        "backend": "", "mpi": false, "gpu_aware_mpi": false,
+        "output": true, "cxx_standard": "20", "dependency_profile": "modern"
+      }
+    }
+  ]
+}

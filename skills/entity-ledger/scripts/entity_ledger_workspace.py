@@ -58,8 +58,9 @@ def _format_value(value):
     if isinstance(value, (dict, list)):
         return json.dumps(value, sort_keys=True)
     text = str(value)
-    if (not text or text != text.strip()
-            or any(char in text for char in ":#\"'&*!|>%@`") or " " in text):
+    if (not text or text != text.strip() or "\r" in text
+            or any(char in text for char in ":#\"'&*!|>%@`[]{}")
+            or " " in text):
         return json.dumps(text)
     return text
 
@@ -475,36 +476,57 @@ STACK_SIGNATURE_FIELDS = (
     "backend", "mpi", "gpu_aware_mpi", "output", "cxx_standard",
     "dependency_profile",
 )
+# Package keys preserved between a checkpoint's selected entries and the
+# registry; discovery_from_stack (env-build) copies exactly these back so a
+# deps-add -> export -> --from-registry round trip keeps the same stack_id.
+STACK_PACKAGE_KEYS = (
+    "version", "prefix", "provider", "bin", "include", "lib",
+    "cmake_config", "modules",
+)
+# Mirror of entity_schema.PROFILES[*]["cxx_standard"] (env-build is the
+# single source; only "modern" exists today).  Used to normalize the
+# signature when requirements omit cxx_standard.
+_PROFILE_CXX_DEFAULTS = {"modern": "20"}
 
 
 def stack_signature(environment, entity, compile_cfg):
+    """Effective toolchain signature: omitted cxx_standard /
+    dependency_profile resolve to the version-profile defaults (never ""
+    for a buildable request), so equivalent requests sign identically."""
     environment = environment or {}
     entity = entity or {}
     compile_cfg = compile_cfg or {}
+    profile = str(entity.get("dependency_profile") or "") or "modern"
+    cxx_standard = str(compile_cfg.get("cxx_standard") or "") \
+        or _PROFILE_CXX_DEFAULTS.get(profile, "")
+    output = environment.get("output", True)
     return {
         "backend": str(environment.get("backend", "")),
         "mpi": bool(environment.get("mpi", False)),
         "gpu_aware_mpi": bool(environment.get("gpu_aware_mpi", False)),
-        "output": bool(environment.get("output", True)),
-        "cxx_standard": str(compile_cfg.get("cxx_standard", "")),
-        "dependency_profile": str(entity.get("dependency_profile", "")),
+        "output": bool(True if output is None else output),
+        "cxx_standard": cxx_standard,
+        "dependency_profile": profile,
     }
 
 
 def stack_packages(selected):
     """Normalize a checkpoint's selected dependencies into registry
-    packages: sorted, one entry per dependency with its reuse evidence."""
+    packages: sorted, one entry per dependency, preserving every reuse key
+    (prefix stays absent when the dependency is cmake-config-only — no
+    prefix<-bin fallback)."""
     packages = []
     for name in sorted(selected):
         entry = selected[name]
         if not isinstance(entry, dict):
             continue
-        packages.append({
-            "name": name,
-            "version": str(entry.get("version", "")),
-            "prefix": str(entry.get("prefix") or entry.get("bin") or ""),
-            "provider": str(entry.get("provider", "")),
-        })
+        package = {"name": name}
+        for key in STACK_PACKAGE_KEYS:
+            value = entry.get(key)
+            if value in (None, "", []):
+                continue
+            package[key] = str(value) if key == "version" else value
+        packages.append(package)
     return packages
 
 
@@ -513,20 +535,20 @@ def _compact(text):
 
 
 def derive_stack_id(selected, signature):
-    """Deterministic, human-readable stack id: toolchain prefix plus a
-    content hash of (signature, packages), so the same stack always gets
-    the same id and different stacks never collide."""
+    """Deterministic, human-readable stack id: toolchain prefix (dependency
+    keys + versions, never the free-form entry name, which does not survive
+    a registry round trip) plus 12 hex chars of the (signature, packages)
+    content hash — collision-resistant within one site registry."""
     parts = []
     for dep in ("compiler", "mpi", "kokkos"):
         entry = selected.get(dep)
         if isinstance(entry, dict) and entry.get("version"):
-            parts.append(_compact(entry.get("name") or dep)
-                         + _compact(entry["version"]))
+            parts.append(_compact(dep) + _compact(entry["version"]))
     base = "-".join(parts) if parts else "stack"
     digest = canonical_hash({
         "signature": signature,
         "packages": stack_packages(selected),
-    }).split(":", 1)[1][:8]
+    }).split(":", 1)[1][:12]
     return "%s-%s" % (base, digest)
 
 

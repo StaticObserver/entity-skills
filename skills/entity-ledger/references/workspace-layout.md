@@ -25,11 +25,12 @@ entity-workspace/                    # 位置用户自选;entityctl workspace in
 `ledger.db` 只包含紧凑的事实和证据引用。它绝不放在源代码检出目录
 内(`.ledger/` 位于 workspace 根,不在任何 source authority 内部),也
 绝不复制到 `.codex`、`.claude` 或 `.kimi-code` 等 provider 私有根目录。
-从 v3 导入的控制器可能仍带有迁移前保留的文件(`registry.json`、
-`sites/`、`cases/`);它们是只读的历史证据,当前运行时绝不读取或写入
-它们。
+新 workspace 的 `.ledger/` 只有 `ledger.db` 与 `snapshots/`;
+`registry.json`、`sites/`、`cases/` 等前 v3 文件只可能存在于尚未收编的
+旧 `~/.entity-ledger`——它们由 `workspace import` 处理,运行时绝不读取。
 
-控制器 home 的解析顺序:显式参数(`--ledger-home`)>
+控制器 home 的解析顺序:显式参数(`--ledger-home`,以及
+`ENTITY_LEDGER_HOME`/`ENTITY_ROUTER_HOME` 环境变量)>
 `ENTITY_WORKSPACE` 环境变量 > `~/.entity-ledger/active-workspace` 指针 >
 旧 `~/.entity-ledger`(兼容回退,打 deprecation 警告)。snapshots 随 db
 一起解析到同一 home 下。
@@ -50,10 +51,11 @@ notes: |                                      # 自由文本,保留人的经验
 ```
 
 档案是权威;ledger.db 的 `sites` 表由 `entityctl site sync` 从档案刷
-新。只在 db 里存在的 site(旧 `site add` 登记的)在 `site list` 中标
-注 db-only,保持可用,不自动删除。凭证、SSH 私钥不进档案;档案只记
-SSH alias 名。密码、令牌、可变会话记忆以及完整的 skill 副本都不应进
-入项目或控制器状态。
+新(映射时 `transport.alias` 改写为 db profile 的 `transport.ssh_alias`,
+`templates/site-profile.schema.json` 用的是后者)。只在 db 里存在的
+site(旧 `site add` 登记的)在 `site list` 中标注 db-only,保持可用,
+不自动删除。凭证、SSH 私钥不进档案;档案只记 SSH alias 名。密码、令
+牌、可变会话记忆以及完整的 skill 副本都不应进入项目或控制器状态。
 
 ## Computation Site 文件树
 

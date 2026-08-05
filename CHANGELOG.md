@@ -62,6 +62,10 @@ project_uid 外键；`store migrate` 链式 v1→v2→v3，旧 root→case 1:1
 
 ### Changed
 
+- **export JSON 的 projects 形状变化**（破坏性）：v2 的
+  `{project_root, case_uid, updated_at}` 绑定行变为 v3 project 实体
+  `{project_uid, slug, project_root, created_at, updated_at}`；cases 增
+  加 `project_uid` 字段。消费 `entityctl export` 的脚本需同步。
 - `references/workspace-layout.md` 重写为 Workspace + Computation Site
   布局契约；四个 SKILL.md 与 README 同步新模型；env-build 文档同步
   deps 注册表查找顺序与回写流程。

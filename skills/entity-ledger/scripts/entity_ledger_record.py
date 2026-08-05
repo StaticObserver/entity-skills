@@ -42,6 +42,7 @@ from entity_ledger_facts import (
     _site_policy,
     _source_identity,
     case_path_segment,
+    case_resolution_plan_error,
     derive_run_paths,
     merged_execution_profile,
     require_verified_checkpoint,
@@ -91,14 +92,7 @@ def _require_case(store, project_root, case_slug=None):
         return store.resolve_project(project_root, case_slug)
     except CaseResolutionError as exc:
         if exc.reason != "no_project":
-            raise PlanError(
-                str(exc),
-                "needs_decision",
-                [{"field": "case",
-                  "question": "select the case with --case <%s>"
-                              % "|".join(exc.cases) if exc.cases
-                              else "create the case with entityctl case init"}],
-            )
+            raise case_resolution_plan_error(exc)
         raise PlanError(
             "no Case covers the project; create it first",
             "needs_decision",
@@ -293,6 +287,20 @@ def _relocate_evidence(profile, identity, new_root):
         "relocate supports build/run/data identities (got %s)" % kind)
 
 
+def _relocated_layout(profile, new_root):
+    """site-tree only when the new root sits under the site tree's
+    <site_root>/projects convention; anything else stays legacy-roots."""
+    site_root = profile.get("site_root", "")
+    if site_root:
+        convention = os.path.join(os.path.normpath(site_root), "projects")
+        try:
+            if os.path.commonpath([new_root, convention]) == convention:
+                return "site-tree"
+        except ValueError:
+            pass
+    return "legacy-roots"
+
+
 def record_relocate(store, project_root, dimension, identity_id, new_root,
                     actor, case_slug=None):
     """Re-register a moved resource: after the agent moved the files, probe
@@ -349,7 +357,7 @@ def record_relocate(store, project_root, dimension, identity_id, new_root,
     evidence = _relocate_evidence(profile, identity, new_root)
     payload = _rewrite_locator_paths(identity, old_root, new_root)
     payload["root"] = {"site_id": site_id, "path": new_root}
-    payload["layout"] = "site-tree"
+    payload["layout"] = _relocated_layout(profile, new_root)
     current = _rewrite_locator_paths(case["current"], old_root, new_root)
     with store.transaction() as connection:
         connection.execute(

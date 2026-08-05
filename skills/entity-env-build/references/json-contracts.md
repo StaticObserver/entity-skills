@@ -78,6 +78,7 @@ checkpoint 与其请求具有相同的 schema 版本，并记录：
     "version_bucket": "",
     "dependency_profile": ""
   },
+  "stack_id": "",
   "candidates": {},
   "selected": {},
   "decisions": {},
@@ -88,6 +89,11 @@ checkpoint 与其请求具有相同的 schema 版本，并记录：
   "status": {"checkpoint": "partial", "satisfies_requirements_json": false, "ready_for_entity_build": false, "reuse_notes": []}
 }
 ```
+
+`stack_id` 是可选顶层字段：仅当 checkpoint 的 `selected` 与注册表某
+栈的 packages 完全一致时由 `--from-registry` 写入；`--from-discovery`
+补缺或 `record-install` 改变 selected 后该字段被移除并降级为
+`status.reuse_notes` 记录。
 
 每个选定的依赖记录 provider、prefix/bin/include/lib/config 路径、版本、
 编译器/MPI 签名、环境添加项、编译配置与验证。只有当内嵌的

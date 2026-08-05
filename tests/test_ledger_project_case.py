@@ -261,6 +261,53 @@ class CaseAddressingTest(ProjectCaseTestBase):
         dashboard = build_dashboard(store, self.project_dir(), case_slug="beta")
         self.assertEqual(dashboard["pending"], [])
 
+    def test_case_init_rerun_preserves_booked_state(self):
+        code, unused = self.cli(
+            "record", "intent", "--project-root", self.project_dir(),
+            "--case", "alpha", "--text", "保留这条意图")
+        self.assertEqual(code, 0)
+        before = self.store.get_case(self.alpha["case_uid"])
+        events_before = len(self.store.export()["events"])
+        code, payload = self.cli("case", "init", "demo", "alpha")
+        self.assertEqual(code, 0, payload)
+        self.assertTrue(payload["already_exists"])
+        self.assertFalse(payload["created"])
+        self.assertFalse(payload["state_mutated"])
+        after = self.store.get_case(self.alpha["case_uid"])
+        self.assertEqual(after["current"], before["current"])
+        self.assertEqual(after["legacy"], before["legacy"])
+        self.assertEqual(after["created_at"], before["created_at"])
+        self.assertEqual(len(self.store.export()["events"]), events_before)
+
+    def test_upsert_case_preserves_project_binding(self):
+        # a context-less upsert (no project_root/project_uid) must keep the
+        # existing project binding instead of silently unbinding the Case
+        self.store.upsert_case(
+            self.alpha["case_uid"], "alpha", None,
+            {"authority": {"site_id": "local", "path": self.project_dir()}},
+            {"source_id": "", "build_id": "", "run_id": "",
+             "active_run": None, "data_id": "", "analysis_id": ""})
+        case = self.store.get_case(self.alpha["case_uid"])
+        self.assertEqual(case["project_uid"], self.project["project_uid"])
+
+    def test_render_run_ambiguity_is_a_decision(self):
+        build_root = os.path.join(self.temp, "build")
+        os.makedirs(build_root)
+        executable = os.path.join(build_root, "entity.xc")
+        with open(executable, "w") as handle:
+            handle.write("binary\n")
+        os.chmod(executable, 0o755)
+        with open(os.path.join(self.project_dir(), "input.toml"), "w") as handle:
+            handle.write("[simulation]\nsteps = 2\n")
+        code, payload = self.cli(
+            "render-run", "--project-root", self.project_dir(),
+            "--toml", "input.toml", "--site", "local",
+            "--executable", executable)
+        self.assertEqual(code, 2)
+        self.assertEqual(payload["status"], "needs_decision")
+        self.assertTrue(payload["decisions"])
+        self.assertIn("alpha", payload["error"])
+
 
 if __name__ == "__main__":
     unittest.main()
