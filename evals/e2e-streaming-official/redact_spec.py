@@ -31,6 +31,15 @@ def redact(spec: dict) -> dict:
         # the calibration status
         runtime["note"] = ("calibrated against the gold run; details "
                            "deliberately omitted from the agent-facing spec")
+    site = redacted.get("site", {})
+    if site:
+        # the site_root path is a discovery answer; keep only the identity
+        redacted["site"] = {
+            "name": site.get("name", ""),
+            "ssh_alias": site.get("ssh_alias", ""),
+            "scheduler": site.get("scheduler", ""),
+            "note": "choose and register the Computation Site tree yourself",
+        }
     resources = redacted.get("resources", {})
     run_job = resources.get("run_job", {})
     for key in RUN_JOB_DROP:

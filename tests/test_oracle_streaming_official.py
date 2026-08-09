@@ -353,7 +353,8 @@ class RedactSpecTest(unittest.TestCase):
 
     def test_no_site_answers_anywhere(self):
         text = json.dumps(self.redacted)
-        for leaked in ("fat", "V100", "qos512", "intelhigh", "amdlow"):
+        for leaked in ("fat", "V100", "qos512", "intelhigh", "amdlow",
+                       "entity-compute", "site_root"):
             self.assertNotIn(leaked, text)
 
     def test_physics_and_budget_kept(self):

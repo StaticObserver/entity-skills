@@ -1339,7 +1339,7 @@ def record_run_prepare_command(args):
     return record_run_prepare(
         store, args.project_root, args.toml, args.site, args.gpus,
         args.walltime, args.precision, args.executable, actor, gres=args.gres,
-        case_slug=args.case_slug)
+        run_id=args.run_id, case_slug=args.case_slug)
 
 
 def record_run_launch_command(args):
@@ -2294,6 +2294,10 @@ def build_parser():
     record_run_prepare_parser.add_argument("--project-root", required=True)
     record_run_prepare_parser.add_argument("--toml", required=True)
     record_run_prepare_parser.add_argument("--site", required=True)
+    record_run_prepare_parser.add_argument(
+        "--run-id", default="",
+        help="require the derived run to equal this render-run previewed id; "
+             "a mismatch (inputs drifted since render) fails with zero writes")
     add_run_compute_arguments(record_run_prepare_parser)
     add_case_argument(record_run_prepare_parser)
     record_run_prepare_parser.set_defaults(func=record_run_prepare_command)

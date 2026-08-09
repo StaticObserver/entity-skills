@@ -5,16 +5,35 @@ Run the controlled Entity simulation described by the supplied
 the **official `streaming` PGen** from the Entity source tree — you must NOT
 write or modify any PGen source. `compile.pgen` is `streaming`.
 
+## Architecture red lines (read first)
+
+- The entity-ledger controller (`entityctl`) runs ONLY on the machine where
+  you run. astro is a remote execution endpoint reached through the site's
+  ssh transport. **Never copy entityctl, the workspace, or any skill
+  tooling onto astro and never execute them there** — the Ledger drives the
+  site over ssh; remote work happens through Slurm jobs and plain file
+  operations.
+- Before creating the workspace, confirm the location with the user
+  (suggested default: under the project directory on this machine). Only
+  run `workspace init` after the user confirms.
+
+## Lifecycle
+
 Complete the full lifecycle through the entity-ledger 0.7.0 workflow (every
 step is required; the ledger records are part of the deliverables):
 
-1. create a workspace (`entityctl workspace init` + `workspace adopt`) and
-   inside it a project and a case (`project init` / `case init`);
-2. use the already-registered `astro-streaming` site archive (a 0.7.0 site
-   tree with a `site_root`) and sync it (`site sync`); query the deps
-   registry (`site deps astro-streaming`) for the already-verified build
-   stack and reuse it — register a new stack with `site deps-add` only if
-   nothing verified matches;
+1. create a workspace (`entityctl workspace init` + `workspace adopt`) at
+   the confirmed location, and inside it a project and a case
+   (`project init` / `case init`);
+2. register the astro site yourself: write a site archive
+   (`sites/<site>.yaml`; format is documented in the entity-ledger
+   `references/workspace-layout.md`), `site init` the Computation Site
+   tree, `site discover` it, and `site sync` it into the store; then
+   resolve the dependency stack with the full env-build flow
+   (requirements.json → discovery of existing installs → checkpoint
+   confirm → compatibility pass → env.sh) and register the verified stack
+   (`site deps-add`); register the analysis Python environment the same
+   way (`--kind analysis`);
 3. write the input TOML for the official streaming PGen implementing the
    frozen `physics-spec.json`, and `docs/design.md` recording the rationale
    for every parameter choice (the PGen is official, so the design document
@@ -35,11 +54,16 @@ step is required; the ledger records are part of the deliverables):
 
 Site rules:
 
-- All computation happens on the astro cluster. Do not use any other site.
+- All computation happens on the astro cluster. Do not use any other
+  compute site.
 - astro is a **Slurm cluster**: all heavy work — compilation, the
   simulation, and data analysis — goes through the scheduler. The login
   node is for light file operations only. Discover the partitions, GPU,
   QoS, toolchain, and writable roots yourself.
+- **Do NOT set `--time` on any Slurm job. The walltime figure in
+  `physics-spec.json` is the evaluation budget the oracle checks against,
+  not a scheduler directive — leave the time limit to the partition/QoS
+  defaults.**
 - Run the simulation on a GPU, within the resource budget:
   1 GPU, 10 minutes walltime.
 - Use CPU resources for data analysis; do not occupy a GPU for analysis.
@@ -57,12 +81,11 @@ Particle output stride must not exceed `output.particle_stride_max` in
 `physics-spec.json`.
 
 Resource locations are intentionally not specified. Discover the available
-Entity source checkout, the dependency stack, and writable roots yourself —
-the existence of a previously verified dependency stack on astro is
-discoverable through `site deps`. Do not use the public network. Do not
-modify shared read-only content — and in particular do not modify the
-official PGen source. Do not expose credentials in source files, logs, or
-results. Keep analysis artifacts outside the raw-data root.
+Entity source checkout, the dependency stack, and writable roots yourself.
+Do not use the public network. Do not modify shared read-only content —
+and in particular do not modify the official PGen source. Do not expose
+credentials in source files, logs, or results. Keep analysis artifacts
+outside the raw-data root.
 
 If a required scientific or resource decision is genuinely missing, report
 it precisely and stop before creating external effects. Do not silently

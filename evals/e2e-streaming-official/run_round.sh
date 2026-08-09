@@ -75,6 +75,55 @@ if [[ -d "$HOME/entity-eval-runs" ]]; then
     exit 1
   fi
 fi
+# Pilot/previous-round state outside entity-eval-runs also leaks signposts
+# (observed in the aborted 2026-08-09-S1 round). Hard blockers with cleanup
+# guidance:
+CONTAMINATION=0
+if [[ -d "$HOME/entity-workspace" ]]; then
+  echo "error: ~/entity-workspace exists (pilot/other workspace); the agent must" >&2
+  echo "       start clean. Move it away, e.g.:" >&2
+  echo "         mv ~/entity-workspace ~/entity-workspace.archive-$(date +%Y%m%d)" >&2
+  CONTAMINATION=1
+fi
+if [[ -f "$HOME/.entity-ledger/active-workspace" ]]; then
+  echo "error: ~/.entity-ledger/active-workspace pointer exists; remove it (and the" >&2
+  echo "       workspace it names) before starting a round:" >&2
+  echo "         rm ~/.entity-ledger/active-workspace" >&2
+  CONTAMINATION=1
+fi
+# Remote (astro) contamination: pilot/agent leftovers on the site. ssh failure
+# or timeout only WARNS (site may legitimately be down for local prep).
+REMOTE_PROBE='
+for p in ~/entity-compute/_pilot ~/entity-compute/_tools ~/entity-workspace; do
+  [ -e "$p" ] && echo "LEFTOVER $p"
+done
+if [ -d ~/entity-compute/projects ]; then
+  [ -n "$(ls -A ~/entity-compute/projects 2>/dev/null)" ] && echo "LEFTOVER ~/entity-compute/projects (non-empty)"
+fi
+[ -f ~/entity-compute/entity-site.yaml ] && echo "MARKER $(cat ~/entity-compute/entity-site.yaml | head -1)"
+'
+REMOTE_OUT="$(ssh -o BatchMode=yes -o ConnectTimeout=10 astro "$REMOTE_PROBE" 2>/dev/null)" \
+  || REMOTE_OUT="__SSH_FAILED__"
+if [[ "$REMOTE_OUT" == "__SSH_FAILED__" ]]; then
+  echo "warning: cannot reach astro for contamination probe; continuing (remote state unchecked)" >&2
+else
+  while IFS= read -r line; do
+    case "$line" in
+      LEFTOVER\ *)
+        echo "error: astro leftover: ${line#LEFTOVER } — clean it before the round, e.g.:" >&2
+        echo "         ssh astro 'rm -rf ${line#LEFTOVER }'   (verify contents first!)" >&2
+        CONTAMINATION=1 ;;
+      MARKER\ *)
+        echo "note: astro site tree marker present ($line); the round should reuse" >&2
+        echo "      that site id for \`site init\` (idempotent), or remove the marker" >&2
+        echo "      if a fresh site id is expected." >&2 ;;
+    esac
+  done <<< "$REMOTE_OUT"
+fi
+if [[ $CONTAMINATION -ne 0 ]]; then
+  echo "error: pre-flight contamination check failed; round NOT started" >&2
+  exit 1
+fi
 # Stale TUI session transcripts from earlier rounds (readable in principle):
 # warn but do not block.
 STALE_SESSIONS="$(find "$HOME/.claude/projects" -maxdepth 1 -type d \

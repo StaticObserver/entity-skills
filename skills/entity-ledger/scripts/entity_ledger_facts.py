@@ -77,7 +77,13 @@ def _source_site(store, project_root):
         raise PlanError(
             "no local Site source_root covers the project",
             "needs_decision",
-            [{"field": "site", "question": "register a local source Site for the project"}],
+            [{"field": "site",
+              "question": "register a local source Site for the project: add a "
+                          "site archive (sites/<site>.yaml) with transport "
+                          "{\"kind\": \"local\"} and roots.source_root covering "
+                          "the project directory — a good value is the "
+                          "workspace root, not your whole home — then run "
+                          "`entityctl site sync` and retry"}],
         )
     matches.sort(reverse=True)
     return matches[0][1]

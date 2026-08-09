@@ -60,6 +60,39 @@ site(旧 `site add` 登记的)在 `site list` 中标注 db-only,保持可用,
 不自动删除。凭证、SSH 私钥不进档案;档案只记 SSH alias 名。密码、令
 牌、可变会话记忆以及完整的 skill 副本都不应进入项目或控制器状态。
 
+### 档案文件格式(flat-YAML + JSON flow)
+
+档案**不是**通用 YAML:解析器是标准库实现的 flat+flow 子集
+(`entity_ledger_workspace.parse_flat_yaml_text`)。规则:
+
+- 每个字段一行顶层 `key: value`——顶层 key 不许缩进,不支持嵌套块
+  映射(嵌套结构用 JSON flow 写在一行里);
+- 标量:裸写(不含空格和 `:#"'&*!|>%@`[]{}` 等特殊字符)或 JSON 双
+  引号字符串;集合一律 JSON flow:`{"kind": "ssh", "ssh_alias": "astro"}`、
+  `["intelhigh", "amdlow"]`;
+- 多行文本(如 `notes`)用块标量 `key: |` + 两空格缩进的后续行;
+- 注释行(`#` 开头)与空行被跳过;`schema_version: 1` 必须是整数。
+
+一个完整的生产示例(astro-streaming,2026-08 pilot 实测在用):
+
+```yaml
+site_id: astro-streaming
+schema_version: 1
+transport: {"kind": "ssh", "ssh_alias": "astro"}   # ssh 别名,唯一定位方式
+scheduler: {"kind": "slurm"}                        # none/slurm/pbs/custom
+# machine 节由 entityctl site discover 落盘,不用手写
+site_root: /home/yangyangcai/entity-compute         # 绝对路径;无则走 legacy roots
+policy: {"default_partition": "fat", "default_qos": "qos512", "default_submit_user": "yangyangcai", "default_gres": "gpu:V100:1", "default_cpus_per_gpu": 32, "max_cpu_per_gpu": 48, "analysis_partitions": ["intelhigh", "amdlow"], "login_node_no_heavy_work": true}
+notes: |
+  自由文本站点笔记:分区策略、已知坑、工具链路径等。
+  多行内容按块标量规则缩进两格。
+```
+
+policy 的已知键见 `templates/site-profile.schema.json`;`default_gres`
+格式为 `gpu[:type]:count`(校验拒绝坏值)。`deps`/`projects` 由
+`site deps-add` / run 记录维护,手工登记 deps 时参照
+`site deps <site> --json` 的输出形状。
+
 ## Computation Site 文件树
 
 ```text

@@ -775,21 +775,33 @@ def _book_run(store, case, identity, readiness_state, current_updates,
 
 def record_run_prepare(store, project_root, input_value, site_id, gpus,
                        walltime, precision, executable, actor, gres="",
-                       case_slug=None):
+                       run_id="", case_slug=None):
     """Prepare a run root on its Site and book the run identity as prepared.
 
     Gates (all before any state write): the pgen simulation confirmation must
     match the current input bytes, and an existing run identity that already
     advanced past ``prepared`` is never rewound.  The Case is created on first
     use in the same transaction as the run booking — after the executor
-    succeeded — and the executor receipt makes re-runs idempotent."""
+    succeeded — and the executor receipt makes re-runs idempotent.
+
+    With ``--run-id`` (the id a preceding render-run previewed) the freshly
+    derived run must equal it: the run_id is content-addressed from source,
+    TOML, compute and build, so a mismatch proves the inputs drifted between
+    render and prepare — the call fails with zero writes instead of silently
+    preparing a second, different run.  A match means the render's previewed
+    run root/script/manifest are exactly the ones prepare materializes."""
     compute = _compute_request(gpus, walltime, precision, gres)
     derived = _derive_run(
         store, project_root, input_value, site_id, compute, executable,
         case_slug)
+    paths = derived["paths"]
+    if run_id and paths["run_id"] != run_id:
+        raise PlanError(
+            "derived run %s differs from --run-id %s: the inputs (source, "
+            "TOML, compute or build) drifted since render-run — re-render "
+            "and use the new id" % (paths["run_id"], run_id))
     confirmation = _simulation_confirmation(derived["input_path"])
     case = derived["case"]
-    paths = derived["paths"]
     existing = _run_identity(case, paths["run_id"])
     if existing is not None and existing.get("status", "") != "prepared":
         raise PlanError(

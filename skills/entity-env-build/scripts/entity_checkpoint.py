@@ -394,6 +394,22 @@ def build_checkpoint(
         },
     }
 
+    # Site-specific environment plumbing (lmod init, module loads, extra
+    # exports) lives in checkpoint["paths"] and is what env.sh actually
+    # consumes; a merge must carry it over from the old checkpoint or the
+    # regenerated env.sh silently loses the module setup.
+    if isinstance(merge_from, dict):
+        merged_paths = merge_from.get("paths", {})
+        if isinstance(merged_paths, dict):
+            for key in ("pre_commands", "extra_env"):
+                if merged_paths.get(key):
+                    checkpoint["paths"][key] = merged_paths[key]
+            # union, don't clobber: derive_paths already collected the
+            # merged entries' own per-entry modules
+            for mod in merged_paths.get("modules") or []:
+                if mod and mod not in checkpoint["paths"].setdefault("modules", []):
+                    checkpoint["paths"]["modules"].append(mod)
+
     return checkpoint
 
 

@@ -1,7 +1,11 @@
 #!/usr/bin/env bash
 # Pull remote Slurm scripts/logs into the harness, then delete the remote
-# artifacts of one evaluation round. Deletion is DRY-RUN by default; pass
-# -f/--yes to actually remove.
+# artifacts of one evaluation round: the declared data root, the site-tree
+# project directory (<tree>/projects/<slug>) when applicable, and the known
+# auxiliary roots a round may create on astro (_pilot, _tools, a mistaken
+# remote ~/entity-workspace). Queued/running entity-* jobs are listed and,
+# with -f, scancelled. Everything is DRY-RUN by default; pass -f/--yes to
+# actually remove/cancel.
 #
 # Usage:
 #   clean_remote.sh <run-name> [-f|--yes]
@@ -62,11 +66,25 @@ fi
 ls -la "$LOGS"
 
 # 2. Deletion: dry-run unless -f/--yes.
+# Site-tree rounds: when data_root lives under <tree>/projects/<slug>/..., the
+# whole per-round project tree is the target, plus the known auxiliary roots
+# an agent/pilot may have created (_pilot, _tools, a mistaken remote
+# ~/entity-workspace).
 TARGETS=("$DATA_ROOT")
-if [[ "$PARENT" != "$DATA_ROOT" && "$PARENT" != "/" && "$PARENT" != "$HOME" \
-      && "$PARENT" != "~" && "$PARENT" == *entity* ]]; then
+PROJECT_TREE=""
+if [[ "$DATA_ROOT" == *"/projects/"*"/"* ]]; then
+  PROJECT_TREE="${DATA_ROOT%%/projects/*}/projects/$( \
+    rest="${DATA_ROOT#*/projects/}"; echo "${rest%%/*}")"
+fi
+if [[ -n "$PROJECT_TREE" && "$PROJECT_TREE" == *entity* ]]; then
+  TARGETS+=("$PROJECT_TREE")
+elif [[ "$PARENT" != "$DATA_ROOT" && "$PARENT" != "/" && "$PARENT" != "$HOME" \
+        && "$PARENT" != "~" && "$PARENT" == *entity* ]]; then
   TARGETS+=("$PARENT")
 fi
+for extra in '$HOME/entity-compute/_pilot' '$HOME/entity-compute/_tools' '$HOME/entity-workspace'; do
+  TARGETS+=("$extra")
+done
 echo
 echo "==> remote deletion targets on astro:"
 printf '    %s\n' "${TARGETS[@]}"
@@ -74,18 +92,44 @@ if [[ $YES -ne 1 ]]; then
   echo "==> dry-run: nothing deleted. Re-run with -f/--yes to delete."
 else
   for target in "${TARGETS[@]}"; do
-    echo "==> deleting astro:$target"
-    ssh astro "rm -rf -- '$target'"
+    # expand the leading ~/$HOME on the remote, and only ever delete under
+    # the user's home — nothing else is ours to remove
+    resolved="$(ssh astro "eval echo \"$target\"")"
+    case "$resolved" in
+      /home/*) ;;
+      *) echo "==> SKIP (refusing non-home path): $target -> $resolved" >&2; continue ;;
+    esac
+    echo "==> deleting astro:$resolved"
+    ssh astro "rm -rf -- '$resolved'"
   done
 fi
 
-# 3. Confirm no leftover jobs: squeue for live jobs, sacct for today's
-#    accounting history.
+# 3. Leftover jobs: the round's declared job id plus any queued/running
+#    entity-* job of the remote user (aborted rounds leave these behind).
+#    Dry-run lists them; -f scancels.
 echo
-echo "==> squeue -u <remote user> on astro:"
-# $USER is the LOCAL user; the remote account name may differ. Quote so the
-# remote shell expands its own $USER.
-ssh astro 'squeue -u "$USER"' || true
+echo "==> leftover entity-* jobs on astro:"
+LIVE_JOBS="$(ssh astro 'squeue -u "$USER" -h -o "%i %j"' 2>/dev/null || true)"
+LEFTOVER_JOBS=""
+while IFS= read -r line; do
+  [[ -n "$line" ]] || continue
+  jid="${line%% *}"
+  jname="${line#* }"
+  if [[ "$jname" == entity-* || ( -n "$JOB_ID" && "$jid" == "$JOB_ID" ) ]]; then
+    LEFTOVER_JOBS+="$jid "
+    echo "    $jid  $jname"
+  fi
+done <<< "$LIVE_JOBS"
+if [[ -z "$LEFTOVER_JOBS" ]]; then
+  echo "    (none)"
+elif [[ $YES -ne 1 ]]; then
+  echo "==> dry-run: jobs NOT cancelled. Re-run with -f/--yes to scancel:$LEFTOVER_JOBS"
+else
+  for jid in $LEFTOVER_JOBS; do
+    echo "==> scancel $jid"
+    ssh astro "scancel '$jid'" || echo "warning: scancel $jid failed" >&2
+  done
+fi
 echo
 echo "==> sacct since today on astro:"
 ssh astro "sacct -S $(date +%F) -n -P --format=JobID,JobName,Partition,State,Elapsed" || true

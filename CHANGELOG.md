@@ -110,6 +110,26 @@ project_uid 外键；`store migrate` 链式 v1→v2→v3，旧 root→case 1:1
   已存在且非空的目录时拒绝生成（中文报错说明重链/证据失真风险），
   显式 `--reuse-build-dir` 或 `--clean-build` 才放行——防止从上一轮
   复制 requirements 继承旧 build_dir 后静默重链已登记构建。
+- `record run-prepare --run-id`：要求新推导的 run 等于 render-run 预
+  览的 id——run_id 按（源、TOML、compute、build）内容寻址，不一致即
+  证明 render 之后输入漂移，报错零写入，不再静默准备出第二个 run。
+- 报错改进（中止轮 S1 复盘）:`case init` 的 "no local Site
+  source_root covers the project" 现在给出可操作建议（登记本地 site
+  档案、source_root 建议取 workspace 根而非整个 home、site sync);
+  `workspace init` 发现目标是含 `entity-site.yaml` 的 Site 树根时报
+  针对性错误（Site 是 ssh 执行端，workspace 应在开发机）。
+- 文档：SKILL.md 新增"架构红线"节（控制器只在开发机、禁止把工具
+  scp 到 site、workspace 位置先与用户确认）;
+  `references/workspace-layout.md` 新增 site 档案格式节（flat-YAML +
+  JSON flow 规则 + 带注释的完整 astro-streaming 示例）。
+
+### Fixed(rc 增量)
+
+- `entity_checkpoint.py create --merge` 丢失旧 checkpoint 的
+  `paths.pre_commands`/`modules`/`extra_env`——regenerate 的 env.sh
+  缺 module 加载；merge 现保留这些键（modules 与 derive_paths 从
+  selected 各 entry 收集的 modules 取并集），且 `derive_paths` 会把
+  依赖 entry 自带的 `modules` 收进 paths。
 
 ### Changed
 

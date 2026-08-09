@@ -32,6 +32,19 @@ Workspace → Project → Case → Identity → Evidence
 Case/identity ID、哈希、Locator 和路径由控制器推导，不要让用户提供
 或管理这些字段。
 
+## 架构红线
+
+- **控制器只在开发机运行**:`entityctl`、workspace(`.ledger/`、
+  `sites/`、`projects/`）只存在于你（agent）运行的这台机器。
+  Computation Site 只是 ssh 执行端——Ledger 经 transport 驱动它。
+- **永远不要把 entityctl、workspace 或任何 skill 工具 scp 到 site 上
+  执行**;site 上只允许两类动作：Slurm 作业（sbatch/squeue/sacct)
+  和平常的文件操作（由 Ledger 的 transport 发起，或你手工的轻量
+  ssh)。在 site 上跑控制器是架构倒置。
+- **workspace 的位置先与用户确认再 init**（建议默认：开发机上的项目
+  目录下）。不要在 site 上建 workspace；含有 `entity-site.yaml` 的目
+  录是 Site 树根，不是 workspace。
+
 ## 先读项目状态
 
 先确认控制器指向哪个 workspace：

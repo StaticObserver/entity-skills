@@ -54,7 +54,10 @@ submission.json。任务显式要求走 0.7.0 全流程：
 # 开跑（建目录、注册 trace、启动 agent;启动前校验技能投影状态:
 # S 组要求 entity-ledger 在场,N 组要求仅 entity-ledger 已移走——
 # 不满足则拒绝启动。0.7.0 起不再预置 controller home,workspace 由
-# agent 按 task.md 自建)
+# agent 按 task.md 与用户确认后自建。污染预检发现即拒绝启动并打印
+# 清理指引:本机 ~/entity-workspace、~/.entity-ledger/active-workspace
+# 指针、~/entity-eval-runs 既有轮次,以及 astro 上的 _pilot/_tools/
+# ~/entity-workspace/site tree projects 非空(ssh 不可达只警告))
 evals/e2e-streaming-official/run_round.sh skills-v5 2026-08-XX-S1 [model]
 evals/e2e-streaming-official/run_round.sh skills-no-router 2026-08-XX-N1 [model]
 
@@ -63,8 +66,9 @@ evals/e2e-streaming-official/run_round.sh skills-no-router 2026-08-XX-N1 [model]
 evals/e2e-streaming-official/finish_round.sh 2026-08-XX-S1 completed
 
 # 远端清理（先拉 *.sbatch/slurm-*.out/*.log/manifest 到
-# traces/<run>/remote-logs/,默认 dry-run,-f 才删除远端 run 目录,
-# 最后 squeue/sacct 确认无残留作业)
+# traces/<run>/remote-logs/;清理目标:data_root、site tree 的
+# projects/<slug> 整树、astro 的 _pilot/_tools/误建的 ~/entity-workspace;
+# 队列里 entity-* 残留作业一并列出。默认 dry-run,-f 才删除并 scancel)
 evals/e2e-streaming-official/clean_remote.sh 2026-08-XX-S1 -f
 ```
 

@@ -129,6 +129,17 @@ class WorkspaceInitTest(WorkspaceTestBase):
         self.assertFalse(os.path.exists(
             os.path.join(workspace, "workspace.yaml")))
 
+    def test_init_refuses_a_site_root_with_targeted_hint(self):
+        site_root = os.path.join(self.temp, "compute")
+        os.makedirs(site_root)
+        with open(os.path.join(site_root, "entity-site.yaml"), "w") as handle:
+            handle.write("site_id: astro-streaming\nschema_version: 1\n")
+        code, payload, unused = self.cli("workspace", "init", site_root)
+        self.assertEqual(code, 2)
+        self.assertFalse(payload["ok"])
+        self.assertIn("Computation Site root", payload["error"])
+        self.assertIn("development machine", payload["error"])
+
     def test_init_refuses_corrupt_workspace_yaml(self):
         workspace = os.path.join(self.temp, "ws")
         os.makedirs(workspace)

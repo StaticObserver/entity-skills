@@ -192,10 +192,13 @@ def log_event(
 
 
 def derive_paths(selected: Dict[str, Any]) -> Dict[str, Any]:
-    """Derive PATH / CMAKE_PREFIX_PATH / LD_LIBRARY_PATH from selected entries."""
+    """Derive PATH / CMAKE_PREFIX_PATH / LD_LIBRARY_PATH from selected entries.
+    Per-entry "modules" (e.g. the compiler's lmod modules) are unioned into
+    the paths-level "modules" list that env.sh renders as module loads."""
     path_entries: List[str] = []
     cmake_entries: List[str] = []
     ld_entries: List[str] = []
+    modules: List[str] = []
 
     for entry in selected.values():
         if not isinstance(entry, dict):
@@ -222,6 +225,10 @@ def derive_paths(selected: Dict[str, Any]) -> Dict[str, Any]:
                 if lib_dir not in ld_entries:
                     ld_entries.append(lib_dir)
 
+        for mod in entry.get("modules") or []:
+            if mod and str(mod) not in modules:
+                modules.append(str(mod))
+
     if "/usr/bin" not in path_entries:
         path_entries.append("/usr/bin")
 
@@ -230,6 +237,7 @@ def derive_paths(selected: Dict[str, Any]) -> Dict[str, Any]:
         "CMAKE_PREFIX_PATH": cmake_entries,
         "LD_LIBRARY_PATH": ld_entries,
         "DYLD_LIBRARY_PATH": [],
+        "modules": modules,
     }
 
 

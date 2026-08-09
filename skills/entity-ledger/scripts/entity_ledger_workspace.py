@@ -324,6 +324,13 @@ def init_workspace(path, migrated_from=None):
             # validate, then keep the existing identity untouched
             record = load_workspace_yaml(path)
         elif os.listdir(path):
+            if os.path.isfile(os.path.join(path, SITE_MARKER)):
+                raise WorkspaceError(
+                    "%s holds an %s — this is a Computation Site root, not a "
+                    "workspace: the workspace (with the entityctl controller) "
+                    "belongs on the development machine; a Site is only an "
+                    "ssh execution endpoint"
+                    % (path, SITE_MARKER))
             raise WorkspaceError(
                 "directory exists and is not a workspace (no %s): %s; "
                 "choose an empty directory or adopt an existing workspace"

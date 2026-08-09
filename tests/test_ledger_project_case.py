@@ -185,6 +185,21 @@ class CaseInitTest(ProjectCaseTestBase):
         self.assertEqual(code, 2)
         self.assertIn("unknown project", payload["error"])
 
+    def test_case_init_without_local_site_gets_actionable_hint(self):
+        # a workspace with no local source Site: the error must point at the
+        # fix (register a local site archive with a narrow source_root)
+        bare = init_workspace(os.path.join(self.temp, "ws-bare"))["workspace"]
+        write_active_workspace(bare)
+        code, unused = self.cli("project", "init", "demo")
+        self.assertEqual(code, 0)
+        code, payload = self.cli("case", "init", "demo", "alpha")
+        self.assertEqual(code, 2)
+        self.assertEqual(payload["status"], "needs_decision")
+        question = payload["decisions"][0]["question"]
+        self.assertIn("source_root", question)
+        self.assertIn("site sync", question)
+        self.assertIn("workspace root", question)
+
 
 class CaseAddressingTest(ProjectCaseTestBase):
     def setUp(self):

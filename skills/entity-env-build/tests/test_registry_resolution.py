@@ -250,5 +250,64 @@ class RegistryResolutionTests(unittest.TestCase):
                                 for note in data["status"]["reuse_notes"]))
 
 
+class MergePreservesSitePlumbingTests(unittest.TestCase):
+    """Regression: create --merge must carry the site-specific environment
+    plumbing (paths.pre_commands/modules/extra_env, and per-entry modules)
+    into the new checkpoint — env.sh consumes exactly these keys."""
+
+    def write_json(self, path: Path, data: dict) -> None:
+        path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+
+    def test_merge_preserves_site_plumbing_and_env_consumes_it(self):
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            req_path = tmp / "requirements.json"
+            self.write_json(req_path, base_requirements(tmp))
+            old = tmp / "old-checkpoint.json"
+            self.write_json(old, {
+                "schema_version": 2,
+                "selected": {
+                    "compiler": {
+                        "name": "gcc", "version": "12.3.0",
+                        "cxx": "/opt/gcc/bin/g++",
+                        "modules": ["gnu12/12.3.0"],
+                    },
+                },
+                "decisions": {},
+                "paths": {
+                    "pre_commands": ["source /opt/lmod/init/profile"],
+                    "modules": ["cmake/3.24.2"],
+                    "extra_env": {"CUDAToolkit_ROOT": "/opt/cuda"},
+                },
+            })
+            checkpoint = tmp / "entity-deps.local.json"
+            proc = run_cmd(
+                "scripts/entity_checkpoint.py", "create", str(req_path),
+                "--merge", str(old), "--output", str(checkpoint),
+            )
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            data = json.loads(checkpoint.read_text(encoding="utf-8"))
+            paths = data["paths"]
+            self.assertEqual(paths["pre_commands"],
+                             ["source /opt/lmod/init/profile"])
+            self.assertEqual(paths["extra_env"], {"CUDAToolkit_ROOT": "/opt/cuda"})
+            # paths-level modules survive the merge; the merged entry's own
+            # modules are collected by derive_paths
+            self.assertEqual(sorted(paths["modules"]),
+                             ["cmake/3.24.2", "gnu12/12.3.0"])
+            # env.sh actually renders all three channels
+            env_out = tmp / "env.sh"
+            proc = run_cmd(
+                "scripts/entity_generate.py", "env", str(checkpoint),
+                "--output", str(env_out), "--allow-incomplete",
+            )
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            script = env_out.read_text(encoding="utf-8")
+            self.assertIn("source /opt/lmod/init/profile", script)
+            self.assertIn("module load cmake/3.24.2", script)
+            self.assertIn("module load gnu12/12.3.0", script)
+            self.assertIn("CUDAToolkit_ROOT=/opt/cuda", script)
+
+
 if __name__ == "__main__":
     unittest.main()

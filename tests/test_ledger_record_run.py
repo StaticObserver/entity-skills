@@ -366,6 +366,43 @@ else:
         self.assertEqual(payload["compute"]["gres"], "")
         self.assertNotIn("gres", payload["script"])
 
+    def test_run_prepare_run_id_reuses_rendered_run(self):
+        code, rendered = self.cli(
+            "render-run", "--project-root", self.project,
+            "--toml", "input.toml", "--site", "local-slurm",
+            "--executable", self.executable)
+        self.assertEqual(code, 0, rendered)
+        code, prepared = self.cli(
+            "record", "run-prepare", "--project-root", self.project,
+            "--toml", "input.toml", "--site", "local-slurm",
+            "--executable", self.executable,
+            "--run-id", rendered["run_id"])
+        self.assertEqual(code, 0, prepared)
+        self.assertEqual(prepared["run_id"], rendered["run_id"])
+        self.assertEqual(prepared["run_root"], rendered["run_root"])
+        # the render previewed exactly what prepare materialized
+        with open(os.path.join(prepared["run_root"], "run.sbatch")) as handle:
+            self.assertEqual(handle.read(), rendered["script"])
+
+    def test_run_prepare_run_id_mismatch_fails_closed(self):
+        code, rendered = self.cli(
+            "render-run", "--project-root", self.project,
+            "--toml", "input.toml", "--site", "local-slurm",
+            "--executable", self.executable)
+        self.assertEqual(code, 0, rendered)
+        code, payload = self.cli(
+            "record", "run-prepare", "--project-root", self.project,
+            "--toml", "input.toml", "--site", "local-slurm",
+            "--executable", self.executable, "--gpus", "2",
+            "--run-id", rendered["run_id"])
+        self.assertEqual(code, 2)
+        self.assertFalse(payload["ok"])
+        self.assertFalse(payload["state_mutated"])
+        self.assertIn("drifted", payload["error"])
+        self.assertIn(rendered["run_id"], payload["error"])
+        # zero writes: no run root materialized anywhere
+        self.assertEqual(os.listdir(self.run_root), [])
+
     def test_site_tree_launch_uses_derived_staging_root(self):
         # regression: record run-launch must resolve execution roots from
         # site_root (site-tree layout), not only from explicit legacy roots
