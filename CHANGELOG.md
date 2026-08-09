@@ -101,6 +101,16 @@ project_uid 外键；`store migrate` 链式 v1→v2→v3，旧 root→case 1:1
   - dashboard pgen 格只扫项目根，0.7.0 source/ 权威布局下误报
     "没有 TOML 输入"——现同时扫描 project.yaml 登记的 source 目录。
 
+### Added(rc 增量)
+
+- `entityctl install --provider {codex,claude,kimi}`（可重复）：只把
+  bundle 投影到指定 client；缺省保持三家全投。返回负载新增
+  `providers` 记录实际投影的 client。
+- env-build 构建脚本生成的 build_dir 防护：`compile.build_dir` 指向
+  已存在且非空的目录时拒绝生成（中文报错说明重链/证据失真风险），
+  显式 `--reuse-build-dir` 或 `--clean-build` 才放行——防止从上一轮
+  复制 requirements 继承旧 build_dir 后静默重链已登记构建。
+
 ### Changed
 
 - **export JSON 的 projects 形状变化**（破坏性）：v2 的

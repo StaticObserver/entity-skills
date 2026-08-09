@@ -277,6 +277,83 @@ class BuildScriptQuotingTests(unittest.TestCase):
             self.assertNotIn("'\"'\"'", script)
 
 
+class BuildDirGuardTests(unittest.TestCase):
+    """compile.build_dir pointing at an existing non-empty tree (e.g.
+    inherited when copying a previous round's requirements.json) must be
+    refused unless explicitly confirmed."""
+
+    def write_json(self, path: Path, data: dict) -> None:
+        path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+
+    def _req(self, tmp: Path, build_dir: Path) -> Path:
+        checkout = tmp / "entity"
+        checkout.mkdir(exist_ok=True)
+        req = {
+            "schema_version": 1,
+            "entity": {
+                "checkout_root": str(checkout),
+                "workdir": str(tmp),
+                "version_bucket": "1.4.0",
+                "dependency_profile": "modern",
+            },
+            "environment": {"backend": "cpu", "output": False, "mpi": False},
+            "compile": {"pgen": "smoke", "cxx_standard": "20",
+                        "build_dir": str(build_dir)},
+        }
+        req_path = tmp / "requirements.json"
+        self.write_json(req_path, req)
+        return req_path
+
+    def _run_build(self, tmp: Path, req_path: Path, *extra: str):
+        env_path = tmp / "env.sh"
+        env_path.write_text("#!/usr/bin/env bash\n", encoding="utf-8")
+        return run_cmd(
+            "scripts/entity_generate.py", "build", str(req_path),
+            "--env", str(env_path), "--output", str(tmp / "entity-build.sh"),
+            "--no-update-json", *extra,
+        )
+
+    def test_inherited_nonempty_build_dir_rejected(self):
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            build_dir = tmp / "build-old"
+            build_dir.mkdir()
+            (build_dir / "CMakeCache.txt").write_text("# previous round\n")
+            proc = self._run_build(tmp, self._req(tmp, build_dir))
+            self.assertNotEqual(proc.returncode, 0)
+            self.assertIn("拒绝生成构建脚本", proc.stderr + proc.stdout)
+            self.assertIn("--reuse-build-dir", proc.stderr + proc.stdout)
+            self.assertFalse((tmp / "entity-build.sh").exists())
+
+    def test_reuse_build_dir_explicitly_allows(self):
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            build_dir = tmp / "build-old"
+            build_dir.mkdir()
+            (build_dir / "CMakeCache.txt").write_text("# previous round\n")
+            proc = self._run_build(tmp, self._req(tmp, build_dir),
+                                   "--reuse-build-dir")
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertTrue((tmp / "entity-build.sh").exists())
+
+    def test_clean_build_counts_as_explicit(self):
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            build_dir = tmp / "build-old"
+            build_dir.mkdir()
+            (build_dir / "CMakeCache.txt").write_text("# previous round\n")
+            proc = self._run_build(tmp, self._req(tmp, build_dir),
+                                   "--clean-build")
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+
+    def test_fresh_build_dir_generates_normally(self):
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            proc = self._run_build(tmp, self._req(tmp, tmp / "build-new"))
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertTrue((tmp / "entity-build.sh").exists())
+
+
 class UnknownGpuArchTests(unittest.TestCase):
     def write_json(self, path: Path, data: dict) -> None:
         path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")

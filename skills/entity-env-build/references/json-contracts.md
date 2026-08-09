@@ -56,7 +56,11 @@
 - 受支持的 Entity 版本/依赖 profile。
 
 `compile.build_dir` 默认为 `entity.build_root`，并在脚本生成前回写。
-所有路径都是 `entity.site_id` 上的绝对路径；它们不隐含共同的父目录。
+防护：若该目录已存在且非空（典型事故是从上一轮复制 requirements
+继承了旧 `build_dir`)，生成被拒绝——在其上重链会使已登记构建的证
+据失真；确认原地重建须显式传 `--reuse-build-dir`（或 `--clean-build`，
+先清空树）。所有路径都是 `entity.site_id` 上的绝对路径；它们不隐含
+共同的父目录。
 新工作流程必须使用 v2。Schema v1 的 `checkout_root/workdir` 仅为明确的
 旧版兼容而存在。
 

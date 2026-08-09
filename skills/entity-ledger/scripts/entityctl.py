@@ -284,10 +284,15 @@ def install_bundle(args):
     )
     projections = []
     backups = []
+    providers = []
+    wanted = set(args.provider or [])
     for provider, client_root in installed_bundle_roots():
+        if wanted and provider not in wanted:
+            continue
         provider_projections, provider_backups = project_client_install(
             client_root, current, backup_root, provider,
         )
+        providers.append(provider)
         projections.extend(provider_projections)
         backups.extend(provider_backups)
     if not backups:
@@ -307,6 +312,7 @@ def install_bundle(args):
         "bundle_files": identity["files"],
         "bundle_created": created,
         "current": current,
+        "providers": providers,
         "client_projections": projections,
         "backup_root": backup_root,
         "backups": backups,
@@ -2476,6 +2482,11 @@ def build_parser():
 
     direct_install = sub.add_parser("install")
     direct_install.add_argument("--source-root", default=DEFAULT_BUNDLE_ROOT)
+    direct_install.add_argument(
+        "--provider", action="append", choices=["codex", "claude", "kimi"],
+        default=None,
+        help="project only onto this client (repeatable); default projects "
+             "onto every installed client root")
     direct_install.set_defaults(func=install_bundle)
     return parser
 

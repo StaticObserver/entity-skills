@@ -516,6 +516,33 @@ print('|'.join([r['job_id'], r['job_name'], r['user'], r['run_root'],
         self.assertFalse(payload["ok"])
         self.assertTrue(any("drifted" in failure for failure in payload["failures"]))
 
+    def _install_env(self, name):
+        fake_home = os.path.join(self.temp, name)
+        os.makedirs(fake_home)
+        return {"HOME": fake_home,
+                "ENTITY_SKILLS_HOME": os.path.join(fake_home, ".entity-skills")}
+
+    def test_install_provider_selects_one_client(self):
+        env = self._install_env("install-one")
+        with mock.patch.dict(os.environ, env):
+            code, payload = self.cli("install", "--provider", "claude")
+        self.assertEqual(code, 0, payload)
+        self.assertEqual(payload["providers"], ["claude"])
+        skills = os.path.join(env["HOME"], ".claude", "skills", "entity-ledger")
+        self.assertTrue(os.path.islink(skills))
+        self.assertFalse(os.path.exists(os.path.join(env["HOME"], ".codex")))
+        self.assertFalse(os.path.exists(os.path.join(env["HOME"], ".kimi-code")))
+
+    def test_install_default_projects_every_client(self):
+        env = self._install_env("install-all")
+        with mock.patch.dict(os.environ, env):
+            code, payload = self.cli("install")
+        self.assertEqual(code, 0, payload)
+        self.assertEqual(payload["providers"], ["codex", "claude", "kimi"])
+        for provider in ("codex", "claude", "kimi-code"):
+            self.assertTrue(os.path.islink(os.path.join(
+                env["HOME"], "." + provider, "skills", "entity-ledger")))
+
     def test_store_migrate_shell_reports_current_schema(self):
         code, payload = self.cli("store", "migrate")
         self.assertEqual(code, 0, payload)

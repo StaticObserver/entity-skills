@@ -906,6 +906,23 @@ def cmd_build(args: argparse.Namespace) -> None:
             protocol_error("generate.build", msg)
         raise SystemExit(msg)
 
+    compile_cfg = req.get("compile", {})
+    if not isinstance(compile_cfg, dict):
+        compile_cfg = {}
+    build_dir = str(compile_cfg.get("build_dir") or default_build_dir(req))
+    if (not args.reuse_build_dir and not args.clean_build
+            and os.path.isdir(build_dir) and os.listdir(build_dir)):
+        msg = (
+            f"拒绝生成构建脚本:compile.build_dir 指向已存在且非空的目录 {build_dir}。"
+            "在其上重新 configure 会重链/覆盖既有构建树——若该树已登记进 Ledger,"
+            "登记证据(可执行文件 sha256)将与磁盘内容失真。本轮构建请使用新的"
+            " build_dir(新的构建身份);确认要原地重建时显式传 --reuse-build-dir"
+            "(--clean-build 会先清空树,同样视为显式确认)。"
+        )
+        if args.json:
+            protocol_error("generate.build", msg)
+        raise SystemExit(msg)
+
     if args.checkpoint:
         if not args.checkpoint.exists():
             msg = f"entity-deps.local.json not found: {args.checkpoint}"
@@ -1028,6 +1045,9 @@ def main() -> None:
     p_build.add_argument("--output", type=Path)
     p_build.add_argument("--clean-build", action="store_true",
                          help="Remove build tree before cmake configure (disables incremental build)")
+    p_build.add_argument("--reuse-build-dir", action="store_true",
+                         help="Allow compile.build_dir to point at an existing non-empty "
+                              "build tree (explicit confirmation of an in-place rebuild)")
     p_build.add_argument("--allow-warnings", action="store_true",
                          help="Allow compatibility.status=warn only when decisions.compatibility_warnings_accepted is set.")
     p_build.add_argument("--allow-stale-env", action="store_true",
