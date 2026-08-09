@@ -5,6 +5,10 @@
 ## 任务规定（随任务文本发给被测 agent)
 
 按 `task.md` 和 `physics-spec.json`（本目录）完成 Entity 模拟全流程。
+**agent 拿到的是脱敏 spec**:`run_round.sh` 用 `redact_spec.py` 从完整
+physics-spec.json 生成——去掉 `resources` 里的分区/gres/QoS/分析分区
+（自发现考察点），保留物理、编译契约与资源预算；oracle 判分始终用仓
+库里的完整 spec(`oracle.py --spec` 默认值）。
 与 e2e-neutral-streaming 的核心差异：**PGen 创作环节消失**——指定
 `compile.pgen=streaming`（官方 PGen，不得修改其源码），交付物变为
 `docs/design.md`（参数选择依据）+ 输入 TOML + 分析 +

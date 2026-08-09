@@ -88,7 +88,12 @@ fi
 mkdir -p "$RUN/project" "$HARNESS"
 # 0.7.0 note: no controller home is pre-seeded — the task requires the agent
 # to create and adopt its own workspace inside the project directory.
-cp "$FIXTURES/physics-spec.json" "$FIXTURES/task.md" \
+# The agent gets a REDACTED spec: the full physics-spec.json carries the
+# astro Slurm answers (partition/gres/QoS/analysis partitions) for the
+# oracle, so it must not reach the agent (self-discovery is a checkpoint).
+python3 "$FIXTURES/redact_spec.py" "$FIXTURES/physics-spec.json" \
+  "$RUN/project/physics-spec.json"
+cp "$FIXTURES/task.md" \
    "$FIXTURES/fixtures/submission.schema.json" "$RUN/project/"
 
 hash_of() { shasum -a 256 "$1" 2>/dev/null | cut -d' ' -f1 || true; }

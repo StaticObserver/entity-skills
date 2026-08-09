@@ -24,7 +24,8 @@
 
 ```text
 task.md                        # 发给被测 agent 的任务文本
-physics-spec.json              # 冻结的物理语义(two-stream,官方 streaming)
+physics-spec.json              # 冻结的物理语义(two-stream,官方 streaming;含 astro Slurm 细节,仅供 oracle)
+redact_spec.py                 # 生成 agent 侧脱敏 spec(去掉分区/gres/QoS 等自发现答案)
 fixtures/submission.schema.json
 oracle_streaming/            # 独立复核(五道门 + thresholds.json)
 run_round.sh                   # 开一轮(建目录、注册 trace、启动 agent)

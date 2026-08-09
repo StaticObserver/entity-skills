@@ -4,6 +4,20 @@
 > VOLTA70/Slurm/astro-streaming,gate C sacct 分支接入并补单测，
 > task.md / clean_remote.sh / RUNBOOK / README 同步；`pytest tests/`
 > 323 全绿。
+>
+> **阶段 1（站点建设，pilot）已完成 2026-08-09**:pilot workspace
+> `~/entity-workspace` 建起并 adopt;sites/astro-streaming.yaml 登记并
+> sync;`site init` 在 astro 建好 `~/entity-compute` 新树 +
+> entity-site.yaml;`site discover` 落 machine 节（分区/QoS 实测与本
+> 计划 §1 一致）。deps 注册表两栈齐：build 栈
+> `compiler12.3.0-kokkos5.1.0-fba1fb4dcb0d`(GCC 12.3.0 + CUDA 12.6 +
+> kokkos 5.1.0-VOLTA70 + hdf5 1.14.5 + adios2 2.11.0;checkpoint
+> compatibility pass、参数已确认；env.sh 在新树 deps/<stack_id>/),
+> analysis 栈 `stack-882febbd968e`(miniconda python 3.12.8 + nt2py
+> 1.5.3，本次 pip 安装）。run_round.sh 改为给 agent 发脱敏 spec
+> (redact_spec.py)。发现的问题见会话报告（doctor 报既有 0.6.1 技能投
+> 影漂移，与本次无关；executor sbatch `--gres=gpu:N` 不支持 typed
+> gres，是 0.7.0 设计缺口，阶段 2 前需决策）。
 
 日期:2026-08-05。评测包:`evals/e2e-streaming-official/`(f46f724)。
 被测对象:0.7.0 skill 全流程(Workspace / Computation Site / deps 注册表 /

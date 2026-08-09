@@ -11,9 +11,10 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "evals" / "e2e-streaming-official"))
 
 from oracle_streaming import gate_b_official, gate_c_job_data  # noqa: E402
+import redact_spec  # noqa: E402
 
-SPEC = json.loads(
-    (ROOT / "evals" / "e2e-streaming-official" / "physics-spec.json").read_text())
+SPEC_PATH = ROOT / "evals" / "e2e-streaming-official" / "physics-spec.json"
+SPEC = json.loads(SPEC_PATH.read_text())
 
 GOOD_TOML = {
     "simulation": {"engine": "srpic", "runtime": 50.0},
@@ -225,8 +226,45 @@ class SlurmGateCTest(unittest.TestCase):
     def test_direct_branch_still_dispatched(self):
         root = Path(tempfile.mkdtemp(prefix="oracle-direct-"))
         (root / ".entity-exit-code").write_text("0\n")
-        result = gate_c_job_data.run("m87", GOOD_SUBMISSION, {}, root)
+        # evaluate_data is the nt2py probe (heavy local import); the dispatch
+        # semantics under test live in the scheduler branch, so stub it out.
+        with mock.patch.object(gate_c_job_data, "evaluate_data", return_value=[]):
+            result = gate_c_job_data.run("m87", GOOD_SUBMISSION, {}, root)
         self.assertEqual(statuses(result["checks"])["exit_evidence"], "pass")
+
+
+class RedactSpecTest(unittest.TestCase):
+    """The agent-facing spec must not leak the Slurm self-discovery answers."""
+
+    def setUp(self):
+        self.redacted = redact_spec.redact(SPEC)
+
+    def test_slurm_details_removed(self):
+        run_job = self.redacted["resources"]["run_job"]
+        for key in ("partition", "gres", "qos", "time_limit"):
+            self.assertNotIn(key, run_job)
+        self.assertNotIn("partition", self.redacted["resources"]["build_job"])
+        self.assertNotIn("partitions", self.redacted["resources"]["analysis_job"])
+
+    def test_no_site_answers_anywhere(self):
+        text = json.dumps(self.redacted)
+        for leaked in ("fat", "V100", "qos512", "intelhigh", "amdlow"):
+            self.assertNotIn(leaked, text)
+
+    def test_physics_and_budget_kept(self):
+        self.assertEqual(len(self.redacted["species"]), 4)
+        self.assertEqual(self.redacted["runtime"]["final_time"], 50.0)
+        run_job = self.redacted["resources"]["run_job"]
+        self.assertEqual(run_job["gpus"], 1)
+        self.assertEqual(run_job["walltime_ceiling"], "00:10:00")
+        self.assertEqual(self.redacted["resources"]["scheduler"], "slurm")
+        self.assertEqual(self.redacted["compile"]["arch"], "VOLTA70")
+
+    def test_cli_roundtrip(self):
+        out = Path(tempfile.mkdtemp(prefix="redact-")) / "spec.json"
+        rc = redact_spec.main_with((str(SPEC_PATH), str(out)))
+        self.assertEqual(rc, 0)
+        self.assertEqual(json.loads(out.read_text()), self.redacted)
 
 
 class FixturesTest(unittest.TestCase):
