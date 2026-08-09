@@ -161,10 +161,15 @@ fmt=''
 for a in args:
     if a.startswith('--format='):
         fmt=a.split('=',1)[1]
+# honest emulation: real sacct only pipe-separates with -P; without it the
+# output is a whitespace-padded table
+pipe='-P' in args
+def emit(fields):
+    print('|'.join(fields) if pipe else '  '.join(fields))
 if fmt == 'State,ExitCode':
-    print('%s|%s' % (r.get('state','COMPLETED'), r.get('exit_code','0:0')))
+    emit([r.get('state','COMPLETED'), r.get('exit_code','0:0')])
 elif fmt == 'JobID,State,WorkDir':
-    print('%s|%s|%s' % (r['job_id'], r.get('state','COMPLETED'), r['run_root']))
+    emit([r['job_id'], r.get('state','COMPLETED'), r['run_root']])
 else:
     print(r.get('state','COMPLETED'))
 """)
@@ -360,6 +365,38 @@ else:
         self.assertEqual(code, 0, payload)
         self.assertEqual(payload["compute"]["gres"], "")
         self.assertNotIn("gres", payload["script"])
+
+    def test_site_tree_launch_uses_derived_staging_root(self):
+        # regression: record run-launch must resolve execution roots from
+        # site_root (site-tree layout), not only from explicit legacy roots
+        site_root = os.path.join(self.temp, "compute")
+        self.store.upsert_site({
+            "schema_version": 1, "site_id": "local-tree",
+            "display_name": "local site-tree",
+            "transport": {"kind": "local", "ssh_alias": ""},
+            "scheduler": {"kind": "slurm"},
+            "site_root": site_root, "roots": {},
+            "policy": {"default_cpus_per_gpu": 2,
+                       "default_partition": "test",
+                       "default_submit_user": "tester"},
+            "shared_mappings": [],
+        })
+        # the executable must sit under the derived site-tree build root
+        # (project entity unregistered here -> slug falls back to the
+        # project directory basename)
+        tree_executable = os.path.join(
+            site_root, "projects", os.path.basename(self.project), "builds",
+            "entity.xc")
+        os.makedirs(os.path.dirname(tree_executable))
+        shutil.copy2(self.executable, tree_executable)
+        prepared = self._prepare("local-tree", tree_executable)
+        self.assertIn(site_root, prepared["run_root"])
+        code, launched = self._launch()
+        self.assertEqual(code, 0, launched)
+        self.assertEqual(launched["status"], "submitted")
+        self.assertEqual(launched["scheduler"]["job_id"], "42")
+        submit = os.path.join(prepared["run_root"], "run.sbatch")
+        self.assertTrue(os.path.isfile(submit))
 
     def test_render_run_rejects_an_invalid_walltime(self):
         code, payload = self.cli(
@@ -710,6 +747,25 @@ else:
         board = build_dashboard(self.store, self.project)["board"]
         self.assertEqual(board["run"]["state"], "completed")
         self.assertIn("退出阶段已知无害 abort", board["run"]["detail"])
+
+    def test_run_exit_teardown_evidence_from_merged_slurm_out(self):
+        # regression: slurm merges stderr into the out file by default, and
+        # Entity names its logs after simulation.name inside the output
+        # subdirectory — both must count as teardown evidence
+        prepared = self._prepare("local-slurm", self.executable)
+        code, payload = self._launch()
+        self.assertEqual(code, 0, payload)
+        self._sacct_terminal("FAILED", "6:0")
+        self._write_log(prepared["run_root"], "slurm-42.out",
+                        self._COMPLETE_OUT_ANSI + self._TEARDOWN_ERR)
+        subdir = os.path.join(prepared["run_root"], "twostream-gold")
+        os.makedirs(subdir)
+        self._write_log(subdir, "twostream-gold.err", self._TEARDOWN_ERR)
+        code, probed = self.cli("record", "run-exit",
+                                "--project-root", self.project)
+        self.assertEqual(code, 0, probed)
+        self.assertEqual(probed["state"], "completed")
+        self.assertEqual(probed["exit_anomaly"]["kind"], "exit-teardown-abort")
 
     def test_run_exit_slurm_teardown_signature_without_completion_stays_failed(self):
         prepared = self._prepare("local-slurm", self.executable)

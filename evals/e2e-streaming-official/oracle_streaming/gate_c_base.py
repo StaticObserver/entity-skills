@@ -22,13 +22,17 @@ def sacct_job(site: str, job_id: str) -> Optional[Dict[str, Any]]:
 
     Beyond the neutral-streaming original this variant also reports "tres"
     (AllocTRES, for the gres ceiling check) and "records" (number of sacct
-    rows for the job id — a requeued/rerun job shows more than one).
+    job rows for the id — a requeued/rerun job shows more than one; step
+    rows like .batch do not count).  The query keeps step rows (no -X)
+    because some clusters leave the top-level NTasks blank and only the
+    .batch step carries it; a blank top-level tasks field falls back to the
+    batch step's value.
     """
     fmt = "JobID,JobName,Partition,State,ExitCode,NNodes,NTasks,Elapsed,AllocTRES"
     try:
         out = subprocess.run(
             ["ssh", "-o", "BatchMode=yes", site,
-             f"sacct -j {job_id} -X -n -P --format={fmt}"],
+             f"sacct -j {job_id} -n -P --format={fmt}"],
             capture_output=True, text=True, timeout=60,
         )
     except (OSError, subprocess.TimeoutExpired):
@@ -36,15 +40,25 @@ def sacct_job(site: str, job_id: str) -> Optional[Dict[str, Any]]:
     if out.returncode != 0 or not out.stdout.strip():
         return None
     lines = [ln for ln in out.stdout.strip().splitlines() if ln.strip()]
-    parts = lines[0].split("|")
+    job_lines = [ln for ln in lines if "." not in ln.split("|")[0]]
+    if not job_lines:
+        return None
+    parts = job_lines[0].split("|")
     if len(parts) < 8:
         return None
+    tasks = parts[6]
+    if not tasks:
+        for line in lines:
+            step = line.split("|")
+            if step[0].endswith(".batch") and len(step) > 6 and step[6]:
+                tasks = step[6]
+                break
     return {
         "job_id": parts[0], "name": parts[1], "partition": parts[2],
         "state": parts[3], "exit_code": parts[4], "nodes": parts[5],
-        "tasks": parts[6], "elapsed": parts[7],
+        "tasks": tasks, "elapsed": parts[7],
         "tres": parts[8] if len(parts) > 8 else "",
-        "records": len(lines),
+        "records": len(job_lines),
     }
 
 

@@ -13,6 +13,10 @@ Data readability checks are identical to the neutral-streaming variant.
 
 from __future__ import annotations
 
+import os
+import re
+import shlex
+import subprocess
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -22,6 +26,80 @@ from oracle_streaming.gate_c_base import (  # noqa: E402
     evaluate_job,
     sacct_job,
 )
+
+
+_ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
+_STEP_RE = re.compile(r"Step:\s*(\d+)")
+_OF_RE = re.compile(r"\[of\s*(\d+)\]")
+_TEARDOWN_SIGNATURE = "malloc_consolidate()"
+_ABORT_MARKERS = ("Aborted", "SIGABRT")
+
+
+def teardown_anomaly(text: str) -> Optional[Dict[str, int]]:
+    """Known-harmless teardown abort, recomputed independently from the raw
+    slurm log: the glibc heap-consolidation abort fires while the runtime
+    tears down AFTER the final step (last "Step: N [of M]" with N >= M-1;
+    Entity prints the final step as M-1).  Mirrors the ledger's classifier;
+    returns the step evidence or None."""
+    if not text or _TEARDOWN_SIGNATURE not in text:
+        return None
+    if not any(marker in text for marker in _ABORT_MARKERS):
+        return None
+    last = total = None
+    for line in _ANSI_RE.sub("", text).splitlines():
+        step = _STEP_RE.search(line)
+        total_match = _OF_RE.search(line)
+        if step is not None and total_match is not None:
+            last, total = int(step.group(1)), int(total_match.group(1))
+    if last is None or total is None or last < total - 1:
+        return None
+    return {"last_step": last, "total_steps": total}
+
+
+def _slurm_log_tail(site: str, run_root: str, job_id: str) -> str:
+    """Tail of slurm-<job_id>.out on the site (slurm merges stderr there by
+    default).  Any failure yields "" — missing evidence, never a crash."""
+    path = os.path.join(run_root, "slurm-%s.out" % job_id)
+    try:
+        out = subprocess.run(
+            ["ssh", "-o", "BatchMode=yes", site,
+             "tail -c 262144 %s" % shlex.quote(path)],
+            capture_output=True, text=True, timeout=60,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return ""
+    return out.stdout if out.returncode == 0 else ""
+
+
+def _teardown_override(checks: List[Dict[str, str]], site: str,
+                       run_info: Dict[str, Any], submission: Dict[str, Any],
+                       job_id: str) -> None:
+    """A run that physically completed but died in the known teardown abort
+    is booked FAILED by Slurm (exit 6/SIGABRT).  When job_terminal_state
+    failed for that reason, independently confirm the anomaly from the slurm
+    log and override to pass; a real failure keeps its fail."""
+    terminal = next((c for c in checks if c["name"] == "job_terminal_state"), None)
+    if terminal is None or terminal["status"] != "fail":
+        return
+    run_root = str(run_info.get("run_root") or "")
+    if not run_root:
+        data_root = run_info.get("data_root") \
+            or (submission.get("output", {}) or {}).get("data_root") or ""
+        run_root = str(Path(str(data_root)).parent) if data_root else ""
+    anomaly = teardown_anomaly(_slurm_log_tail(site, run_root, job_id)) \
+        if run_root and job_id else None
+    if anomaly is None:
+        checks.append(_check(
+            "teardown_anomaly", "unknown",
+            "no teardown-abort evidence in the slurm log (or no run_root declared)"))
+        return
+    checks.append(_check(
+        "teardown_anomaly", "pass",
+        "known harmless teardown abort confirmed from the slurm log: "
+        "Step %d [of %d] + malloc_consolidate()"
+        % (anomaly["last_step"], anomaly["total_steps"])))
+    terminal["status"] = "pass"
+    terminal["detail"] += "; overridden: teardown anomaly independently confirmed"
 
 
 def evaluate_exit_evidence(data_root: Path, declared_exit: Optional[int]) -> List[Dict[str, str]]:
@@ -137,6 +215,7 @@ def run(site: str, submission: Dict[str, Any], thresholds: Dict[str, Any],
                 "walltime_ceiling_seconds": _walltime_ceiling(submission),
             }))
             checks.extend(evaluate_slurm_facts(job, submission))
+            _teardown_override(checks, site, run_info, submission, job_id)
         else:
             checks.append(_check("job_facts", "unknown", "submission declares no slurm job id"))
     elif kind == "direct":

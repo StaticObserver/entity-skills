@@ -15,7 +15,11 @@ import os
 from entity_ledger_common import find_identity, load_simulation_confirmation
 from entity_ledger_facts import _git_revision
 from entity_ledger_store import StoreError
-from entity_ledger_workspace import workspace_for_ledger_home
+from entity_ledger_workspace import (
+    WorkspaceError,
+    load_project_yaml,
+    workspace_for_ledger_home,
+)
 
 
 BOARD_ORDER = ["source", "pgen", "build", "run", "data", "analysis"]
@@ -23,20 +27,35 @@ BOARD_ORDER = ["source", "pgen", "build", "run", "data", "analysis"]
 
 def _pgen_cell(project_root):
     """PGen readiness from local confirmation records: a TOML input counts as
-    confirmed only when its ``.decisions.json`` still matches the file bytes."""
+    confirmed only when its ``.decisions.json`` still matches the file bytes.
+    Scans the project root and, for workspace projects, the registered
+    source authority directory (project.yaml ``source``)."""
     if not os.path.isdir(project_root):
         return {"state": "unknown", "detail": "project root 不在本机"}
+    scan_roots = [project_root]
+    try:
+        source_rel = load_project_yaml(project_root).get("source") or ""
+    except WorkspaceError:
+        source_rel = ""
+    if source_rel:
+        source_dir = os.path.join(project_root, source_rel)
+        if (os.path.isdir(source_dir)
+                and os.path.realpath(source_dir) != os.path.realpath(project_root)):
+            scan_roots.append(source_dir)
     confirmed = []
     unconfirmed = []
-    for name in sorted(os.listdir(project_root)):
-        if not name.endswith(".toml"):
-            continue
-        unused_record, matches = load_simulation_confirmation(
-            os.path.join(project_root, name))
-        if matches:
-            confirmed.append(name)
-        else:
-            unconfirmed.append(name)
+    for root in scan_roots:
+        prefix = "" if root == project_root else (
+            os.path.relpath(root, project_root) + "/")
+        for name in sorted(os.listdir(root)):
+            if not name.endswith(".toml"):
+                continue
+            unused_record, matches = load_simulation_confirmation(
+                os.path.join(root, name))
+            if matches:
+                confirmed.append(prefix + name)
+            else:
+                unconfirmed.append(prefix + name)
     if confirmed and not unconfirmed:
         return {"state": "confirmed", "detail": ", ".join(confirmed)}
     if confirmed:
@@ -45,7 +64,7 @@ def _pgen_cell(project_root):
                                                    ", ".join(unconfirmed))}
     if unconfirmed:
         return {"state": "unconfirmed", "detail": ", ".join(unconfirmed)}
-    return {"state": "unknown", "detail": "项目根下没有 TOML 输入"}
+    return {"state": "unknown", "detail": "项目根与 source 权威下都没有 TOML 输入"}
 
 
 def _source_cell(case, project_root, alerts):

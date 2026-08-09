@@ -15,8 +15,13 @@
   source-cache 里 `streaming/pgen.hpp` 的 sha256，防 agent 改写官方
   pgen)+ TOML/spec 一致性 + submission schema;C 门走 Slurm sacct
   (job id 存在且恰好一条记录、终态/exit code、资源与 Elapsed 对账、
-  gres 上限；direct exit-file 分支保留供 m87);D 门物理判据结构继
-  承，**阈值全部 pending-gold-run**。
+  gres 上限，teardown abort 从 slurm 日志独立确认后豁免；direct
+  exit-file 分支保留供 m87);D 门为 two-stream 增长判据，**阈值已于
+  2026-08-09 gold run 冻结**（增长率带、增长倍数、饱和、能量漂移、
+  粒子数守恒）。
+- **gold run(2026-08-09,pilot 自跑）**:`run-879cd51744bad483`(job
+  357003,V100,Slurm elapsed 2s),oracle 五门 overall pass;ledger
+  status 六格全绿。
 - **harness**：沿用 Claude Code headless + skill_observability 的 A/B 框
   架（skills-v5 vs skills-no-router，自变量是 entity-ledger 在场与否）。
 
@@ -45,14 +50,15 @@ RUNBOOK.md                     # 运行手册(唯一设置文档)
 4. `clean_remote.sh <run-name> -f` 清理远端（squeue/sacct 确认无残留），
    归档 summary.json。
 
-## 待 gold run 清单（阶段 0 已完成 2026-08-05；站点建设与 gold run 待做）
+## 校准状态（阶段 0–2 已完成，2026-08-09)
 
-- **TOML 参数校准**:physics-spec 的 cells=128/ppc=32/drift=±0.2 沿
-  neutral 组量级（4070 Ti 验证过）,`final_time=50.0` 与 CFL=0.5 是暂
-  定值——用 gold run 确认不稳定增长在 walltime 预算内可观测量。
-- **Gate D 阈值冻结**:thresholds.json 现为 neutral 结构占位；gold run
-  后重写漂移/电场/E² 的期望带（two-stream 是增长物理，不是守恒）。
-- **seed 语义确认**：官方 streaming pgen 是否暴露 seed 入口，若无则在
-  gold run 记录有效默认值并改 spec 注释。
-- **实测 oracle 五门**:B/C/D/E 门目前只有单测覆盖（纯函数），首次实
-  跑需人工核对 oracle-report.json 各 check 的合理性。
+- **TOML 参数**:cells=128/ppc0=32/drift=±0.2/final_time=50/CFL=0.5 经
+  gold run 验证——双流增长从噪声底 4.8e-7 到峰值 3.4e-3,t≈13.8 饱和，
+  单场 V100 计算 ~1s(Slurm elapsed 2s),walltime 预算极其宽裕。
+- **Gate D 阈值已冻结**:two-stream 增长判据（增长率带 [0.08,0.20]、
+  增长倍数 ≥1e3、t_final 前饱和、能量漂移 ≤1%、粒子数严格守恒），依
+  据见 thresholds.json 的逐条 calibration 注记。
+- **seed 语义**：官方 streaming pgen 无 seed knob，有效默认即内核全
+  局序列；spec 已注明（random_seed.calibration=resolved-gold-run)。
+- **oracle 五门已实测**:pilot gold run 自判 overall pass;A 门在
+  pilot 用空 transcript（虚过），正式轮由 agent transcript 实质扫描。

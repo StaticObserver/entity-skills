@@ -85,6 +85,22 @@ project_uid 外键；`store migrate` 链式 v1→v2→v3，旧 root→case 1:1
   discover` 在建议分区只有一种 GPU 类型时建议 `default_gres`（多类型
   时警告需显式选择）。direct 后端忽略 gres（归一化为 ""）。
 
+### Fixed
+
+- astro gold run(pilot）实测暴露并修复：
+  - `record run-launch` 对 site-tree profile（只有 site_root、无显式
+    roots）报 "execution Site has no staging_root"——launch 路径改用
+    `merged_execution_profile` 推导 roots(prepare/data 本来就走）;
+  - slurm 终态探测的 sacct 调用缺 `-P`,real sacct 默认表格输出导致
+    exit_code 永远解析为 None（测试假 sacct 始终管道分隔，掩盖了该
+    bug；假件已改为诚实模拟）;
+  - teardown abort 日志探测只认固定文件名（simulation.err/out):Entity
+    以 simulation.name 命名日志且放在输出子目录，slurm 默认把 stderr
+    并进 out——探测现覆盖 slurm-<job>.out（双向证据）与
+    `<run_root>[/*]/*.err|*.out`;
+  - dashboard pgen 格只扫项目根，0.7.0 source/ 权威布局下误报
+    "没有 TOML 输入"——现同时扫描 project.yaml 登记的 source 目录。
+
 ### Changed
 
 - **export JSON 的 projects 形状变化**（破坏性）：v2 的

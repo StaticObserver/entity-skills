@@ -1,11 +1,19 @@
-"""Gate D: independent physics verification.
+"""Gate D: independent physics verification (two-stream growth variant).
 
-Reads the raw simulation output (stats CSV + field/particle snapshots via
-nt2py) and recomputes every frozen metric from thresholds.json. The agent's
-own analysis is never consulted: declared numbers do not count.
+Reads the raw simulation output (stats CSV + particle snapshots via nt2py)
+and recomputes every frozen metric from thresholds.json. The agent's own
+analysis is never consulted: declared numbers do not count.
 
-``evaluate`` is pure and unit-testable; ``extract_metrics`` is the only part
-that touches nt2py and real data.
+Two-stream is GROWTH physics, so the frozen metrics are: the E1^2 series
+must rise exponentially out of the noise with a growth rate inside the
+gold-run band, saturate before the final time, while total energy drift
+stays bounded and particle counts are exactly conserved. (The neutral
+counterpart's conservation criteria — drift retention, B1 background,
+E^2 noise ceiling — do not apply and were removed at the 2026-08-09
+threshold freeze.)
+
+``evaluate`` and ``fit_growth`` are pure and unit-testable;
+``extract_metrics`` is the only part that touches nt2py and real data.
 """
 
 from __future__ import annotations
@@ -13,41 +21,47 @@ from __future__ import annotations
 import csv
 import math
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 
 def _check(name: str, status: str, detail: str) -> Dict[str, str]:
     return {"name": name, "status": status, "detail": detail}
 
 
-def weighted_mean(values, weights=None):
-    """Mean of values; weighted by the particle weight column when given.
+def fit_growth(time: List[float], e1sq: List[float]) -> Optional[Dict[str, Any]]:
+    """Least-squares fit of ln(<E1^2>) over the linear-growth window.
 
-    Returns (mean, weighted). Falls back to a simple mean when weights are
-    absent or non-positive (and says so via the flag).
+    Window: first point above 10x the initial noise floor through the peak.
+    The field amplitude grows at gamma, so the E^2 slope is 2*gamma.  Returns
+    None when no usable growth window exists.
     """
-    values = list(values)
-    if weights is not None:
-        weights = list(weights)
-        total = sum(weights)
-        if total > 0:
-            return sum(v * w for v, w in zip(values, weights)) / total, True
-    return sum(values) / len(values), False
-
-
-def ux_drift_max(snapshot_species_means):
-    """Max over ALL snapshots of |mean_ux - 0.2| / 0.2.
-
-    snapshot_species_means: per snapshot, the per-species mean ux values;
-    the per-snapshot value averages across species (as before), the reported
-    metric is the max over time — drift anywhere in the run counts, not just
-    at the last snapshot.
-    """
-    deviations = []
-    for means in snapshot_species_means:
-        avg = sum(means) / len(means)
-        deviations.append(abs(avg - 0.2) / 0.2)
-    return max(deviations) if deviations else None
+    points = [(t, e) for t, e in zip(time, e1sq) if e > 0 and math.isfinite(e)]
+    if len(points) < 4:
+        return None
+    floor = points[0][1]
+    peak_index = max(range(len(points)), key=lambda i: points[i][1])
+    start = next((i for i, (_, e) in enumerate(points) if e > 10.0 * floor), None)
+    if start is None or peak_index - start < 2:
+        return None
+    window = points[start : peak_index + 1]
+    n = len(window)
+    sum_t = sum(t for t, _ in window)
+    sum_l = sum(math.log(e) for _, e in window)
+    sum_tl = sum(t * math.log(e) for t, e in window)
+    sum_tt = sum(t * t for t, _ in window)
+    denom = n * sum_tt - sum_t * sum_t
+    if not denom:
+        return None
+    slope2 = (n * sum_tl - sum_t * sum_l) / denom
+    return {
+        "gamma_field": slope2 / 2.0,
+        "window": [window[0][0], window[-1][0]],
+        "window_points": n,
+        "noise_floor": floor,
+        "peak": points[peak_index][1],
+        "peak_time": points[peak_index][0],
+        "growth_factor": points[peak_index][1] / floor,
+    }
 
 
 def evaluate(metrics: Dict[str, Any], thresholds: Dict[str, Any]) -> List[Dict[str, str]]:
@@ -72,22 +86,6 @@ def evaluate(metrics: Dict[str, Any], thresholds: Dict[str, Any]) -> List[Dict[s
     else:
         checks.append(_check("particle_count_conservation", "unknown", "no particle counts extracted"))
 
-    ux = metrics.get("ux_drift_relative_max")
-    if ux is not None:
-        tol = spec["ux_drift_relative_max"]["tolerance"]
-        ok = ux <= tol
-        n_snap = metrics.get("ux_snapshots")
-        span = f" over {n_snap} snapshots" if n_snap else ""
-        how = ("weight-averaged" if metrics.get("ux_weighted")
-               else "simple mean (no usable weight column)")
-        checks.append(_check(
-            "ux_drift_relative_max",
-            "pass" if ok else "fail",
-            f"max{span} |mean_ux - 0.2| / 0.2 = {ux:.4f} (tolerance {tol}; {how})",
-        ))
-    else:
-        checks.append(_check("ux_drift_relative_max", "unknown", "no particle ux extracted"))
-
     n_min = metrics.get("min_particles_per_species")
     if n_min is not None:
         floor = spec["min_particles_per_species"]["tolerance"]
@@ -101,41 +99,15 @@ def evaluate(metrics: Dict[str, Any], thresholds: Dict[str, Any]) -> List[Dict[s
         checks.append(_check("min_particles_per_species", "unknown",
                              "no per-species particle counts extracted"))
 
-    b1 = metrics.get("b1_mean_deviation_max")
-    if b1 is not None:
-        tol = spec["b1_mean_absolute_deviation"]["tolerance"]
-        ok = b1 <= tol
+    mono = metrics.get("stats_time_monotonic")
+    if mono is not None:
         checks.append(_check(
-            "b1_mean_absolute_deviation",
-            "pass" if ok else "fail",
-            f"max |mean(B1) - 1.0| = {b1:.6f} (tolerance {tol})",
+            "stats_time_monotonic",
+            "pass" if mono else "fail",
+            "stats time strictly increasing and finite" if mono else "stats time not monotonic or non-finite",
         ))
     else:
-        checks.append(_check("b1_mean_absolute_deviation", "unknown", "no field snapshots extracted"))
-
-    b1sq = metrics.get("b1_squared_relative_drift_max")
-    if b1sq is not None:
-        tol = spec["b1_squared_relative_drift"]["tolerance"]
-        ok = b1sq <= tol
-        checks.append(_check(
-            "b1_squared_relative_drift",
-            "pass" if ok else "fail",
-            f"max relative <B1^2> drift = {b1sq:.6f} (tolerance {tol})",
-        ))
-    else:
-        checks.append(_check("b1_squared_relative_drift", "unknown", "no stats B1^2 column"))
-
-    esq = metrics.get("e_squared_max")
-    if esq is not None:
-        tol = spec["e_squared_noise_ceiling"]["tolerance"]
-        ok = esq <= tol
-        checks.append(_check(
-            "e_squared_noise_ceiling",
-            "pass" if ok else "fail",
-            f"max <E^2> = {esq:.3e} (ceiling {tol:.1e})",
-        ))
-    else:
-        checks.append(_check("e_squared_noise_ceiling", "unknown", "no stats E^2 columns"))
+        checks.append(_check("stats_time_monotonic", "unknown", "no stats rows"))
 
     edrift = metrics.get("energy_relative_drift_max")
     if edrift is not None:
@@ -149,15 +121,44 @@ def evaluate(metrics: Dict[str, Any], thresholds: Dict[str, Any]) -> List[Dict[s
     else:
         checks.append(_check("energy_relative_drift", "unknown", "no total-energy column in stats"))
 
-    mono = metrics.get("stats_time_monotonic")
-    if mono is not None:
+    gamma = metrics.get("e1_growth_rate")
+    if gamma is not None:
+        lo, hi = spec["e1_growth_rate"]["band"]
+        ok = lo <= gamma <= hi
+        window = metrics.get("e1_growth_window") or []
         checks.append(_check(
-            "stats_time_monotonic",
-            "pass" if mono else "fail",
-            "stats time strictly increasing and finite" if mono else "stats time not monotonic or non-finite",
+            "e1_growth_rate",
+            "pass" if ok else "fail",
+            f"fitted growth rate gamma = {gamma:.4f} (band [{lo}, {hi}]; "
+            f"window {window}, {metrics.get('e1_growth_window_points')} points)",
         ))
     else:
-        checks.append(_check("stats_time_monotonic", "unknown", "no stats rows"))
+        checks.append(_check("e1_growth_rate", "unknown", "no linear-growth window in <E1^2>(t)"))
+
+    factor = metrics.get("e1_squared_growth_factor")
+    if factor is not None:
+        minimum = spec["e1_squared_growth_factor"]["minimum"]
+        ok = factor >= minimum
+        checks.append(_check(
+            "e1_squared_growth_factor",
+            "pass" if ok else "fail",
+            f"<E1^2> grew {factor:.3e}x over the noise floor (minimum {minimum:.0e})",
+        ))
+    else:
+        checks.append(_check("e1_squared_growth_factor", "unknown", "no <E1^2> series"))
+
+    saturated = metrics.get("saturated_before_final")
+    if saturated is not None:
+        peak_time = metrics.get("saturation_time")
+        checks.append(_check(
+            "saturation_before_final",
+            "pass" if saturated else "fail",
+            f"<E1^2> peaks at t={peak_time}, before the final time"
+            if saturated else
+            f"<E1^2> still peaks at the final time (t={peak_time}); runtime too short",
+        ))
+    else:
+        checks.append(_check("saturation_before_final", "unknown", "no <E1^2> series"))
 
     return checks
 
@@ -187,21 +188,20 @@ def _read_stats(csv_path: Path) -> Dict[str, Any]:
         return None
 
     time = column("time", "t")
+    e1sq = column("E1^2", "Ex^2", "Ex2")
     if time:
         out["stats_time_monotonic"] = all(
             math.isfinite(v) for v in time
         ) and all(b > a for a, b in zip(time, time[1:]))
-
-    e_cols = [column(f"E{i}^2") for i in (1, 2, 3)]
-    if all(c is not None for c in e_cols):
-        out["e_squared_max"] = max(
-            sum(values) for values in zip(*e_cols)  # type: ignore[arg-type]
-        )
-    b1sq = column("B1^2")
-    if b1sq and b1sq[0] != 0:
-        out["b1_squared_relative_drift_max"] = max(
-            abs(v - b1sq[0]) / abs(b1sq[0]) for v in b1sq
-        )
+    if time and e1sq:
+        growth = fit_growth(time, e1sq)
+        if growth is not None:
+            out["e1_growth_rate"] = growth["gamma_field"]
+            out["e1_growth_window"] = growth["window"]
+            out["e1_growth_window_points"] = growth["window_points"]
+            out["e1_squared_growth_factor"] = growth["growth_factor"]
+            out["saturation_time"] = growth["peak_time"]
+            out["saturated_before_final"] = growth["peak_time"] < time[-1]
     etot = column("T00", "Etot", "E_tot", "TotalEnergy", "total_energy")
     if etot and etot[0] != 0:
         out["energy_relative_drift_max"] = max(
@@ -211,10 +211,7 @@ def _read_stats(csv_path: Path) -> Dict[str, Any]:
 
 
 def extract_metrics(data_root: Path) -> Dict[str, Any]:
-    """Recompute metrics from raw data. Requires nt2py for snapshots."""
-    import numpy as np  # noqa: PLC0415 - deferred: only needed with real data
-    import nt2  # noqa: PLC0415
-
+    """Recompute metrics from raw data. Requires nt2py for particle counts."""
     root = Path(data_root)
     metrics: Dict[str, Any] = {}
 
@@ -222,43 +219,19 @@ def extract_metrics(data_root: Path) -> Dict[str, Any]:
     if csv_path:
         metrics.update(_read_stats(csv_path))
 
+    import nt2  # noqa: PLC0415 - deferred: only needed with real data
     data = nt2.Data(str(root))
-
-    fields = data.fields
-    if "Bx" in fields.keys() and len(fields.t.values) > 0:
-        deviations = []
-        for t in fields.t.values:
-            snapshot = fields.sel(t=t)
-            deviations.append(abs(float(np.mean(snapshot["Bx"].values)) - 1.0))
-        metrics["b1_mean_deviation_max"] = max(deviations)
-
     particles = data.particles
     times = list(particles.times)
     if times:
         counts: Dict[str, Any] = {}
-        per_snapshot_means: List[List[float]] = []
-        all_weighted = True
-        for t_index, t in enumerate(times):
-            species_means: List[float] = []
-            for sp in particles.species:
-                snapshot = particles.sel(t=t, method="nearest").sel(sp=sp).load(cols=["ux", "w"])
-                ux_vals = [float(v) for v in snapshot["ux"].values]
-                try:
-                    w_vals = [float(v) for v in snapshot["w"].values]
-                except Exception:
-                    w_vals = None
-                mean, weighted = weighted_mean(ux_vals, w_vals)
-                all_weighted = all_weighted and weighted
-                species_means.append(mean)
-                if t_index == 0 or t_index == len(times) - 1:
-                    slot = counts.setdefault(str(sp), [0, 0])
-                    slot[0 if t_index == 0 else 1] = len(ux_vals)
-            per_snapshot_means.append(species_means)
+        for sp in particles.species:
+            for t_index, t in ((0, times[0]), (1, times[-1])):
+                snapshot = particles.sel(t=t, method="nearest").sel(sp=sp).load(cols=["ux"])
+                slot = counts.setdefault(str(sp), [0, 0])
+                slot[t_index] = int(snapshot["ux"].size)
         metrics["particle_counts"] = {k: tuple(v) for k, v in counts.items()}
         metrics["min_particles_per_species"] = min(v[1] for v in counts.values())
-        metrics["ux_drift_relative_max"] = ux_drift_max(per_snapshot_means)
-        metrics["ux_snapshots"] = len(times)
-        metrics["ux_weighted"] = all_weighted
     return metrics
 
 

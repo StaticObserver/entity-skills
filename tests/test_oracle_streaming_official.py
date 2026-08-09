@@ -3,6 +3,7 @@
 import json
 import sys
 import tempfile
+import tomllib
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -10,7 +11,7 @@ from unittest import mock
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "evals" / "e2e-streaming-official"))
 
-from oracle_streaming import gate_b_official, gate_c_job_data  # noqa: E402
+from oracle_streaming import gate_b_official, gate_c_base, gate_c_job_data, gate_d_physics  # noqa: E402
 import redact_spec  # noqa: E402
 
 SPEC_PATH = ROOT / "evals" / "e2e-streaming-official" / "physics-spec.json"
@@ -41,6 +42,47 @@ GOOD_TOML = {
     },
     "output": {"interval_time": 5.0, "particles": {"species": [1, 3], "stride": 10}},
 }
+
+_GOOD_TOML_TEXT = """
+[simulation]
+engine = "srpic"
+runtime = 50.0
+
+[grid]
+resolution = [128]
+extent = [[0.0, 16.0]]
+[grid.boundaries]
+fields = [["PERIODIC"]]
+particles = [["PERIODIC"]]
+
+[particles]
+ppc0 = 32.0
+[[particles.species]]
+charge = -1.0
+mass = 1.0
+[[particles.species]]
+charge = 1.0
+mass = 1.0
+[[particles.species]]
+charge = -1.0
+mass = 1.0
+[[particles.species]]
+charge = 1.0
+mass = 1.0
+
+[setup]
+drifts_in_x = [0.2, 0.0, -0.2, 0.0]
+drifts_in_y = [0.0, 0.0, 0.0, 0.0]
+drifts_in_z = [0.0, 0.0, 0.0, 0.0]
+temperatures = [0.0001, 0.0001, 0.0001, 0.0001]
+densities = [0.5, 0.5]
+
+[output]
+interval_time = 5.0
+[output.particles]
+species = [1, 3]
+stride = 10
+"""
 
 GOOD_SUBMISSION = {
     "experiment_id": "e2e-streaming-official-v1",
@@ -119,6 +161,30 @@ class StreamingTomlCompareTest(unittest.TestCase):
     def test_nspec_derived_from_species_array(self):
         result = statuses(gate_b_official.compare_streaming_toml(GOOD_TOML, SPEC))
         self.assertEqual(result["nspec"], "pass")
+
+
+class GateBProjectLayoutTest(unittest.TestCase):
+    def test_toml_and_design_discovered_under_source(self):
+        root = Path(tempfile.mkdtemp(prefix="oracle-gateb-"))
+        (root / "source" / "docs").mkdir(parents=True)
+        (root / "source" / "input.toml").write_text(_GOOD_TOML_TEXT)
+        parsed = tomllib.loads(_GOOD_TOML_TEXT)
+        self.assertEqual(
+            [c for c in gate_b_official.compare_streaming_toml(parsed, SPEC)
+             if c["status"] != "pass"],
+            [])
+        (root / "source" / "docs" / "design.md").write_text("# rationale\n")
+        result = statuses(gate_b_official.run(root, SPEC, GOOD_SUBMISSION)["checks"])
+        self.assertEqual(result.get("design_md"), "pass")
+        self.assertEqual(result.get("resolution"), "pass")
+
+    def test_missing_toml_fails_cleanly(self):
+        # regression: no TOML anywhere must produce a fail check, not an
+        # IndexError from indexing an empty candidate list
+        root = Path(tempfile.mkdtemp(prefix="oracle-gateb-"))
+        result = gate_b_official.run(root, SPEC, GOOD_SUBMISSION)
+        self.assertEqual(result["status"], "fail")
+        self.assertEqual(statuses(result["checks"])["input_toml"], "fail")
 
 
 class DirectBackendGateCTest(unittest.TestCase):
@@ -232,6 +298,45 @@ class SlurmGateCTest(unittest.TestCase):
             result = gate_c_job_data.run("m87", GOOD_SUBMISSION, {}, root)
         self.assertEqual(statuses(result["checks"])["exit_evidence"], "pass")
 
+    TEARDOWN_LOG = (
+        "Step: 799.......................[of 800]\n"
+        "malloc_consolidate(): unaligned fastbin chunk detected\n"
+        "srun: error: gpu1: task 0: Aborted\n")
+
+    def test_teardown_abort_overrides_terminal_fail(self):
+        submission = json.loads(json.dumps(SLURM_SUBMISSION))
+        submission["run"]["run_root"] = "/remote/run"
+        record = _sacct_record(state="FAILED", exit_code="6:0")
+        with mock.patch.object(gate_c_job_data, "sacct_job", return_value=record), \
+                mock.patch.object(gate_c_job_data, "_slurm_log_tail",
+                                  return_value=self.TEARDOWN_LOG):
+            result = gate_c_job_data.run("astro", submission, {}, None)
+        result = statuses(result["checks"])
+        self.assertEqual(result["job_terminal_state"], "pass")
+        self.assertEqual(result["teardown_anomaly"], "pass")
+
+    def test_real_failure_keeps_terminal_fail(self):
+        submission = json.loads(json.dumps(SLURM_SUBMISSION))
+        submission["run"]["run_root"] = "/remote/run"
+        record = _sacct_record(state="FAILED", exit_code="1:0")
+        with mock.patch.object(gate_c_job_data, "sacct_job", return_value=record), \
+                mock.patch.object(gate_c_job_data, "_slurm_log_tail",
+                                  return_value="Step: 12 [of 800]\nsegfault\n"):
+            result = gate_c_job_data.run("astro", submission, {}, None)
+        result = statuses(result["checks"])
+        self.assertEqual(result["job_terminal_state"], "fail")
+        self.assertEqual(result["teardown_anomaly"], "unknown")
+
+    def test_teardown_anomaly_pure(self):
+        anomaly = gate_c_job_data.teardown_anomaly(self.TEARDOWN_LOG)
+        self.assertEqual(anomaly, {"last_step": 799, "total_steps": 800})
+        self.assertIsNone(gate_c_job_data.teardown_anomaly(
+            "Step: 10 [of 800]\nmalloc_consolidate(): invalid chunk size\nAborted\n"))
+        self.assertIsNone(gate_c_job_data.teardown_anomaly(
+            "Step: 799 [of 800]\nsome other crash\nAborted\n"))
+        self.assertIsNone(gate_c_job_data.teardown_anomaly(""))
+
+
 
 class RedactSpecTest(unittest.TestCase):
     """The agent-facing spec must not leak the Slurm self-discovery answers."""
@@ -279,7 +384,8 @@ class FixturesTest(unittest.TestCase):
         self.assertIsNone(run_job["time_limit"])
         self.assertEqual(SPEC["resources"]["analysis_job"]["partitions"],
                          ["intelhigh", "amdlow"])
-        self.assertEqual(SPEC["runtime"]["status"], "calibration-pending-gold-run")
+        self.assertEqual(SPEC["runtime"]["status"],
+                         "calibrated-gold-run-2026-08-09")
 
     def test_fixtures_are_valid_json(self):
         for name in ("physics-spec.json", "oracle_streaming/thresholds.json",
@@ -291,12 +397,107 @@ class FixturesTest(unittest.TestCase):
         thresholds = json.loads(
             (ROOT / "evals" / "e2e-streaming-official" / "oracle_streaming"
              / "thresholds.json").read_text())
-        for key in ("particle_count_conservation", "ux_drift_relative_max",
-                    "min_particles_per_species", "b1_mean_absolute_deviation",
-                    "b1_squared_relative_drift", "e_squared_noise_ceiling",
-                    "energy_relative_drift", "stats_time_monotonic"):
+        for key in ("particle_count_conservation", "min_particles_per_species",
+                    "stats_time_monotonic", "energy_relative_drift",
+                    "e1_growth_rate", "e1_squared_growth_factor",
+                    "saturation_before_final"):
             self.assertIn(key, thresholds["metrics"])
-        self.assertEqual(thresholds["calibration"], "pending-gold-run")
+        self.assertEqual(thresholds["calibration"], "gold-run-2026-08-09")
+
+
+THRESHOLDS = json.loads(
+    (ROOT / "evals" / "e2e-streaming-official" / "oracle_streaming"
+     / "thresholds.json").read_text())
+
+GOLD_METRICS = {
+    "particle_counts": {"1": (102, 102), "3": (102, 102)},
+    "min_particles_per_species": 102,
+    "stats_time_monotonic": True,
+    "energy_relative_drift_max": 0.002000950315674284,
+    "e1_growth_rate": 0.13656367393336358,
+    "e1_growth_window": [0.6875, 13.8125],
+    "e1_growth_window_points": 22,
+    "e1_squared_growth_factor": 7079.335872129105,
+    "saturation_time": 13.8125,
+    "saturated_before_final": True,
+}
+
+
+class SacctParseTest(unittest.TestCase):
+    def _fake_proc(self, stdout, rc=0):
+        import subprocess
+        return subprocess.CompletedProcess(args=[], returncode=rc,
+                                           stdout=stdout, stderr="")
+
+    def test_batch_step_fills_blank_ntasks(self):
+        stdout = (
+            "357003|entity-op|fat|FAILED|6:0|1||00:00:02|billing=32,gres/gpu=1\n"
+            "357003.batch|batch||FAILED|6:0|1|1|00:00:02|\n"
+            "357003.0|entity.xc||CANCELLED|0:6|1|1|00:00:01|\n")
+        with mock.patch("oracle_streaming.gate_c_base.subprocess.run",
+                        return_value=self._fake_proc(stdout)):
+            job = gate_c_base.sacct_job("astro", "357003")
+        self.assertEqual(job["tasks"], "1")
+        self.assertEqual(job["records"], 1)
+
+    def test_step_rows_do_not_count_as_jobs(self):
+        stdout = (
+            "100|a|fat|FAILED|1:0|1|1|00:00:01|\n"
+            "100.batch|batch||FAILED|1:0|1|1|00:00:01|\n"
+            "100|a|fat|COMPLETED|0:0|1|1|00:00:02|\n"
+            "100.batch|batch||COMPLETED|0:0|1|1|00:00:02|\n")
+        with mock.patch("oracle_streaming.gate_c_base.subprocess.run",
+                        return_value=self._fake_proc(stdout)):
+            job = gate_c_base.sacct_job("astro", "100")
+        self.assertEqual(job["records"], 2)
+
+
+class GateDFrozenTest(unittest.TestCase):
+    def test_gold_metrics_pass_every_check(self):
+        checks = gate_d_physics.evaluate(GOLD_METRICS, THRESHOLDS)
+        failed = [c for c in checks if c["status"] != "pass"]
+        self.assertEqual(failed, [],
+                         json.dumps(checks, indent=2, ensure_ascii=False))
+
+    def test_growth_rate_outside_band_fails(self):
+        metrics = dict(GOLD_METRICS, e1_growth_rate=0.5)
+        result = statuses(gate_d_physics.evaluate(metrics, THRESHOLDS))
+        self.assertEqual(result["e1_growth_rate"], "fail")
+
+    def test_no_growth_fails_factor_and_growth(self):
+        metrics = dict(GOLD_METRICS, e1_squared_growth_factor=3.0,
+                       e1_growth_rate=None, saturation_time=None,
+                       saturated_before_final=None)
+        result = statuses(gate_d_physics.evaluate(metrics, THRESHOLDS))
+        self.assertEqual(result["e1_squared_growth_factor"], "fail")
+        self.assertEqual(result["e1_growth_rate"], "unknown")
+
+    def test_late_saturation_fails(self):
+        metrics = dict(GOLD_METRICS, saturated_before_final=False,
+                       saturation_time=49.4375)
+        result = statuses(gate_d_physics.evaluate(metrics, THRESHOLDS))
+        self.assertEqual(result["saturation_before_final"], "fail")
+
+    def test_energy_drift_above_tolerance_fails(self):
+        metrics = dict(GOLD_METRICS, energy_relative_drift_max=0.05)
+        result = statuses(gate_d_physics.evaluate(metrics, THRESHOLDS))
+        self.assertEqual(result["energy_relative_drift"], "fail")
+
+    def test_fit_growth_recovers_synthetic_rate(self):
+        import math
+        time = [0.0625 * i for i in range(1, 801)]
+        # gamma_field = 0.15 -> E^2 slope 0.3, saturating at t=20
+        e1sq = [1e-7 * math.exp(0.3 * t) if t <= 20 else 1e-7 * math.exp(6.0)
+                for t in time]
+        growth = gate_d_physics.fit_growth(time, e1sq)
+        self.assertIsNotNone(growth)
+        self.assertAlmostEqual(growth["gamma_field"], 0.15, places=2)
+        self.assertLess(growth["peak_time"], time[-1])
+        self.assertGreater(growth["growth_factor"], 300.0)
+
+    def test_fit_growth_returns_none_without_growth(self):
+        time = [0.0625 * i for i in range(1, 101)]
+        self.assertIsNone(gate_d_physics.fit_growth(time, [1e-7] * 100))
 
 
 if __name__ == "__main__":

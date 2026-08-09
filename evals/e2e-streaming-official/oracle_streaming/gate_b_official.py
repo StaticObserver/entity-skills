@@ -170,7 +170,9 @@ def run(project: Path, spec: Dict[str, Any], submission: Dict[str, Any]) -> Dict
     toml_path = project / "input.toml"
     if not toml_path.is_file():
         candidates = sorted(project.glob("*.toml"))
-        toml_path = candidates[0] if toml_path else toml_path
+        # 0.7.0 workspace layout: the TOML may live in the source authority
+        candidates += sorted(project.glob("source/*.toml"))
+        toml_path = candidates[0] if candidates else toml_path
     if not toml_path.is_file():
         checks.append(_check("input_toml", "fail", "no TOML input found in project"))
         return {"gate": "B-official-pgen-build", "status": "fail", "checks": checks}
@@ -188,7 +190,9 @@ def run(project: Path, spec: Dict[str, Any], submission: Dict[str, Any]) -> Dict
         ))
 
     design = next(
-        (p for p in ["docs/design.md", "design.md"] if (project / p).is_file()),
+        (p for p in ["docs/design.md", "design.md",
+                     "source/docs/design.md", "source/design.md"]
+         if (project / p).is_file()),
         None,
     )
     checks.append(_check(

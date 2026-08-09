@@ -63,8 +63,8 @@
   },
   "random_seed": {
     "value": 20260805,
-    "calibration": "pending-gold-run",
-    "note": "freeze the seed where the build/pgen exposes a seed knob; otherwise record the effective default in the gold run"
+    "calibration": "resolved-gold-run-2026-08-09",
+    "note": "the official streaming PGen exposes no seed knob: particle loading uses the kernel's global random sequence; the effective default is the binary behavior recorded in the gold run (no TOML entry exists to freeze)"
   },
   "compile": {
     "backend": "cuda",
@@ -119,13 +119,13 @@
     "particle_stride_max": 20
   },
   "runtime": {
-    "status": "calibration-pending-gold-run",
+    "status": "calibrated-gold-run-2026-08-09",
     "final_time": 50.0,
     "timestep": null,
     "cfl": 0.5,
     "field_interval": 5.0,
     "particle_interval": 5.0,
     "stats_interval": 10,
-    "note": "cells/ppc/drift magnitude follow the neutral-streaming set validated at RTX 4070 Ti scale; final_time and instability-growth thresholds are provisional until the gold run"
+    "note": "calibrated by the 2026-08-09 gold run (run-879cd51744bad483, V100): final_time=50 amply covers the instability (growth from noise, saturation at t~13.8, settled post-saturation behavior); single-job walltime ~2 s compute on the V100 (Slurm elapsed 2 s), far under the 10 min budget"
   }
 }

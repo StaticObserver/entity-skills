@@ -18,6 +18,24 @@
 > (redact_spec.py)。发现的问题见会话报告（doctor 报既有 0.6.1 技能投
 > 影漂移，与本次无关；executor sbatch `--gres=gpu:N` 不支持 typed
 > gres，是 0.7.0 设计缺口，阶段 2 前需决策）。
+>
+> **阶段 2（TOML 校准 + gold run,pilot）已完成 2026-08-09**:typed
+> gres 缺口已修（policy `default_gres` + `--gres`)。全流程：project
+> streaming-eval / case twostream-gold(case-b57321c9abf1ce71)→
+> snapshot-source → 编译（build-volta70-single-002,Slurm job 356999/
+> 357001,fat CPU-only 32 核，4m05s；二进制烘 rpath 自包含）→ record
+> build(build-f5171682c1d24b91，命中注册栈)→ render-run/record
+> run-prepare/run-launch(**run-879cd51744bad483**,job 357003,
+> fat+gpu:V100:1+qos512 无 --time;Slurm elapsed 2s，计算 ~1s)→
+> run-exit(teardown abort,--reclassify 判 completed + exit_anomaly)
+> → record data(data-138282d17045e948,109 文件）→ 分析（intelhigh
+> job 357006,11s;analysis-eeb468cba15dff30)→ record analysis。
+> status 六格全绿；oracle 自判 **overall pass**(A 门 pilot 用空
+> transcript 虚过）。校准结论：final_time=50 充裕（γ=0.137 ω_pe 落在
+> 冷双流理论带 0.1–0.15,t≈13.8 饱和，增长 7.1e3 倍，能量漂移 0.2%,
+> 粒子数守恒）;Gate D 阈值已按观测带冻结；官方 pgen 无 seed knob,
+> spec 已注明。pilot 修复的 0.7.0 bug 与 gate 增强见 CHANGELOG Fixed
+> 与会话报告（含 build-001 树被误重链的事故记录）。
 
 日期:2026-08-05。评测包:`evals/e2e-streaming-official/`(f46f724)。
 被测对象:0.7.0 skill 全流程(Workspace / Computation Site / deps 注册表 /

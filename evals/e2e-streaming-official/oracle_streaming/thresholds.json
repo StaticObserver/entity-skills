@@ -1,58 +1,58 @@
 {
   "schema_version": 1,
   "experiment_id": "e2e-streaming-official-v1",
-  "calibration": "pending-gold-run",
-  "note": "Structure mirrors e2e-neutral-streaming/thresholds.json (same metric definitions). Values are PROVISIONAL starting points taken from the neutral control set validated at RTX 4070 Ti scale; every tolerance must be re-frozen from the official two-stream gold run before judging any round. The two-stream case is NOT neutral: drift decay and E^2 growth are expected physics, so the neutral ceilings below are placeholders, not physical expectations.",
+  "calibration": "gold-run-2026-08-09",
+  "gold_run": {
+    "run_id": "run-879cd51744bad483",
+    "data_id": "data-138282d17045e948",
+    "analysis_id": "analysis-eeb468cba15dff30",
+    "site": "astro-streaming",
+    "slurm_job_id": "357003",
+    "note": "official streaming pgen, VOLTA70/single, 128 cells x 32 ppc0, drifts ±0.2c, t_final=50 (stats end at t=49.44; the t=50 snapshot was lost to the known harmless teardown abort)"
+  },
+  "note": "Frozen from the 2026-08-09 gold run on astro (V100). Two-stream is GROWTH physics: the neutral-streaming conservation criteria (drift retention, B1 background, E^2 noise ceiling) were replaced by growth-rate band, growth factor, and saturation checks. Bands carry ~±50% margin around the gold observations so a correct re-run passes while a broken build/physics fails.",
   "metrics": {
     "particle_count_conservation": {
-      "definition": "Macro-particle count per species must not change between first and last particle snapshot.",
+      "definition": "Macro-particle count per species must not change between first and last particle snapshot (periodic box).",
       "formula": "N_sp(t_last) - N_sp(t_first) == 0 for each species",
       "tolerance": 0,
-      "calibration": "pending-gold-run"
-    },
-    "ux_drift_relative_max": {
-      "definition": "Weight-averaged streaming four-velocity ux per drifting species vs the initialized drift magnitude (0.2 c) over the WHOLE run.",
-      "formula": "max over every particle snapshot of abs(mean_ux(t) - 0.2) / 0.2 <= tolerance",
-      "tolerance": 0.05,
-      "calibration": "pending-gold-run",
-      "note": "two-stream instability thermalizes the drift: whether this is a ceiling or a growth band is a gold-run decision"
+      "calibration": "exact (gold: 102 -> 102 sampled per streaming species)"
     },
     "min_particles_per_species": {
-      "definition": "Enough macro-particles per species are sampled at the last particle snapshot for the ux statistic to be meaningful.",
+      "definition": "Enough macro-particles per species are sampled at the last particle snapshot for statistics to be meaningful.",
       "formula": "min over species of N_sp_sampled(t_last) >= tolerance",
-      "tolerance": 100,
-      "calibration": "pending-gold-run"
-    },
-    "b1_mean_absolute_deviation": {
-      "definition": "Domain-averaged B1 stays at the imposed background (zero for the unmagnetized two-stream).",
-      "formula": "abs(mean(B1)(t) - 0.0) <= tolerance for every field snapshot",
-      "tolerance": 0.001,
-      "calibration": "pending-gold-run"
-    },
-    "b1_squared_relative_drift": {
-      "definition": "Magnetic energy proxy <B1^2> stays at its (near-zero) initial level for the unmagnetized case.",
-      "formula": "max over stats rows of <B1^2> <= ceiling",
-      "tolerance": 0.0001,
-      "calibration": "pending-gold-run"
-    },
-    "e_squared_noise_ceiling": {
-      "definition": "Electric energy: for the neutral control this was a noise ceiling; for two-stream it is the instability GROWTH channel.",
-      "formula": "max over stats rows of (<E1^2> + <E2^2> + <E3^2>) — band to be frozen from the gold run",
-      "tolerance": 0.0001,
-      "calibration": "pending-gold-run",
-      "note": "placeholder copies the neutral ceiling; the gold run must replace it with the expected growth band"
-    },
-    "energy_relative_drift": {
-      "definition": "Total energy (T00 / stats total) conserved within discretization error.",
-      "formula": "abs(E_tot(t) - E_tot(t0)) / E_tot(t0) <= tolerance for every stats row",
-      "tolerance": 0.01,
-      "calibration": "pending-gold-run"
+      "tolerance": 64,
+      "calibration": "gold sampled 102 per streaming species (8 ppc x 128 cells / stride 10); floor set at ~60%"
     },
     "stats_time_monotonic": {
       "definition": "Stats time column strictly increases and contains no NaN/Inf (output sanity).",
       "formula": "all(diff(time) > 0) and all(isfinite(rows))",
       "tolerance": 0,
-      "calibration": "pending-gold-run"
+      "calibration": "structural"
+    },
+    "energy_relative_drift": {
+      "definition": "Total energy (T00) conserved within discretization error across the whole run (growth physics moves energy between channels; the total must still hold).",
+      "formula": "max over stats rows of abs(T00(t) - T00(t0)) / T00(t0) <= tolerance",
+      "tolerance": 0.01,
+      "calibration": "gold max drift 0.00200; 5x margin"
+    },
+    "e1_growth_rate": {
+      "definition": "Linear-growth rate of the two-stream instability: least-squares slope of ln(<E1^2>) over the auto window (first point above 10x noise floor through the peak), divided by 2 (field amplitude rate).",
+      "formula": "gamma = slope(ln(<E1^2>))/2 within band",
+      "band": [0.08, 0.20],
+      "calibration": "gold gamma = 0.1366 (window [0.69, 13.81], 22 points); cold symmetric two-stream theory (±0.2c, 0.5 n0 per beam) gives ~0.1-0.15; band is gold ±50% and covers theory"
+    },
+    "e1_squared_growth_factor": {
+      "definition": "<E1^2> must rise well above the numerical noise floor — the instability must actually grow.",
+      "formula": "max(<E1^2>) / <E1^2>(t0) >= minimum",
+      "minimum": 1000,
+      "calibration": "gold factor 7.08e3 (noise 4.83e-7 -> peak 3.42e-3); floor at ~1/7 of gold"
+    },
+    "saturation_before_final": {
+      "definition": "The instability must saturate inside the simulated time: <E1^2> peaks strictly before the final stats time.",
+      "formula": "argmax_t(<E1^2>) < t_final",
+      "tolerance": 0,
+      "calibration": "gold peak at t=13.81 vs final 49.44"
     }
   }
 }

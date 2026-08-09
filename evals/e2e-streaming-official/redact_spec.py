@@ -25,6 +25,12 @@ ANALYSIS_JOB_DROP = ("partitions",)
 
 def redact(spec: dict) -> dict:
     redacted = json.loads(json.dumps(spec))
+    runtime = redacted.get("runtime", {})
+    if "note" in runtime:
+        # the gold-run note names the site hardware; the agent only needs
+        # the calibration status
+        runtime["note"] = ("calibrated against the gold run; details "
+                           "deliberately omitted from the agent-facing spec")
     resources = redacted.get("resources", {})
     run_job = resources.get("run_job", {})
     for key in RUN_JOB_DROP:

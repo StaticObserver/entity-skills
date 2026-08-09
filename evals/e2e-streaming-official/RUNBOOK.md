@@ -85,18 +85,21 @@ python3 evals/e2e-streaming-official/oracle_streaming/oracle.py \
 产出 `<project>/oracle-report.json`，总体 fail > unknown > pass。五道
 门：A 安全（transcript 扫描）、B 官方 PGen 指纹 + TOML/spec 一致性 +
 submission schema、C Slurm 作业事实（sacct:job id 存在且恰好一条记
-录、终态/exit code、资源与 Elapsed 对账、gres 上限；direct 分支保留
-供 m87)+ 数据可读、D 物理（阈值见下）、E 分析可复现。`--site` 默认
-astro。
+录、终态/exit code——已知无害 teardown abort 会从 slurm 日志独立确
+认后豁免、资源与 Elapsed 对账、gres 上限；direct 分支保留供 m87)+
+数据可读、D 物理（two-stream 增长判据，阈值已冻结，见下）、E 分析可
+复现。`--site` 默认 astro。
 
-## ⚠️ Gate D 阈值未冻结（pending gold run)
+## Gate D 阈值（2026-08-09 gold run 已冻结）
 
-`oracle_streaming/thresholds.json` 目前是从 neutral-streaming 复制的**结构性占位**
-（标 `"calibration": "pending-gold-run"`)：双流不稳定会热化漂移、增长
-电场，与中性对照的物理方向相反，现有数值（漂移守恒上限、E² 噪声上限）
-**不是**物理预期。在 gold run 产出前，oracle 的 D 门结果只作参考，不
-得用于判轮。待 gold run 后：冻结 TOML runtime 参数、重写 D 门阈值为
-gold 观测带（含增长带方向）。
+`oracle_streaming/thresholds.json` 标 `"calibration": "gold-run-2026-08-09"`,
+以 gold run(`run-879cd51744bad483`,job 357003,V100）观测带冻结：
+增长率带 [0.08, 0.20](gold 0.137，冷对称双流理论 0.1–0.15)、增长倍
+数 ≥1e3(gold 7.1e3)、t_final 前饱和（gold 13.8/49.4)、能量漂移
+≤1%(gold 0.2%)、粒子数严格守恒、stats 时间单调。two-stream 是增长
+物理，neutral 的守恒判据（漂移保持、B1 背景、E² 噪声上限）已移除。
+gold run 的关键数字与逐条 calibration 依据见 thresholds.json 与
+test-plan-astro.md。
 
 ## 每轮归档
 

@@ -18,6 +18,7 @@ compatible.
 
 from __future__ import print_function
 
+import glob
 import json
 import os
 import re
@@ -991,6 +992,10 @@ def record_run_launch(store, project_root, run_id, adopt_job, adopt_pid, actor,
     if not site_id or not run_root:
         raise PlanError("run identity has no usable root locator")
     profile = store.get_site(site_id)
+    # Site-tree profiles (site_root, no explicit roots) need the derived
+    # roots filled in — prepare/data go through merged_execution_profile;
+    # launch must too, or ExecutorClient finds no staging_root.
+    profile, unused_layout = merged_execution_profile(store, profile, case)
     unused_kind, backend = _run_backend(profile)
     scheduler_kind = backend["scheduler"]
     adopted = bool(adopt_job or adopt_pid)
@@ -1188,28 +1193,53 @@ def _tail_log(profile, path):
     return stdout
 
 
+def _glob_run_logs(profile, run_root, pattern):
+    """Glob log files at the run root or one level below — Entity names its
+    own logs after simulation.name (``<name>.err``/``<name>.out`` inside the
+    ``<name>/`` output subdirectory), so fixed filenames alone miss them."""
+    if profile.get("transport", {}).get("kind") == "local":
+        return sorted(
+            glob.glob(os.path.join(run_root, pattern))
+            + glob.glob(os.path.join(run_root, "*", pattern)))
+    code, stdout, unused = run_on_site(profile, [
+        "bash", "-c",
+        'ls -1 "$1"/' + pattern + ' "$1"/*/' + pattern + ' 2>/dev/null; true',
+        "bash", run_root])
+    if code != 0:
+        return []
+    return [line.strip() for line in stdout.splitlines() if line.strip()]
+
+
 def _probe_run_logs(profile, identity):
     """Collect (stderr_text, stdout_text) tails from the run's log files.
-    simulation.err and the direct-backend run.log count as stderr evidence;
-    simulation.out, slurm-<job_id>.out and run.log count as stdout
-    evidence."""
+    simulation.err, Entity's <name>.err and the direct-backend run.log count
+    as stderr evidence; simulation.out, <name>.out, slurm-<job_id>.out and
+    run.log count as stdout evidence.  Slurm merges stderr into the out file
+    unless --error is given, so slurm-<job_id>.out is evidence for both."""
     scheduler = identity.get("scheduler", {})
     run_root = identity.get("root", {}).get("path", "") \
         or scheduler.get("run_root", "")
     if not run_root:
         return "", ""
-    err_names = ["simulation.err", "run.log"]
-    out_names = ["simulation.out"]
+    err_paths = [os.path.join(run_root, name)
+                 for name in ("simulation.err", "run.log")]
+    out_paths = [os.path.join(run_root, "simulation.out")]
     job_id = scheduler.get("job_id", "")
     if job_id:
-        out_names.append("slurm-%s.out" % job_id)
-    out_names.append("run.log")
+        slurm_out = os.path.join(run_root, "slurm-%s.out" % job_id)
+        out_paths.append(slurm_out)
+        err_paths.append(slurm_out)
+    out_paths.append(os.path.join(run_root, "run.log"))
+    for path in _glob_run_logs(profile, run_root, "*.err"):
+        if path not in err_paths:
+            err_paths.append(path)
+    for path in _glob_run_logs(profile, run_root, "*.out"):
+        if path not in out_paths and path not in err_paths:
+            out_paths.append(path)
     err_text = "\n".join(text for text in (
-        _tail_log(profile, os.path.join(run_root, name))
-        for name in err_names) if text)
+        _tail_log(profile, path) for path in err_paths) if text)
     out_text = "\n".join(text for text in (
-        _tail_log(profile, os.path.join(run_root, name))
-        for name in out_names) if text)
+        _tail_log(profile, path) for path in out_paths) if text)
     return err_text, out_text
 
 
@@ -1264,7 +1294,7 @@ def _slurm_exit_probe(profile, job_id):
         return "running", stdout.strip().splitlines()[0].upper(), None
     try:
         code, stdout, stderr = run_on_site(
-            profile, ["sacct", "-n", "-X", "-j", job_id,
+            profile, ["sacct", "-n", "-X", "-P", "-j", job_id,
                       "--format=State,ExitCode"])
     except OSError as exc:
         raise PlanError("cannot query Slurm accounting for job %s: %s"
