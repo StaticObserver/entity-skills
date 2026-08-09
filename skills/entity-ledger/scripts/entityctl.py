@@ -334,8 +334,6 @@ def doctor(args):
     profiles = []
     store_schema = None
     if os.path.isfile(database):
-        exported = OperationStore(home, create=False).export()
-        profiles = exported["sites"]
         connection = sqlite3.connect(database)
         try:
             row = connection.execute(
@@ -347,10 +345,15 @@ def doctor(args):
         finally:
             connection.close()
         if store_schema != STORE_SCHEMA_VERSION:
+            # an unmigrated legacy store must be a doctor FINDING, never a
+            # crash: skip the export and report the migration path instead
             warnings.append(
                 "store schema %s differs from runtime schema %s; run "
                 "entityctl store migrate" % (store_schema, STORE_SCHEMA_VERSION)
             )
+        else:
+            exported = OperationStore(home, create=False).export()
+            profiles = exported["sites"]
     else:
         warnings.append("store is unavailable; register Sites with entityctl site add")
     for profile in profiles:
@@ -2523,4 +2526,6 @@ def main(argv=None):
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    from _invocation_log import trace_invocation
+    with trace_invocation("entity-ledger", "entityctl.py", sys.argv[1:], script_file=__file__):
+        sys.exit(main())

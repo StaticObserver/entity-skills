@@ -264,4 +264,6 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    from _invocation_log import trace_invocation
+    with trace_invocation("entity-nt2py", "inspect_nt2_data.py", sys.argv[1:], script_file=__file__):
+        sys.exit(main())

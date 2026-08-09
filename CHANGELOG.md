@@ -122,9 +122,25 @@ project_uid 外键；`store migrate` 链式 v1→v2→v3，旧 root→case 1:1
   scp 到 site、workspace 位置先与用户确认）;
   `references/workspace-layout.md` 新增 site 档案格式节（flat-YAML +
   JSON flow 规则 + 带注释的完整 astro-streaming 示例）。
+- 生产调用日志（passive invocation logging，与评测 trace 不同层）:
+  四个 skill 的 CLI 入口（entityctl、ledger executor/remote 独立
+  CLI、env-build 四个 CLI、pgen_preflight、inspect_nt2_data）每次实
+  际调用追加一条 JSONL（时间/时长/exit_code/argv 脱敏/cwd/host 等）,
+  默认 `~/.entity-skills/observability/invocations/<yyyy-mm>.jsonl`
+  按月轮转，`ENTITY_SKILL_INVOCATION_LOG` 可覆盖；日志路径所有异常
+  吞掉，宿主语义不变；四个 scripts/ 下字节相同的
+  `_invocation_log.py`，字节一致性有测试防漂移；对 agent 不可见（不
+  改 SKILL.md)。
 
 ### Fixed(rc 增量)
 
+- v3 bundle 读取 pre-workspace(v2/v1)store 不再以
+  `IndexError: project_uid` Traceback 崩溃:`OperationStore` 打开既有
+  db 时先校验 meta schema_version,不符即抛带迁移指引的
+  StoreError(`entityctl store migrate`);doctor 把未迁移 store 作为
+  诊断 warning 报告并跳过 export(原来 export 在 warning 逻辑之前就
+  崩了)。单一检查覆盖 export/dashboard/facts/site 等全部
+  OperationStore 读取路径。
 - `entity_checkpoint.py create --merge` 丢失旧 checkpoint 的
   `paths.pre_commands`/`modules`/`extra_env`——regenerate 的 env.sh
   缺 module 加载；merge 现保留这些键（modules 与 derive_paths 从

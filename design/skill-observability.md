@@ -380,3 +380,34 @@ tools/skill_observability/
 写入序列化、崩溃后 incomplete 判定、产物指纹漂移、三种 provider 的增量导入与
 零侵入运行时边界。所有 adapter 只导入可观测的 tool call/output 指纹；Kimi adapter
 遍历 main 和子 agent wire，并读取平台原生 usage，但不保留 `think` 内容。
+
+## 17. 生产调用日志(passive invocation logging)
+
+状态:已实现(2026-08-09)。
+
+与本文档前述的评测 trace(skill_observability,面向受控评测轮的完整证
+据链)不同层:生产调用日志是**被动的**——四个 entity skill 的 CLI
+每次实际被调用,就追加一条 JSONL 记录,目的是在日常使用中积累真实
+使用数据。
+
+- **记录什么**:schema_version、时间戳(UTC Z)、duration_ms、skill、
+  script、argv(脱敏后)、cwd、exit_code、error_type(可选)、
+  skill_version(有 VERSION 文件时)、pid、ppid_comm(best-effort)、
+  host。每个 CLI 入口(`entityctl`、ledger 的 executor/remote 独立
+  CLI、env-build 四个 CLI、pgen_preflight、inspect_nt2_data)在其
+  `__main__` 块用一个薄上下文管理器包装,不侵图书馆代码。
+- **写在哪**:默认 `~/.entity-skills/observability/invocations/
+  <yyyy-mm>.jsonl`(UTC 月份轮转,append-only,O_APPEND,必要时
+  mkdir -p);环境变量 `ENTITY_SKILL_INVOCATION_LOG` 可指定完整文件
+  路径覆盖(测试与一次性收集用)。
+- **隐私边界**:argv 中匹配 token/secret/password/passwd/api[-_]?key/
+  credential(大小写不敏感)的 flag 值一律记为 `<redacted>`
+  (`--flag value` 与 `--flag=value` 两种形式都处理),flag 名本身
+  保留;不记录 secrets;日志是观察数据,**不成为第二权威状态**——
+  Ledger 的 ledger.db 仍是唯一权威,调用日志永远不参与任何状态推导。
+- **never-fail 原则**:写日志路径上的所有异常(目录不可写、磁盘满、
+  ps 失败等)一律吞掉;被包装主流程的返回值、exit code、异常语义完
+  全不变。四个 skill 的 scripts/ 下各放一份字节相同的
+  `_invocation_log.py`(installed skill 目录自包含,不能跨 skill
+  import;entity-ledger 在 skills-no-router 变体中可能缺席),由
+  `tests/test_invocation_log.py` 的字节一致性测试防漂移。

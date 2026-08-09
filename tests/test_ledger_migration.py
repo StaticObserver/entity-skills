@@ -691,5 +691,60 @@ class RunAbortTest(MigrationTestBase):
         self.assertEqual(status["divergences"], [])
 
 
+class LegacyStoreSchemaTest(MigrationTestBase):
+    """A v3 bundle reading a pre-workspace (v2) store must get a clean
+    migration-path error (or a doctor finding) — never an IndexError
+    traceback from a raw row[...] access."""
+
+    def setUp(self):
+        super(LegacyStoreSchemaTest, self).setUp()
+        self.home = os.path.join(self.temp, "legacy-home")
+        os.makedirs(self.home)
+        connection = sqlite3.connect(os.path.join(self.home, "ledger.db"))
+        try:
+            connection.executescript(SCHEMA_V2)
+            connection.execute(
+                "INSERT INTO meta(key,value) VALUES('schema_version','2')")
+            connection.execute(
+                "INSERT INTO sites(site_id,profile_json,updated_at) VALUES(?,?,?)",
+                ("local", json.dumps({"site_id": "local"}), "2026-08-01T00:00:00Z"))
+            # a v2 case row (no project_uid) is what crashed export before
+            connection.execute(
+                """INSERT INTO cases(case_uid,case_id,project_root,source_json,
+                       current_json,legacy_json,created_at,updated_at)
+                   VALUES(?,?,?,?,?,?,?,?)""",
+                ("case-1", "demo", os.path.join(self.temp, "demo"),
+                 "{}", "{}", "{}", "2026-08-01T00:00:00Z", "2026-08-02T00:00:00Z"))
+            connection.commit()
+        finally:
+            connection.close()
+
+    def test_store_read_fails_with_migration_guidance(self):
+        code, payload = self.cli("--ledger-home", self.home, "site", "list")
+        self.assertEqual(code, 2)
+        self.assertFalse(payload["ok"])
+        self.assertIn("store migrate", payload["error"])
+        self.assertIn("pre-workspace schema", payload["error"])
+        self.assertNotIn("IndexError", payload["error"])
+        self.assertNotIn("Traceback", payload["error"])
+
+    def test_store_class_raises_store_error_not_index_error(self):
+        from entity_ledger_store import StoreError
+        with self.assertRaises(StoreError) as caught:
+            OperationStore(self.home, create=False)
+        self.assertIn("entityctl store migrate", str(caught.exception))
+
+    def test_doctor_reports_unmigrated_store_as_finding(self):
+        code, payload = self.cli("--ledger-home", self.home, "doctor")
+        self.assertEqual(code, 0, payload)
+        self.assertTrue(any(
+            "store migrate" in warning for warning in payload["warnings"]))
+        # and the migration path actually clears the finding
+        code, migrated = self.cli("--ledger-home", self.home, "store", "migrate")
+        self.assertEqual(code, 0, migrated)
+        code, payload = self.cli("--ledger-home", self.home, "site", "list")
+        self.assertEqual(code, 0, payload)
+
+
 if __name__ == "__main__":
     unittest.main()

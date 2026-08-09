@@ -814,4 +814,13 @@ def main(argv=None):
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    # The executor is also staged to Sites as a SINGLE file (content-
+    # addressed) — the sibling _invocation_log.py is not staged with it, so
+    # the import must degrade to a no-op there instead of breaking the run.
+    try:
+        from _invocation_log import trace_invocation
+    except ImportError:
+        import contextlib
+        trace_invocation = lambda *args, **kwargs: contextlib.nullcontext()
+    with trace_invocation("entity-ledger", "entity_ledger_executor.py", sys.argv[1:], script_file=__file__):
+        sys.exit(main())

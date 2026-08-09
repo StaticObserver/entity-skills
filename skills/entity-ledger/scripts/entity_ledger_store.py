@@ -278,6 +278,8 @@ class OperationStore(object):
         if os.path.isdir(self.home):
             _migrate_legacy_db(self.home)
         self.path = store_path(self.home)
+        if os.path.isfile(self.path):
+            self._check_schema_version()
         if create:
             if not os.path.isdir(self.home):
                 os.makedirs(self.home)
@@ -287,6 +289,29 @@ class OperationStore(object):
                 "Entity Ledger store does not exist; initialize it with "
                 "entityctl site add (run entityctl doctor for diagnostics)"
             )
+
+    def _check_schema_version(self):
+        """v3 code must never read a pre-workspace (v2/v1) store blindly:
+        row shapes differ and a raw IndexError/KeyError traceback is the
+        worst possible diagnostic. Refuse early with the migration path.
+        A file sqlite cannot even query (corrupt, not a database) keeps the
+        original DatabaseError — that is a different failure, not an old
+        schema."""
+        connection = self._connect()
+        try:
+            row = connection.execute(
+                "SELECT value FROM meta WHERE key='schema_version'"
+            ).fetchone()
+        finally:
+            connection.close()
+        current = int(row[0]) if row else None
+        if current != STORE_SCHEMA_VERSION:
+            raise StoreError(
+                "unsupported Ledger store schema: %s (expected %s) — the "
+                "store at %s is a pre-workspace schema; run "
+                "`entityctl store migrate` to upgrade it in place, then retry."
+                % (current if current is not None else "unknown",
+                   STORE_SCHEMA_VERSION, self.path))
 
     def _connect(self):
         connection = sqlite3.connect(self.path, timeout=30)
