@@ -33,8 +33,9 @@ read -r DATA_ROOT JOB_ID <<< "$(python3 - "$SUBMISSION" <<'EOF'
 import json, sys
 sub = json.load(open(sys.argv[1]))
 run = sub.get("run", {}) or {}
+sched = run.get("scheduler", {}) or {}
 data_root = run.get("data_root") or (sub.get("output", {}) or {}).get("data_root") or ""
-job_id = str(run.get("slurm_job_id") or "")
+job_id = str(sched.get("job_id") or run.get("slurm_job_id") or "")
 print(data_root, job_id)
 EOF
 )"
@@ -46,14 +47,18 @@ PARENT="$(dirname "$DATA_ROOT")"
 LOGS="$HARNESS/remote-logs"
 mkdir -p "$LOGS"
 
-# 1. Evidence first: direct-backend run scripts and logs from the run root
-#    (m87 has no Slurm) — run.sh, run.log, the exit file, manifests.
-echo "==> pulling slurm scripts/logs from m87:$PARENT -> $LOGS"
+# 1. Evidence first: Slurm scripts and logs from the run directory
+#    (data_root's parent) — *.sbatch, *.log, slurm-*.out, manifests.
+echo "==> pulling slurm scripts/logs from astro:$PARENT -> $LOGS"
 rsync -a \
-  --include='run.sh' --include='run.sbatch' --include='*.log' \
-  --include='.entity-exit-code' --include='*-manifest.json' \
+  --include='run.sh' --include='*.sbatch' --include='*.log' \
+  --include='slurm-*.out' --include='.entity-exit-code' \
+  --include='*-manifest.json' \
   --exclude='*' \
-  "m87:$DATA_ROOT/" "$LOGS/" || echo "warning: rsync from $DATA_ROOT failed (already gone?)" >&2
+  "astro:$PARENT/" "$LOGS/" || echo "warning: rsync from $PARENT failed (already gone?)" >&2
+if [[ -n "$JOB_ID" ]]; then
+  rsync -a "astro:$PARENT/slurm-$JOB_ID.out" "$LOGS/" 2>/dev/null || true
+fi
 ls -la "$LOGS"
 
 # 2. Deletion: dry-run unless -f/--yes.
@@ -63,18 +68,24 @@ if [[ "$PARENT" != "$DATA_ROOT" && "$PARENT" != "/" && "$PARENT" != "$HOME" \
   TARGETS+=("$PARENT")
 fi
 echo
-echo "==> remote deletion targets on m87:"
+echo "==> remote deletion targets on astro:"
 printf '    %s\n' "${TARGETS[@]}"
 if [[ $YES -ne 1 ]]; then
   echo "==> dry-run: nothing deleted. Re-run with -f/--yes to delete."
 else
   for target in "${TARGETS[@]}"; do
-    echo "==> deleting m87:$target"
-    ssh m87 "rm -rf -- '$target'"
+    echo "==> deleting astro:$target"
+    ssh astro "rm -rf -- '$target'"
   done
 fi
 
-# 3. Confirm no leftover entity processes (m87 has no scheduler).
+# 3. Confirm no leftover jobs: squeue for live jobs, sacct for today's
+#    accounting history.
 echo
-echo "==> leftover entity processes on m87:"
-ssh m87 'pgrep -af "entity.xc|run.sh" || echo "  (none)"' || true
+echo "==> squeue -u <remote user> on astro:"
+# $USER is the LOCAL user; the remote account name may differ. Quote so the
+# remote shell expands its own $USER.
+ssh astro 'squeue -u "$USER"' || true
+echo
+echo "==> sacct since today on astro:"
+ssh astro "sacct -S $(date +%F) -n -P --format=JobID,JobName,Partition,State,Elapsed" || true

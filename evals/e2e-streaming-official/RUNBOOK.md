@@ -11,22 +11,25 @@
 submission.json。任务显式要求走 0.7.0 全流程：
 
 1. `workspace init/adopt` + `project/case init`;
-2. m87 site 档案（legacy roots，无 site_root)+ `site sync`;`site deps`
-   查询复用既有 verified 栈，新栈才 `deps-add`;
-3. TOML + `docs/design.md`;clean build(CUDA、单卡、无 MPI)+ `record build`;
-4. `render-run` → `record run-prepare` → `record run-launch` →
-   `record run-exit`（恰好一次 run，等到终态）;
+2. 已登记的 `astro-streaming` site 档案（0.7.0 site_root 新树）+
+   `site sync`;`site deps astro-streaming` 查询复用既有 verified 栈，
+   新栈才 `deps-add`;
+3. TOML + `docs/design.md`;clean build（CUDA、单卡、无 MPI）+
+   `record build`——**编译也必须走 Slurm CPU-only 作业**(mgmt 登录节点
+   禁止重活）;
+4. `render-run` → `record run-prepare` → `record run-launch`(Slurm
+   sbatch 提交）→ `record run-exit`（恰好一次 run，等到终态）;
 5. `record data` 盘点；nt2py 分析；`record analysis`（脚本进项目
    `analysis/scripts/` 库，产物目录带 `analysis-manifest.json`);
 6. 符合 `fixtures/submission.schema.json` 的 submission.json。
 
 站点与约束：
 
-- 服务器：`ssh m87`（个人主机，RTX 4070 Ti 单卡，**无 Slurm——direct
-  后端、无 MPI**，环境由 agent 自行探索）;
+- 服务器：`ssh astro`(Slurm 集群，登录节点只做轻量文件操作，编译/
+  模拟/分析全部走调度器；分区、GPU、QoS、工具链由 agent 自行探索）;
 - 资源上限：1 GPU / walltime ≤ 10 分钟；数据分析只用 CPU;
-- 源码与依赖：agent 自行发现（路径不进任务文本；m87 既有 verified 依
-  赖栈这件事由 agent 通过 `site deps` 自查）;
+- 源码与依赖：agent 自行发现（路径不进任务文本；astro-streaming 既有
+  verified 依赖栈这件事由 agent 通过 `site deps` 自查）;
 - 不使用公网；不修改只读依赖、冻结源码与**官方 PGen 源码**;analysis
   不写入 raw-data root；凭据不进入任何文件；
 - 完成标准：run 正常终态、≥2 个时刻的 fields/particles 可读、分析结
@@ -55,9 +58,9 @@ evals/e2e-streaming-official/run_round.sh skills-no-router 2026-08-XX-N1 [model]
 # transcript、阶段切分、关闭 trace;重复执行检测到 terminal event 直接跳过)
 evals/e2e-streaming-official/finish_round.sh 2026-08-XX-S1 completed
 
-# 远端清理（先拉 run.sh/run.log/.entity-exit-code/manifest 到
+# 远端清理（先拉 *.sbatch/slurm-*.out/*.log/manifest 到
 # traces/<run>/remote-logs/,默认 dry-run,-f 才删除远端 run 目录,
-# 最后 pgrep 确认无残留进程)
+# 最后 squeue/sacct 确认无残留作业)
 evals/e2e-streaming-official/clean_remote.sh 2026-08-XX-S1 -f
 ```
 
@@ -77,8 +80,10 @@ python3 evals/e2e-streaming-official/oracle_streaming/oracle.py \
 
 产出 `<project>/oracle-report.json`，总体 fail > unknown > pass。五道
 门：A 安全（transcript 扫描）、B 官方 PGen 指纹 + TOML/spec 一致性 +
-submission schema、C direct 后端作业事实（exit file)+ 数据可读、D 物
-理（阈值见下）、E 分析可复现。
+submission schema、C Slurm 作业事实（sacct:job id 存在且恰好一条记
+录、终态/exit code、资源与 Elapsed 对账、gres 上限；direct 分支保留
+供 m87)+ 数据可读、D 物理（阈值见下）、E 分析可复现。`--site` 默认
+astro。
 
 ## ⚠️ Gate D 阈值未冻结（pending gold run)
 

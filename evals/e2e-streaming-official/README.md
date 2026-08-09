@@ -7,13 +7,16 @@
 - **任务**:pgen 创作环节消失——用官方 `streaming` PGen(`compile.pgen`
   指定，禁止改源码）；交付物为 `docs/design.md`（参数依据）+ TOML +
   分析 + submission.json。任务显式要求走 0.7.0 全流程。
-- **站点**:m87(RTX 4070 Ti,scheduler=none,direct 后端，deps 全套已
-  验证）。m87 的 site 档案用 legacy roots（无 site_root)。
+- **站点**：新登记 `astro-streaming`(`ssh astro`,Slurm 集群，gpu1 的
+  V100S-32GB;0.7.0 site_root 新树 `~/entity-compute`,VOLTA70 deps 栈
+  由 pilot 登记进注册表）。旧 m87 变体（direct 后端、legacy roots）保
+  留在 gate C 的 direct 分支中。
 - **oracle**：五道门同构适配。B 门改为官方 PGen 指纹（钉住
   source-cache 里 `streaming/pgen.hpp` 的 sha256，防 agent 改写官方
-  pgen)+ TOML/spec 一致性 + submission schema;C 门走 direct 后端
-  (exit file 证据，m87 无 Slurm);D 门物理判据结构继承，**阈值全部
-  pending-gold-run**。
+  pgen)+ TOML/spec 一致性 + submission schema;C 门走 Slurm sacct
+  (job id 存在且恰好一条记录、终态/exit code、资源与 Elapsed 对账、
+  gres 上限；direct exit-file 分支保留供 m87);D 门物理判据结构继
+  承，**阈值全部 pending-gold-run**。
 - **harness**：沿用 Claude Code headless + skill_observability 的 A/B 框
   架（skills-v5 vs skills-no-router，自变量是 entity-ledger 在场与否）。
 
@@ -32,13 +35,16 @@ RUNBOOK.md                     # 运行手册(唯一设置文档)
 
 ## 运行步骤（gold run / 实校时）
 
-1. m87 开机，确认 `ssh m87` 与技能投影状态（S/N 组按 RUNBOOK 表）。
+1. 确认 `ssh astro` 可用、gpu1 空闲（`ssh gpu1 nvidia-smi`）与技能投影
+   状态（S/N 组按 RUNBOOK 表）。
 2. `run_round.sh skills-v5 <run-name> [model]` 开跑 → agent 完成后
    `finish_round.sh <run-name> completed`。
-3. oracle 复核：`oracle_streaming/oracle.py --project <run>/project --fetch <data>`。
-4. `clean_remote.sh <run-name> -f` 清理远端，归档 summary.json。
+3. oracle 复核：`oracle_streaming/oracle.py --project <run>/project --fetch <data>`
+   (`--site` 默认 astro)。
+4. `clean_remote.sh <run-name> -f` 清理远端（squeue/sacct 确认无残留），
+   归档 summary.json。
 
-## 待 gold run 清单（本轮未做，m87 关机）
+## 待 gold run 清单（阶段 0 已完成 2026-08-05；站点建设与 gold run 待做）
 
 - **TOML 参数校准**:physics-spec 的 cells=128/ppc=32/drift=±0.2 沿
   neutral 组量级（4070 Ti 验证过）,`final_time=50.0` 与 CFL=0.5 是暂

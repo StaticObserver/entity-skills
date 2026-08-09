@@ -14,7 +14,7 @@ Options:
   --transcript PATH   session JSONL for Gate A safety scan
   --data-root PATH    local copy of the raw simulation output
   --fetch DIR         rsync run.data_root from the site into DIR first
-  --site HOST         ssh alias for scheduler/data queries (default: m87)
+  --site HOST         ssh alias for scheduler/data queries (default: astro)
   --no-remote         skip all ssh queries (Gates C/D become unknown)
   --spec PATH         physics-spec.json (default: alongside this script)
   --thresholds PATH   thresholds.json (default: alongside this script)
@@ -45,7 +45,7 @@ def main() -> int:
     parser.add_argument("--transcript", type=Path)
     parser.add_argument("--data-root", type=Path)
     parser.add_argument("--fetch", type=Path)
-    parser.add_argument("--site", default="m87")
+    parser.add_argument("--site", default="astro")
     parser.add_argument("--no-remote", action="store_true")
     parser.add_argument("--spec", type=Path, default=HERE.parent / "physics-spec.json")
     parser.add_argument("--thresholds", type=Path, default=HERE / "thresholds.json")

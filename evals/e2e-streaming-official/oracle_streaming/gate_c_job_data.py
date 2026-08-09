@@ -1,11 +1,14 @@
 """Gate C: scheduler/direct-backend and data verification.
 
-m87 has no scheduler (direct backend): job facts are verified from the
-recorded direct-launch evidence — the executor's exit file
-(<run_root>/.entity-exit-code) inside the fetched data root — instead of
-sacct. The Slurm branch is kept for completeness (helpers live in
-gate_c_base, copied unchanged from the neutral-streaming oracle). Data
-readability checks are identical to the neutral-streaming variant.
+astro runs under Slurm: job facts are verified from sacct (via ssh) — the
+declared sbatch job id must map to exactly one sacct record with a clean
+terminal state/exit code, resources and Elapsed consistent with the
+declaration and the spec ceilings, and AllocTRES gres within the GPU
+ceiling. The direct-backend branch (evaluate_exit_evidence, m87 variant) is
+kept for reuse; dispatch is on the submission's run.scheduler.kind. The
+shared sacct/nt2py helpers live in gate_c_base (copied from the
+neutral-streaming oracle, extended with AllocTRES/record-count fields).
+Data readability checks are identical to the neutral-streaming variant.
 """
 
 from __future__ import annotations
@@ -50,12 +53,70 @@ def evaluate_exit_evidence(data_root: Path, declared_exit: Optional[int]) -> Lis
 
 def _walltime_ceiling(submission: Dict[str, Any]) -> int:
     spec = submission.get("physics_spec", {})
-    hms = spec.get("resource_ceiling", {}).get("walltime", "00:10:00")
+    hms = (spec.get("resources", {}).get("run_job", {}).get("walltime_ceiling")
+           or spec.get("resource_ceiling", {}).get("walltime")
+           or "00:10:00")
     try:
         h, m, s = (int(x) for x in hms.split(":"))
         return h * 3600 + m * 60 + s
-    except (ValueError, KeyError):
+    except (ValueError, KeyError, AttributeError):
         return 600
+
+
+def _gpu_ceiling(submission: Dict[str, Any]) -> int:
+    spec = submission.get("physics_spec", {})
+    gpus = (spec.get("resources", {}).get("run_job", {}).get("gpus")
+            or spec.get("resource_ceiling", {}).get("gpus") or 1)
+    return int(gpus)
+
+
+def _gres_gpu_count(tres: str) -> Optional[int]:
+    """Sum the gres/gpu= counts in an AllocTRES string; None when no gres
+    token is present (missing evidence, not zero)."""
+    total = 0
+    found = False
+    for token in tres.split(","):
+        token = token.strip()
+        if token.startswith("gres/gpu") and "=" in token:
+            try:
+                total += int(token.rsplit("=", 1)[1])
+            except ValueError:
+                return None
+            found = True
+    return total if found else None
+
+
+def evaluate_slurm_facts(job: Optional[Dict[str, Any]],
+                         submission: Dict[str, Any]) -> List[Dict[str, str]]:
+    """Slurm-only checks beyond the shared evaluate_job facts: exactly one
+    sacct record for the declared job id (a requeued/rerun job shows more
+    than one) and AllocTRES gres within the spec GPU ceiling. Returns no
+    checks when sacct has no record (evaluate_job already reports that)."""
+    if job is None:
+        return []
+    checks = []
+    records = job.get("records")
+    if records is None:
+        checks.append(_check("single_job", "unknown",
+                             "sacct record count unavailable"))
+    else:
+        checks.append(_check(
+            "single_job",
+            "pass" if records == 1 else "fail",
+            f"{records} sacct record(s) for the declared job id (expected exactly 1)",
+        ))
+    gpus = _gres_gpu_count(str(job.get("tres", "")))
+    if gpus is None:
+        checks.append(_check("job_gres", "unknown",
+                             "sacct reports no gres/gpu token in AllocTRES"))
+    else:
+        ceiling = _gpu_ceiling(submission)
+        checks.append(_check(
+            "job_gres",
+            "pass" if gpus <= ceiling else "fail",
+            f"AllocTRES gres/gpu={gpus} vs ceiling {ceiling}",
+        ))
+    return checks
 
 
 def run(site: str, submission: Dict[str, Any], thresholds: Dict[str, Any],
@@ -68,12 +129,14 @@ def run(site: str, submission: Dict[str, Any], thresholds: Dict[str, Any],
     if kind == "slurm":
         job_id = str(scheduler.get("job_id") or run_info.get("slurm_job_id") or "")
         if job_id:
-            checks.extend(evaluate_job(sacct_job(site, job_id), {
+            job = sacct_job(site, job_id)
+            checks.extend(evaluate_job(job, {
                 "partition": run_info.get("partition", ""),
                 "tasks": run_info.get("resources", {}).get("tasks", 1),
                 "nodes": run_info.get("resources", {}).get("nodes", 1),
                 "walltime_ceiling_seconds": _walltime_ceiling(submission),
             }))
+            checks.extend(evaluate_slurm_facts(job, submission))
         else:
             checks.append(_check("job_facts", "unknown", "submission declares no slurm job id"))
     elif kind == "direct":

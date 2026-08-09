@@ -68,6 +68,7 @@
   },
   "compile": {
     "backend": "cuda",
+    "arch": "VOLTA70",
     "precision": "single",
     "deposit": "zigzag",
     "shape_order": 1,
@@ -77,11 +78,36 @@
     "tests": false,
     "cxx_standard": 20
   },
-  "resource_ceiling": {
-    "nodes": 1,
-    "tasks": 1,
-    "gpus": 1,
-    "walltime": "00:10:00"
+  "site": {
+    "name": "astro-streaming",
+    "ssh_alias": "astro",
+    "site_root": "/home/yangyangcai/entity-compute",
+    "scheduler": "slurm",
+    "note": "0.7.0 site-tree layout (site_root tree, entity-site.yaml marker); registered by the pilot with the verified VOLTA70 deps stack"
+  },
+  "resources": {
+    "scheduler": "slurm",
+    "run_job": {
+      "partition": "fat",
+      "gres": "gpu:V100:1",
+      "qos": "qos512",
+      "time_limit": null,
+      "nodes": 1,
+      "tasks": 1,
+      "gpus": 1,
+      "walltime_ceiling": "00:10:00",
+      "note": "no --time by user decision (2026-08-05); the fat partition default MaxTime applies. walltime_ceiling is the eval budget Gate C checks sacct Elapsed against, not a Slurm directive"
+    },
+    "build_job": {
+      "partition": "fat",
+      "cpus": 32,
+      "gres": null,
+      "note": "compilation also runs as a Slurm CPU-only job; the mgmt login node forbids heavy work"
+    },
+    "analysis_job": {
+      "partitions": ["intelhigh", "amdlow"],
+      "note": "analysis/rendering jobs go to intelhigh (amdlow when queued); never fat — checkable item, adjudicated by Gate A from the transcript"
+    }
   },
   "required_outputs": {
     "field_snapshots_min": 2,

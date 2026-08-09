@@ -106,4 +106,4 @@ python3 "$OBS" finish --run-dir "$RUN_DIR" --status "$STATUS" \
 echo
 echo "==> round closed: $RUN_DIR"
 echo "==> phases:  $RUN_DIR/phases.json"
-echo "==> remember to clean remote artifacts on siyuan for this round"
+echo "==> remember to clean remote artifacts on astro for this round"

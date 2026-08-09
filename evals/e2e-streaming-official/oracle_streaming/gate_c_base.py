@@ -17,9 +17,14 @@ def _check(name: str, status: str, detail: str) -> Dict[str, str]:
     return {"name": name, "status": status, "detail": detail}
 
 
-def sacct_job(site: str, job_id: str) -> Optional[Dict[str, str]]:
-    """Query sacct for one job. Returns parsed fields or None."""
-    fmt = "JobID,JobName,Partition,State,ExitCode,NNodes,NTasks,Elapsed"
+def sacct_job(site: str, job_id: str) -> Optional[Dict[str, Any]]:
+    """Query sacct for one job. Returns parsed fields or None.
+
+    Beyond the neutral-streaming original this variant also reports "tres"
+    (AllocTRES, for the gres ceiling check) and "records" (number of sacct
+    rows for the job id — a requeued/rerun job shows more than one).
+    """
+    fmt = "JobID,JobName,Partition,State,ExitCode,NNodes,NTasks,Elapsed,AllocTRES"
     try:
         out = subprocess.run(
             ["ssh", "-o", "BatchMode=yes", site,
@@ -30,14 +35,16 @@ def sacct_job(site: str, job_id: str) -> Optional[Dict[str, str]]:
         return None
     if out.returncode != 0 or not out.stdout.strip():
         return None
-    line = out.stdout.strip().splitlines()[0]
-    parts = line.split("|")
+    lines = [ln for ln in out.stdout.strip().splitlines() if ln.strip()]
+    parts = lines[0].split("|")
     if len(parts) < 8:
         return None
     return {
         "job_id": parts[0], "name": parts[1], "partition": parts[2],
         "state": parts[3], "exit_code": parts[4], "nodes": parts[5],
         "tasks": parts[6], "elapsed": parts[7],
+        "tres": parts[8] if len(parts) > 8 else "",
+        "records": len(lines),
     }
 
 

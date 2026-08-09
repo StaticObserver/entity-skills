@@ -5,6 +5,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "evals" / "e2e-streaming-official"))
@@ -143,7 +144,105 @@ class DirectBackendGateCTest(unittest.TestCase):
         self.assertEqual(checks[0]["status"], "unknown")
 
 
+SLURM_SUBMISSION = {
+    "experiment_id": "e2e-streaming-official-v1",
+    "physics_spec": SPEC,
+    "run": {
+        "scheduler": {"kind": "slurm", "job_id": "12345"},
+        "partition": "fat",
+        "resources": {"tasks": 1, "nodes": 1, "gpus": 1},
+        "data_root": "/remote/run",
+    },
+}
+
+
+def _sacct_record(**overrides):
+    record = {
+        "job_id": "12345", "name": "entity-streaming", "partition": "fat",
+        "state": "COMPLETED", "exit_code": "0:0", "nodes": "1", "tasks": "1",
+        "elapsed": "00:05:00",
+        "tres": "billing=32,cpu=32,gres/gpu=1,mem=64G",
+        "records": 1,
+    }
+    record.update(overrides)
+    return record
+
+
+class SlurmGateCTest(unittest.TestCase):
+    def _run(self, record, submission=None):
+        with mock.patch.object(gate_c_job_data, "sacct_job",
+                               return_value=record) as mocked:
+            result = gate_c_job_data.run(
+                "astro", submission or SLURM_SUBMISSION, {}, None)
+        mocked.assert_called_once_with("astro", "12345")
+        return statuses(result["checks"])
+
+    def test_happy_path_all_job_checks_pass(self):
+        result = self._run(_sacct_record())
+        for name in ("job_terminal_state", "job_partition", "job_tasks",
+                     "job_nodes", "job_walltime", "single_job", "job_gres"):
+            self.assertEqual(result[name], "pass", f"{name}: {result[name]}")
+
+    def test_failed_job_fails(self):
+        result = self._run(_sacct_record(state="FAILED", exit_code="1:0"))
+        self.assertEqual(result["job_terminal_state"], "fail")
+
+    def test_partition_mismatch_fails(self):
+        result = self._run(_sacct_record(partition="intelhigh"))
+        self.assertEqual(result["job_partition"], "fail")
+
+    def test_elapsed_above_ceiling_fails(self):
+        result = self._run(_sacct_record(elapsed="00:11:00"))
+        self.assertEqual(result["job_walltime"], "fail")
+
+    def test_multiple_records_fail(self):
+        result = self._run(_sacct_record(records=2))
+        self.assertEqual(result["single_job"], "fail")
+
+    def test_gres_above_ceiling_fails(self):
+        result = self._run(_sacct_record(
+            tres="billing=64,cpu=64,gres/gpu=2,mem=128G"))
+        self.assertEqual(result["job_gres"], "fail")
+
+    def test_typed_gres_token_parsed(self):
+        result = self._run(_sacct_record(
+            tres="billing=32,cpu=32,gres/gpu:V100=1,mem=64G"))
+        self.assertEqual(result["job_gres"], "pass")
+
+    def test_no_sacct_record_is_unknown(self):
+        result = self._run(None)
+        self.assertEqual(result["job_facts"], "unknown")
+        self.assertNotIn("single_job", result)
+
+    def test_missing_job_id_is_unknown(self):
+        submission = json.loads(json.dumps(SLURM_SUBMISSION))
+        submission["run"]["scheduler"] = {"kind": "slurm"}
+        with mock.patch.object(gate_c_job_data, "sacct_job") as mocked:
+            result = gate_c_job_data.run("astro", submission, {}, None)
+        mocked.assert_not_called()
+        self.assertEqual(statuses(result["checks"])["job_facts"], "unknown")
+
+    def test_direct_branch_still_dispatched(self):
+        root = Path(tempfile.mkdtemp(prefix="oracle-direct-"))
+        (root / ".entity-exit-code").write_text("0\n")
+        result = gate_c_job_data.run("m87", GOOD_SUBMISSION, {}, root)
+        self.assertEqual(statuses(result["checks"])["exit_evidence"], "pass")
+
+
 class FixturesTest(unittest.TestCase):
+    def test_spec_slurm_layout(self):
+        self.assertEqual(SPEC["site"]["name"], "astro-streaming")
+        self.assertEqual(SPEC["site"]["scheduler"], "slurm")
+        self.assertEqual(SPEC["compile"]["arch"], "VOLTA70")
+        run_job = SPEC["resources"]["run_job"]
+        self.assertEqual(run_job["partition"], "fat")
+        self.assertEqual(run_job["gres"], "gpu:V100:1")
+        self.assertEqual(run_job["qos"], "qos512")
+        self.assertIsNone(run_job["time_limit"])
+        self.assertEqual(SPEC["resources"]["analysis_job"]["partitions"],
+                         ["intelhigh", "amdlow"])
+        self.assertEqual(SPEC["runtime"]["status"], "calibration-pending-gold-run")
+
     def test_fixtures_are_valid_json(self):
         for name in ("physics-spec.json", "oracle_streaming/thresholds.json",
                      "fixtures/submission.schema.json"):
