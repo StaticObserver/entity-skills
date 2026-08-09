@@ -29,6 +29,7 @@ from entity_ledger_common import (
     run_on_site,
     sha256_file,
     site_file_sha256,
+    valid_gres,
 )
 from entity_ledger_executor import ExecutorError, RENDER_BACKENDS
 from entity_ledger_facts import (
@@ -614,10 +615,12 @@ def record_data(store, project_root, run_id, actor, case_slug=None):
     }
 
 
-def _compute_request(gpus, walltime, precision):
+def _compute_request(gpus, walltime, precision, gres=""):
     """Validate the CLI compute overrides before site policy fills the rest.
     An empty walltime means no time limit: the sbatch carries no --time and
-    the direct backend runs without a timeout wrapper."""
+    the direct backend runs without a timeout wrapper.  An empty gres defers
+    to the site policy default_gres, then to the generic gpu:<gpus> form;
+    the direct backend ignores gres entirely."""
     if not isinstance(gpus, int) or isinstance(gpus, bool) or gpus < 1:
         raise PlanError("gpus must be a positive integer")
     if walltime and not re.match(r"^[0-9]+(?:-[0-9]{2})?:[0-9]{2}:[0-9]{2}$",
@@ -625,7 +628,10 @@ def _compute_request(gpus, walltime, precision):
         raise PlanError("walltime must use HH:MM:SS or D-HH:MM:SS")
     if precision not in {"single", "double"}:
         raise PlanError("precision must be single or double")
-    return {"gpus": gpus, "walltime": walltime, "precision": precision}
+    if gres and not valid_gres(gres):
+        raise PlanError("gres must match gpu[:type]:count (e.g. gpu:V100:1)")
+    return {"gpus": gpus, "walltime": walltime, "precision": precision,
+            "gres": gres}
 
 
 def _derive_run(store, project_root, input_value, site_id, compute, executable,
@@ -683,10 +689,10 @@ def _run_spec(derived):
 
 
 def render_run(store, project_root, input_value, site_id, gpus, walltime,
-               precision, executable, case_slug=None):
+               precision, executable, gres="", case_slug=None):
     """Pure preview: render the submit script and the derived run paths
     without touching controller or Site state (no confirmation gate)."""
-    compute = _compute_request(gpus, walltime, precision)
+    compute = _compute_request(gpus, walltime, precision, gres)
     derived = _derive_run(
         store, project_root, input_value, site_id, compute, executable,
         case_slug)
@@ -767,7 +773,8 @@ def _book_run(store, case, identity, readiness_state, current_updates,
 
 
 def record_run_prepare(store, project_root, input_value, site_id, gpus,
-                       walltime, precision, executable, actor, case_slug=None):
+                       walltime, precision, executable, actor, gres="",
+                       case_slug=None):
     """Prepare a run root on its Site and book the run identity as prepared.
 
     Gates (all before any state write): the pgen simulation confirmation must
@@ -775,7 +782,7 @@ def record_run_prepare(store, project_root, input_value, site_id, gpus,
     advanced past ``prepared`` is never rewound.  The Case is created on first
     use in the same transaction as the run booking — after the executor
     succeeded — and the executor receipt makes re-runs idempotent."""
-    compute = _compute_request(gpus, walltime, precision)
+    compute = _compute_request(gpus, walltime, precision, gres)
     derived = _derive_run(
         store, project_root, input_value, site_id, compute, executable,
         case_slug)

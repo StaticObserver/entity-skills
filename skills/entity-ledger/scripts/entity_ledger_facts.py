@@ -20,6 +20,7 @@ from entity_ledger_common import (
     run_on_site,
     site_file_sha256,
     source_manifest,
+    valid_gres,
 )
 from entity_ledger_store import CaseResolutionError, canonical_hash
 
@@ -179,6 +180,22 @@ def _slurm_site_policy(profile, compute):
             [{"field": "compute.partition",
               "question": "select a Slurm partition for Site %s" % profile["site_id"]}],
         )
+    # gres resolution order: explicit CLI --gres > policy default_gres >
+    # generic "gpu:<gpus>".  The resolved string is what the sbatch renders
+    # and what the run identity records.
+    gres = str(normalized.get("gres") or "")
+    if not gres:
+        gres = str(policy.get("default_gres") or "")
+    if not gres:
+        gres = "gpu:%s" % normalized["gpus"]
+    if not valid_gres(gres):
+        raise PlanError(
+            "compute.gres must match gpu[:type]:count (got %r)" % gres,
+            "needs_decision",
+            [{"field": "compute.gres",
+              "question": "provide a valid gres such as gpu:1 or gpu:V100:1"}],
+        )
+    normalized["gres"] = gres
     maximum = policy.get("max_cpu_per_gpu")
     if maximum is not None and normalized["cpus_per_task"] > int(maximum):
         raise PlanError(
@@ -197,7 +214,8 @@ def _slurm_site_policy(profile, compute):
 def _direct_site_policy(profile, compute):
     """Policy for scheduler-less Sites: no partition/QoS/scheduler account
     exists, so those fields normalize to empty strings and the submit user
-    defaults to the current user without a needs_decision round-trip."""
+    defaults to the current user without a needs_decision round-trip.  gres
+    is Slurm-only: the direct backend ignores it and normalizes it to ""."""
     policy = profile.get("policy", {})
     normalized = dict(compute)
     normalized.setdefault("nodes", 1)
@@ -205,6 +223,7 @@ def _direct_site_policy(profile, compute):
     normalized.setdefault("cpus_per_task", int(policy.get("default_cpus_per_gpu", 1)))
     normalized.setdefault("partition", "")
     normalized.setdefault("qos", "")
+    normalized["gres"] = ""
     if "submit_user" not in normalized:
         if policy.get("default_submit_user"):
             normalized["submit_user"] = policy["default_submit_user"]

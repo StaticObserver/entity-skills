@@ -34,6 +34,16 @@ class LedgerError(Exception):
     pass
 
 
+# Slurm gres spec for a GPU allocation: "gpu:<count>" (generic) or
+# "gpu:<type>:<count>" (typed, e.g. gpu:V100:1).  Kept in sync with the
+# standalone executor's copy (entity_ledger_executor._GRES_RE).
+GRES_RE = re.compile(r"^gpu(?::[A-Za-z0-9_.-]+)?:[0-9]+$")
+
+
+def valid_gres(value):
+    return bool(GRES_RE.match(str(value or "")))
+
+
 def now_utc():
     value = datetime.datetime.now(datetime.timezone.utc).replace(microsecond=0)
     return value.isoformat().replace("+00:00", "Z")
@@ -274,6 +284,11 @@ def validate_site_profile(profile):
     site_root = profile.get("site_root")
     if site_root and not str(site_root).startswith("/"):
         raise LedgerError("site_root must be absolute")
+    policy = profile.get("policy", {})
+    default_gres = str(policy.get("default_gres", "") or "")
+    if default_gres and not valid_gres(default_gres):
+        raise LedgerError(
+            "policy.default_gres must match gpu[:type]:count: %s" % default_gres)
     for name, path in profile.get("roots", {}).items():
         if path and not str(path).startswith("/"):
             raise LedgerError("site root %s must be absolute" % name)

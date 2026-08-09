@@ -84,8 +84,11 @@ python3 scripts/entityctl.py case init <project> <name>
 # 生成（不写状态）
 python3 scripts/entityctl.py render-run \
   --project-root <project> --toml <input.toml> --site <site> \
-  [--gpus N] [--walltime HH:MM:SS] [--precision single|double] [--executable <path>]
+  [--gpus N] [--walltime HH:MM:SS] [--gres gpu[:type]:count] \
+  [--precision single|double] [--executable <path>]
   # --walltime 留空（默认）则不设置时限，由分区/QoS 默认值决定
+  # --gres 留空（默认）则用 site policy 的 default_gres，再没有则回退 gpu:<N>;
+  # 无调度器（direct）Site 忽略 gres
 python3 scripts/entityctl.py snapshot-source --project-root <project>
 
 # 记录（先探测证据，后落账）

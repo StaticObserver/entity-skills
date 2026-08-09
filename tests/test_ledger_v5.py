@@ -291,7 +291,8 @@ else:
             "input_name": "input.toml",
             "compute": {"nodes": 1, "tasks": 1, "gpus": 1, "cpus_per_task": 2,
                         "walltime": "00:10:00", "partition": "test", "qos": "",
-                        "submit_user": "tester", "precision": "double"},
+                        "submit_user": "tester", "precision": "double",
+                        "gres": "gpu:1"},
         })
         self.assertIn("srun %s -input input.toml" % self.executable, script)
         self.assertNotIn("srun %s input.toml" % self.executable, script)
@@ -435,7 +436,8 @@ print('|'.join([r['job_id'], r['job_name'], r['user'], r['run_root'],
             "executable": self.executable, "input_name": "input.toml",
             "compute": {"nodes": 1, "tasks": 1, "gpus": 1, "cpus_per_task": 2,
                         "walltime": "00:10:00", "partition": "", "qos": "",
-                        "submit_user": "tester", "precision": "double"},
+                        "submit_user": "tester", "precision": "double",
+                        "gres": ""},
         }
         first = RENDER_BACKENDS["direct"](run_spec)
         self.assertEqual(first, RENDER_BACKENDS["direct"](run_spec))
@@ -450,7 +452,8 @@ print('|'.join([r['job_id'], r['job_name'], r['user'], r['run_root'],
             "executable": self.executable, "input_name": "input.toml",
             "compute": {"nodes": 1, "tasks": 1, "gpus": 1, "cpus_per_task": 2,
                         "walltime": "", "partition": "", "qos": "",
-                        "submit_user": "tester", "precision": "double"},
+                        "submit_user": "tester", "precision": "double",
+                        "gres": ""},
         }
         first = RENDER_BACKENDS["direct"](run_spec)
         self.assertEqual(first, RENDER_BACKENDS["direct"](run_spec))
@@ -848,6 +851,46 @@ raise SystemExit(1)
         valid = dict(self.profile, site_id="ok-ssh")
         valid["transport"] = {"kind": "ssh", "ssh_alias": "deploy@login-1.example"}
         self.assertEqual(validate_site_profile(valid)["site_id"], "ok-ssh")
+
+    def test_site_add_rejects_bad_default_gres(self):
+        profile = dict(self.profile, site_id="bad-gres")
+        profile["policy"] = dict(self.profile["policy"],
+                                 default_gres="V100:1")
+        profile_path = os.path.join(self.temp, "bad-gres-site.json")
+        atomic_write_json(profile_path, profile)
+        code, payload = self.cli("site", "add", "--profile", profile_path)
+        self.assertEqual(code, 2)
+        self.assertFalse(payload["ok"])
+        self.assertFalse(payload["state_mutated"])
+        self.assertIn("default_gres", payload["error"])
+        # generic and typed forms are both legal
+        from entity_ledger_common import validate_site_profile
+        for gres in ("gpu:1", "gpu:V100:1"):
+            valid = dict(self.profile, site_id="ok-gres")
+            valid["policy"] = {"default_gres": gres}
+            self.assertEqual(validate_site_profile(valid)["site_id"], "ok-gres")
+
+    def test_site_discover_suggests_default_gres_for_single_gpu_type(self):
+        self._write_executable("sinfo", """print('gpu1|up|3-00:00:00|gpu:V100:1|1|48')
+""")
+        self._write_executable("sacctmgr", """print('normal')
+""")
+        code, payload = self.cli("site", "discover", "local-slurm")
+        self.assertEqual(code, 0, payload)
+        self.assertEqual(payload["suggested_policy"]["default_partition"], "gpu1")
+        self.assertEqual(payload["suggested_policy"]["default_gres"], "gpu:V100:1")
+
+    def test_site_discover_warns_on_multiple_gpu_types(self):
+        self._write_executable("sinfo", """print('fat|up|3-00:00:00|gpu:V100:1,gpu:A100:1|1|48')
+""")
+        self._write_executable("sacctmgr", """print('normal')
+""")
+        code, payload = self.cli("site", "discover", "local-slurm")
+        self.assertEqual(code, 0, payload)
+        self.assertNotIn("default_gres", payload["suggested_policy"])
+        self.assertTrue(any("default_gres" in warning
+                            for warning in payload["warnings"]))
+
 
 
 if __name__ == "__main__":

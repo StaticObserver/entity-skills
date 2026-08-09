@@ -286,6 +286,81 @@ else:
         self.assertEqual(payload["compute"]["walltime"], "")
         self.assertNotIn("#SBATCH --time", payload["script"])
 
+    def _register_typed_gres_site(self):
+        self.store.upsert_site({
+            "schema_version": 1, "site_id": "local-slurm-typed",
+            "display_name": "local slurm typed",
+            "transport": {"kind": "local", "ssh_alias": ""},
+            "scheduler": {"kind": "slurm"},
+            "roots": {"source_root": self.temp, "build_root": self.build_root,
+                      "run_root": self.run_root,
+                      "staging_root": self.staging_root},
+            "policy": {"default_cpus_per_gpu": 2,
+                       "default_partition": "test",
+                       "default_submit_user": "tester",
+                       "default_gres": "gpu:V100:1"},
+            "shared_mappings": [],
+        })
+
+    def test_render_run_typed_gres_from_policy(self):
+        self._register_typed_gres_site()
+        code, payload = self.cli(
+            "render-run", "--project-root", self.project,
+            "--toml", "input.toml", "--site", "local-slurm-typed",
+            "--executable", self.executable)
+        self.assertEqual(code, 0, payload)
+        self.assertIn("#SBATCH --gres=gpu:V100:1", payload["script"])
+        self.assertEqual(payload["compute"]["gres"], "gpu:V100:1")
+
+    def test_render_run_explicit_gres_overrides_policy(self):
+        self._register_typed_gres_site()
+        code, payload = self.cli(
+            "render-run", "--project-root", self.project,
+            "--toml", "input.toml", "--site", "local-slurm-typed",
+            "--executable", self.executable, "--gres", "gpu:A100:1")
+        self.assertEqual(code, 0, payload)
+        self.assertIn("#SBATCH --gres=gpu:A100:1", payload["script"])
+        self.assertEqual(payload["compute"]["gres"], "gpu:A100:1")
+
+    def test_render_run_gres_falls_back_to_generic(self):
+        code, payload = self.cli(
+            "render-run", "--project-root", self.project,
+            "--toml", "input.toml", "--site", "local-slurm",
+            "--executable", self.executable)
+        self.assertEqual(code, 0, payload)
+        self.assertEqual(payload["compute"]["gres"], "gpu:1")
+        self.assertIn("#SBATCH --gres=gpu:1", payload["script"])
+
+    def test_render_run_rejects_an_invalid_gres(self):
+        code, payload = self.cli(
+            "render-run", "--project-root", self.project,
+            "--toml", "input.toml", "--site", "local-slurm",
+            "--executable", self.executable, "--gres", "v100")
+        self.assertEqual(code, 2, payload)
+        self.assertFalse(payload["ok"])
+        self.assertFalse(payload["state_mutated"])
+        self.assertIn("gres", payload["error"])
+
+    def test_run_identity_records_resolved_gres(self):
+        self._register_typed_gres_site()
+        prepared = self._prepare("local-slurm-typed", self.executable)
+        self.assertEqual(prepared["kind"], "entity-ledger.record.run-prepare")
+        identity = self._run_identity()
+        self.assertIsNotNone(identity)
+        self.assertEqual(identity["compute"]["gres"], "gpu:V100:1")
+        submit = os.path.join(prepared["run_root"], "run.sbatch")
+        with open(submit) as handle:
+            self.assertIn("#SBATCH --gres=gpu:V100:1", handle.read())
+
+    def test_direct_backend_ignores_gres(self):
+        code, payload = self.cli(
+            "render-run", "--project-root", self.project,
+            "--toml", "input.toml", "--site", "local-direct",
+            "--executable", self.executable, "--gres", "gpu:V100:1")
+        self.assertEqual(code, 0, payload)
+        self.assertEqual(payload["compute"]["gres"], "")
+        self.assertNotIn("gres", payload["script"])
+
     def test_render_run_rejects_an_invalid_walltime(self):
         code, payload = self.cli(
             "render-run", "--project-root", self.project,

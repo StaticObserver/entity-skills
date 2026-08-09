@@ -30,6 +30,7 @@ from entity_ledger_common import (
     sha256_file,
     site_file_sha256,
     source_manifest,
+    valid_gres,
     validate_site_profile,
     validate_slug,
     write_active_workspace,
@@ -1184,6 +1185,19 @@ def _slurm_site_discover(profile):
         suggested["default_partition"] = defaults[0]
     elif partitions:
         suggested["default_partition"] = partitions[0]["name"]
+    chosen = next((item for item in partitions
+                   if item["name"] == suggested.get("default_partition")), None)
+    gres_offers = [entry for entry in (chosen or {}).get("gres", "").split(",")
+                   if valid_gres(entry)]
+    typed_offers = [entry for entry in gres_offers if entry.count(":") == 2]
+    if len(gres_offers) == 1 and typed_offers:
+        # exactly one GPU type on the suggested partition: safe to pin
+        suggested["default_gres"] = gres_offers[0]
+    elif len(typed_offers) > 1:
+        warnings.append(
+            "partition %s offers several GPU types (%s); set "
+            "policy.default_gres explicitly"
+            % (chosen["name"], chosen["gres"]))
     if len(qos) == 1:
         suggested["default_qos"] = qos[0]
     elif qos:
@@ -1309,7 +1323,7 @@ def render_run_command(args):
     store = OperationStore(args.ledger_home, create=False)
     return render_run(
         store, args.project_root, args.toml, args.site, args.gpus,
-        args.walltime, args.precision, args.executable,
+        args.walltime, args.precision, args.executable, gres=args.gres,
         case_slug=args.case_slug)
 
 
@@ -1318,7 +1332,7 @@ def record_run_prepare_command(args):
     store = OperationStore(args.ledger_home, create=False)
     return record_run_prepare(
         store, args.project_root, args.toml, args.site, args.gpus,
-        args.walltime, args.precision, args.executable, actor,
+        args.walltime, args.precision, args.executable, actor, gres=args.gres,
         case_slug=args.case_slug)
 
 
@@ -2194,6 +2208,11 @@ def add_run_compute_arguments(parser):
     parser.add_argument("--walltime", default="",
                         help="HH:MM:SS or D-HH:MM:SS; empty (default) leaves "
                              "the time limit unset so the Site default applies")
+    parser.add_argument("--gres", default="",
+                        help="Slurm gres spec gpu[:type]:count (e.g. "
+                             "gpu:V100:1); overrides the site policy "
+                             "default_gres; empty falls back to the policy, "
+                             "then to gpu:<N>. Ignored on scheduler-less Sites")
     parser.add_argument("--precision", default="double",
                         choices=["single", "double"])
     parser.add_argument("--executable", default="",

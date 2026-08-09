@@ -94,6 +94,11 @@
         "default_partition": {"type": "string"},
         "default_qos": {"type": "string"},
         "default_submit_user": {"type": "string"},
+        "default_gres": {
+          "type": "string",
+          "pattern": "^gpu(:[A-Za-z0-9_.-]+)?:[0-9]+$",
+          "description": "Slurm gres spec gpu[:type]:count (e.g. gpu:V100:1); used when render-run/record run-prepare pass no explicit --gres. Slurm backend only."
+        },
         "default_cpus_per_gpu": {"type": "integer", "minimum": 1},
         "max_cpu_per_gpu": {"type": "integer", "minimum": 1}
       },

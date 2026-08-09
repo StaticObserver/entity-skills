@@ -115,10 +115,14 @@ profile 带 `site_root` 时，新 build/run/staging 落在
 `legacy-roots`)，旧 Locator 保持可引用。run
 Site 还要声明 transport 和 scheduler（`slurm`，或对无
 scheduler 的 Site 使用 `none`）。策略可以提供 `default_cpus_per_gpu`、
-`default_partition`、`default_qos`、`default_submit_user` 和
-`max_cpu_per_gpu`。direct 后端忽略 `default_partition` 和
-`default_qos`（它们归一化为空字符串），并将提交用户
-默认为当前用户。密钥和集群修复命令绝不应出现在
+`default_partition`、`default_qos`、`default_submit_user`、
+`default_gres`（Slurm gres 规格 `gpu[:type]:count`，如
+`gpu:V100:1`，用于同分区多 GPU 类型时钉住类型）和
+`max_cpu_per_gpu`。run 的 gres 解析顺序：显式 `--gres` >
+policy `default_gres` > 通用 `gpu:<N>`；解析结果记入 run identity
+的 compute。direct 后端忽略 `default_partition` 和
+`default_qos`（它们归一化为空字符串），gres 同样忽略（归一化为
+""），并将提交用户默认为当前用户。密钥和集群修复命令绝不应出现在
 profile 或档案中。
 
 ## live status 探测

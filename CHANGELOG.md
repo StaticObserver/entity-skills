@@ -77,6 +77,13 @@ project_uid 外键；`store migrate` 链式 v1→v2→v3，旧 root→case 1:1
   `site deps-add --kind analysis` 以解释器存在性为门禁登记 Python 分
   析环境。
 - `references/migration-guide.md` 迁移指南。
+- typed gres 支持：site policy 新增 `default_gres`（格式
+  `gpu[:type]:count`，如 `gpu:V100:1`，profile 校验拒绝坏值）；
+  `render-run` / `record run-prepare` 新增 `--gres` 显式覆盖；解析
+  顺序为显式 `--gres` > policy `default_gres` > 通用 `gpu:<N>`，解析
+  结果记入 run identity 的 compute 并原样渲染进 sbatch；`site
+  discover` 在建议分区只有一种 GPU 类型时建议 `default_gres`（多类型
+  时警告需显式选择）。direct 后端忽略 gres（归一化为 ""）。
 
 ### Changed
 
