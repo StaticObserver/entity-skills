@@ -10,6 +10,13 @@ compatibility contracts and are not the product version.
 
 ## [Unreleased]
 
+### Added
+
+- `project init` 现在同时创建 `analysis/scripts/` 通用脚本库骨架（幂等，
+  存量 project 再次 init 也会补建）。
+- `record analysis` 增加 ssh 通道 manifest 证据探测的测试覆盖
+  （`run_on_site` 假通道：happy path 落账 + 探测失败零写入）。
+
 ## [0.7.0] - 2026-08-03
 
 Workspace 与 Computation Site 顶层模型落地（设计：

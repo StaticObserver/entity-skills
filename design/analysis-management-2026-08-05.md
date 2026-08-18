@@ -1,6 +1,6 @@
 # Analysis 管理设计:代码、执行与环境
 
-日期:2026-08-05。状态:已定稿,待实现。配套:workspace-and-computation-site-2026-08-03.md。
+日期:2026-08-05。状态:已实现(57e55c1、695a69c)。配套:workspace-and-computation-site-2026-08-03.md。
 
 ## 1. 问题
 
@@ -30,7 +30,8 @@ entity-nt2py,Ledger 只做登记/溯源。
   做事后登记 + 证据探测,失败零写入。
 - 证据 = 产物目录里的 `analysis-manifest.json`:输入 data_id、脚本相对路径、
   参数、解释器/环境、生成时间。record 时重新探测:manifest 存在且 data_id
-  与声称一致、脚本哈希与登记一致。
+  与声称一致(强制);manifest 携带 script/script_sha256/params 时与登记
+  交叉校验(可选字段,携带才校验)。
 - `analysis_id = hash(data_id, script_hash, params)`;parent 挂 exact data ID;
   data current 变 → 旧 analysis stale。"误用"由此可查询:这份数据登记过哪
   些分析、什么脚本什么参数、是否还有效。
@@ -88,20 +89,20 @@ workspace 为权威去重;历史分析产物不追溯登记,新分析从 record 
 开始。存量分析环境(如 bh-reconnection 的 venv)由 agent 用
 `site deps-add --kind analysis` 登记。
 
-## 8. 开发计划(单一阶段)
+## 8. 开发计划(单一阶段,已全部完成)
 
-1. store:`analysis` 维度的写入路径打通(白名单已有),current 投影
-   analysis_id 维护,stale 传播(data 变 → analysis stale)。
-2. `record analysis` 原语:manifest 证据探测(local + ssh 通道)、
+1. ✅ store:`analysis` 维度的写入路径打通(白名单已有),current 投影
+   analysis_id 维护,stale 传播(data 变 → analysis stale,读时推导)。
+2. ✅ `record analysis` 原语:manifest 证据探测(local + ssh 通道)、
    analysis_id 推导、零写入门禁、审计事件。
-3. site 树:`projects/<p>/analysis/<case>/<analysis_id>/` 路径推导
+3. ✅ site 树:`projects/<p>/analysis/<case>/<analysis_id>/` 路径推导
    (execution_roots 扩展)。
-4. deps 注册表:`kind` 字段 + `site deps-add --kind analysis`(解释器存在
+4. ✅ deps 注册表:`kind` 字段 + `site deps-add --kind analysis`(解释器存在
    性门禁)。
-5. dashboard:analysis 格 readiness + 证据 + hardcoded 提醒;show 的
+5. ✅ dashboard:analysis 格 readiness + 证据 + hardcoded 提醒;show 的
    analysis 列表。
-6. 文档:ledger SKILL.md(原语 + 语义)、workspace-layout.md(启用
+6. ✅ 文档:ledger SKILL.md(原语 + 语义)、workspace-layout.md(启用
    analysis 槽位)、nt2py SKILL.md(一句:登记找 ledger)、migration-guide.md
    (脚本收编段)、CHANGELOG。
-7. 测试:record analysis 全门禁、stale 传播、kind=analysis 注册、dashboard
+7. ✅ 测试:record analysis 全门禁、stale 传播、kind=analysis 注册、dashboard
    呈现;全量 pytest 绿。

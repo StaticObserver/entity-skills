@@ -223,10 +223,11 @@ def load_project_yaml(project_dir):
 
 
 def init_project(workspace, slug, source=None):
-    """Create ``projects/<slug>/`` (project.yaml + cases/) inside a
-    workspace.  The source authority is only registered in project.yaml
-    (relative path, default ``source``); its directory is not created —
-    snapshot-source semantics stay with the Case source record.
+    """Create ``projects/<slug>/`` (project.yaml + cases/ +
+    analysis/scripts/) inside a workspace.  The source authority is only
+    registered in project.yaml (relative path, default ``source``); its
+    directory is not created — snapshot-source semantics stay with the
+    Case source record.
 
     Idempotent: an existing valid project.yaml is kept untouched; a
     non-empty directory without project.yaml is refused."""
@@ -261,6 +262,9 @@ def init_project(workspace, slug, source=None):
     cases_dir = os.path.join(project_dir, "cases")
     if not os.path.isdir(cases_dir):
         os.makedirs(cases_dir)
+    scripts_dir = os.path.join(project_dir, "analysis", "scripts")
+    if not os.path.isdir(scripts_dir):
+        os.makedirs(scripts_dir)
     return {
         "project_dir": project_dir,
         "record": record,

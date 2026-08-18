@@ -17,8 +17,10 @@ ENTITYCTL = os.path.join(SCRIPTS, "entityctl.py")
 if SCRIPTS not in sys.path:
     sys.path.insert(0, SCRIPTS)
 
-from entity_ledger_common import write_active_workspace
+from entity_ledger_common import actor_identity, write_active_workspace
 from entity_ledger_dashboard import build_dashboard
+from entity_ledger_facts import PlanError
+from entity_ledger_record import record_analysis
 from entity_ledger_store import OperationStore, canonical_hash
 from entity_ledger_workspace import init_workspace, write_site_yaml
 
@@ -358,6 +360,112 @@ class RecordAnalysisTest(unittest.TestCase):
     def test_analysis_cell_none_without_recording(self):
         dashboard = build_dashboard(self.store, self.project_root)
         self.assertEqual(dashboard["board"]["analysis"]["state"], "none")
+
+
+class RecordAnalysisSshTest(unittest.TestCase):
+    """record analysis over an ssh transport: the manifest is probed through
+    run_on_site (["cat", path]) instead of a local open."""
+
+    def setUp(self):
+        self.temp = tempfile.mkdtemp(prefix="entity-ledger-analysis-ssh-")
+        self._env = mock.patch.dict(os.environ, {"HOME": self.temp})
+        self._env.start()
+        for key in ("ENTITY_LEDGER_HOME", "ENTITY_ROUTER_HOME",
+                    "ENTITY_WORKSPACE"):
+            os.environ.pop(key, None)
+        self.workspace = init_workspace(
+            os.path.join(self.temp, "ws"))["workspace"]
+        write_active_workspace(self.workspace)
+        self.home = os.path.join(self.workspace, ".ledger")
+        self.store = OperationStore(self.home)
+        write_site_yaml(self.workspace, {
+            "site_id": "remote",
+            "transport": {"kind": "ssh", "ssh_alias": "fake-host"},
+            "scheduler": {"kind": "none"},
+            "site_root": "/remote/compute"})
+        self.store.upsert_site({
+            "schema_version": 1, "site_id": "remote",
+            "transport": {"kind": "ssh", "ssh_alias": "fake-host"},
+            "scheduler": {"kind": "none"},
+            "site_root": "/remote/compute", "roots": {}, "policy": {}})
+        self.project_root = os.path.join(self.workspace, "projects", "demo")
+        os.makedirs(self.project_root)
+        self.store.upsert_project("project-1", "demo", self.project_root)
+        self.store.upsert_case(
+            "case-1", "alpha", self.project_root,
+            {"authority": {"site_id": "remote", "path": self.project_root}},
+            {"source_id": "", "build_id": "", "run_id": "run-1",
+             "active_run": None, "data_id": "data-1", "analysis_id": ""},
+            project_uid="project-1")
+        run_root = "/remote/compute/projects/demo/runs/alpha/run-1"
+        self.store.add_identity(
+            "case-1", "run", "run-1",
+            {"id": "run-1", "kind": "run", "site_id": "remote",
+             "root": {"site_id": "remote", "path": run_root},
+             "status": "completed"}, True)
+        self.store.add_identity(
+            "case-1", "data", "data-1",
+            {"id": "data-1", "kind": "data", "site_id": "remote",
+             "root": {"site_id": "remote", "path": run_root},
+             "parents": {"run_id": "run-1"}, "status": "inventoried"}, True)
+        # the project script library is workspace-local even for ssh sites
+        self.scripts = os.path.join(self.project_root, "analysis", "scripts")
+        os.makedirs(self.scripts)
+        with open(os.path.join(self.scripts, "plot.py"), "w") as handle:
+            handle.write("# generic plotting script\n")
+        self.output_root = "/remote/compute/projects/demo/analysis/alpha/out-1"
+        self.manifest_path = self.output_root + "/analysis-manifest.json"
+        self.manifest = {"data_id": "data-1", "script": "plot.py",
+                         "generated_at": "2026-08-05T00:00:00Z"}
+        self.actor = actor_identity({"actor_run_id": "ssh-test"})
+
+    def tearDown(self):
+        self._env.stop()
+        shutil.rmtree(self.temp)
+
+    def fake_run_on_site(self, code=0):
+        calls = []
+
+        def _fake(profile, argv):
+            calls.append(list(argv))
+            if list(argv[:2]) == ["cat", self.manifest_path]:
+                stdout = "" if code else json.dumps(self.manifest)
+                return (code, stdout, "")
+            return (0, "", "")
+
+        return _fake, calls
+
+    def record(self):
+        return record_analysis(
+            self.store, self.project_root, "alpha", "plot.py", "data-1",
+            '{"bins": 32}', self.output_root, None, False, self.actor)
+
+    def test_manifest_probed_over_ssh(self):
+        fake, calls = self.fake_run_on_site()
+        with mock.patch("entity_ledger_record.run_on_site", fake):
+            result = self.record()
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["data_id"], "data-1")
+        self.assertIn(["cat", self.manifest_path], calls)
+        case = self.store.get_case("case-1")
+        self.assertEqual(case["current"]["analysis_id"],
+                         result["analysis_id"])
+        events = self.store.export()["events"]
+        self.assertEqual(events[-1]["event_type"], "record.analysis")
+        self.assertEqual(events[-1]["actor"]["run_id"], "ssh-test")
+
+    def test_ssh_manifest_failure_writes_nothing(self):
+        fake, unused = self.fake_run_on_site(code=1)
+        with mock.patch("entity_ledger_record.run_on_site", fake):
+            with self.assertRaises(PlanError):
+                self.record()
+        case = self.store.get_case("case-1")
+        self.assertEqual(case["current"]["analysis_id"], "")
+        analyses = case["identities"].get("analysis", {})
+        self.assertEqual(analyses.get("items", []), [])
+        types = [event["event_type"]
+                 for event in self.store.export()["events"]]
+        self.assertNotIn("record.analysis", types)
 
 
 if __name__ == "__main__":
