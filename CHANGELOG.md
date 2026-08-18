@@ -41,6 +41,16 @@ compatibility contracts and are not the product version.
   checkpoint JSON 就使 build_root 非空，首次构建必然误报，迫使调用方
   例行传 `--reuse-build-dir` 削弱守卫。现改为检测 CMake 实际产物
   （`CMakeCache.txt`/`CMakeFiles/`）才拒绝。
+- site deps 注册表往返丢失 compiler 的 `cc`/`cxx`/`host_cxx`（缺陷报告
+  缺陷 5）：注册表持久化白名单（Ledger `STACK_PACKAGE_KEYS` 与 env-build
+  `REGISTRY_PACKAGE_KEYS`）不含这三个键，而兼容性门禁恰恰要求
+  `selected.compiler.cxx`——纯 `--from-registry` 解析出的 checkpoint
+  必然失败；且 `create` 的合并按整条 `setdefault`，discovery 里完整的
+  compiler 条目被静默忽略，缺口无法填补。现三个键进入两侧白名单
+  （`DEPENDENCY_ENTRY_KEYS` 同步），合并改为字段粒度：discovery 只补齐
+  注册表条目缺失的字段，`validation` 保持注册表来源，已有字段仍以
+  注册表为准。旧档案（缺 compiler 字段的栈）由字段级补缺自动修复；
+  重新 `deps-add` 会登记带完整字段的新栈。
 
 ## [0.7.0] - 2026-08-03
 

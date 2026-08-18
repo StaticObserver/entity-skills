@@ -25,9 +25,39 @@ from entity_ledger_workspace import (
     list_site_archives,
     load_flat_yaml,
     site_yaml_path,
+    stack_packages,
     stack_signature,
     write_site_yaml,
 )
+
+
+class StackPackagesTest(unittest.TestCase):
+    """Registry persistence must keep the compiler path fields: the
+    compatibility gate requires selected.compiler.cxx, so a stack whose
+    compiler entry loses cc/cxx/host_cxx can never resolve into a
+    buildable checkpoint (defect report 2026-08-18, defect 5)."""
+
+    def test_compiler_fields_survive_stack_packages(self):
+        packages = stack_packages({
+            "compiler": {
+                "name": "compiler", "version": "13.3.0",
+                "prefix": "/usr", "bin": "/usr/bin", "provider": "system",
+                "cc": "/usr/bin/gcc", "cxx": "/usr/bin/g++",
+                "host_cxx": "/usr/bin/g++",
+            },
+        })
+        (compiler,) = packages
+        self.assertEqual(compiler["cc"], "/usr/bin/gcc")
+        self.assertEqual(compiler["cxx"], "/usr/bin/g++")
+        self.assertEqual(compiler["host_cxx"], "/usr/bin/g++")
+
+    def test_empty_compiler_fields_stay_absent(self):
+        packages = stack_packages({
+            "compiler": {"name": "compiler", "version": "13.3.0",
+                         "prefix": "/usr", "cc": ""},
+        })
+        (compiler,) = packages
+        self.assertNotIn("cc", compiler)
 
 
 class SignatureVectorsTest(unittest.TestCase):

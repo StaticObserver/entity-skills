@@ -102,7 +102,8 @@ checkpoint 与其请求具有相同的 schema 版本，并记录：
 `status.reuse_notes` 记录。
 
 每个选定的依赖记录 provider、prefix/bin/include/lib/config 路径、版本、
-编译器/MPI 签名、环境添加项、编译配置与验证。只有当内嵌的
+编译器路径（`cc`/`cxx`/`host_cxx`，compiler 条目）、编译器/MPI 签名、
+环境添加项、编译配置与验证。只有当内嵌的
 requirements、执行站点、全部五个解析后的路径、版本 profile 与工具链
 选择与当前请求匹配时，checkpoint 才可复用。
 
@@ -172,7 +173,10 @@ deps 节），通过 `entityctl site deps <site> --json` 导出：
 视为 build；注册表可能混有 `kind=analysis` 的 Python 环境栈，build
 消费不匹配它们）的第一个栈预填
 `selected`（保留各包原始 provider，来源记 `validation.source`)，并把 `stack_id` 写进 checkpoint；
-未覆盖的依赖由 `--from-discovery`/临场探测补缺。注册表条目随后与探测
+未覆盖的依赖由 `--from-discovery`/临场探测补缺——补缺同时是字段粒度
+的：注册表条目缺失的字段（如旧档案未持久化的 compiler
+`cc`/`cxx`/`host_cxx`）由探测条目补齐，`validation` 保持注册表来源不
+被覆盖。注册表条目随后与探测
 条目一样接受兼容性检查。新栈在 confirm + compatibility `pass` 后用
 `entityctl site deps-add <site> --from-checkpoint <entity-deps.local.json>`
 回写注册表（证据不符零写入）。

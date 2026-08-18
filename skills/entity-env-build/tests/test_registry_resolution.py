@@ -198,6 +198,86 @@ class RegistryResolutionTests(unittest.TestCase):
             self.assertTrue(any("stack_id unset" in note
                                 for note in data["status"]["reuse_notes"]))
 
+    def test_probe_fills_fields_missing_from_registry_entry(self):
+        # Defect report 2026-08-18, defect 5: archives written before
+        # cc/cxx/host_cxx were persisted resolve into checkpoints that can
+        # never pass the compatibility gate, and whole-entry setdefault made
+        # the gap unfillable. Field-level merge must close it.
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            req = base_requirements(tmp)
+            req_path = tmp / "requirements.json"
+            registry_path = tmp / "registry.json"
+            discovery_path = tmp / "discovery.json"
+            checkpoint = tmp / "entity-deps.local.json"
+            self.write_json(req_path, req)
+            registry = registry_json()
+            registry["stacks"][0]["packages"] = [
+                {"name": "compiler", "version": "13.3.0",
+                 "prefix": "/usr", "bin": "/usr/bin", "provider": "system"},
+            ]
+            self.write_json(registry_path, registry)
+            self.write_json(discovery_path, {
+                "compiler": {"name": "compiler", "version": "13.3.0",
+                             "prefix": "/usr", "bin": "/usr/bin",
+                             "provider": "system",
+                             "cc": "/usr/bin/gcc",
+                             "cxx": "/deps/kokkos/5.0.1/bin/nvcc_wrapper",
+                             "host_cxx": "/usr/bin/g++",
+                             "validation": {"installed": True,
+                                            "source": "probe"}},
+            })
+            proc = run_cmd(
+                "scripts/entity_checkpoint.py", "create", str(req_path),
+                "--from-registry", str(registry_path),
+                "--from-discovery", str(discovery_path),
+                "--output", str(checkpoint),
+            )
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            data = json.loads(checkpoint.read_text(encoding="utf-8"))
+            compiler = data["selected"]["compiler"]
+            self.assertEqual(compiler["cc"], "/usr/bin/gcc")
+            self.assertEqual(compiler["cxx"],
+                             "/deps/kokkos/5.0.1/bin/nvcc_wrapper")
+            self.assertEqual(compiler["host_cxx"], "/usr/bin/g++")
+            # the registry origin is preserved, not clobbered by the probe
+            self.assertEqual(compiler["validation"]["source"], "site-registry")
+            # field-level fill does not extend the dep set: stack_id stays
+            self.assertEqual(data["stack_id"],
+                             "gcc12.3.0-kokkos5.1.0-1a2b3c4d")
+
+    def test_registry_field_wins_over_probe_value(self):
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            req = base_requirements(tmp)
+            req_path = tmp / "requirements.json"
+            registry_path = tmp / "registry.json"
+            discovery_path = tmp / "discovery.json"
+            checkpoint = tmp / "entity-deps.local.json"
+            self.write_json(req_path, req)
+            registry = registry_json()
+            registry["stacks"][0]["packages"] = [
+                {"name": "compiler", "version": "13.3.0",
+                 "prefix": "/usr", "provider": "system",
+                 "cxx": "/usr/bin/g++-13"},
+            ]
+            self.write_json(registry_path, registry)
+            self.write_json(discovery_path, {
+                "compiler": {"name": "compiler", "version": "13.3.0",
+                             "cxx": "/other/g++", "cc": "/usr/bin/gcc"},
+            })
+            proc = run_cmd(
+                "scripts/entity_checkpoint.py", "create", str(req_path),
+                "--from-registry", str(registry_path),
+                "--from-discovery", str(discovery_path),
+                "--output", str(checkpoint),
+            )
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            compiler = json.loads(
+                checkpoint.read_text(encoding="utf-8"))["selected"]["compiler"]
+            self.assertEqual(compiler["cxx"], "/usr/bin/g++-13")
+            self.assertEqual(compiler["cc"], "/usr/bin/gcc")
+
     def test_analysis_kind_stack_never_matches_a_build_request(self):
         with tempfile.TemporaryDirectory() as td:
             tmp = Path(td)

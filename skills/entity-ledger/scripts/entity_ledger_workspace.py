@@ -490,9 +490,12 @@ STACK_SIGNATURE_FIELDS = (
 # Package keys preserved between a checkpoint's selected entries and the
 # registry; discovery_from_stack (env-build) copies exactly these back so a
 # deps-add -> export -> --from-registry round trip keeps the same stack_id.
+# The compiler fields cc/cxx/host_cxx must survive the round trip: the
+# compatibility gate requires selected.compiler.cxx (and a wrapper-aware
+# host_cxx), so dropping them makes registry-resolved checkpoints unbuildable.
 STACK_PACKAGE_KEYS = (
     "version", "prefix", "provider", "bin", "include", "lib",
-    "cmake_config", "modules",
+    "cmake_config", "modules", "cc", "cxx", "host_cxx",
 )
 # Mirror of entity_schema.PROFILES[*]["cxx_standard"] (env-build is the
 # single source; only "modern" exists today).  Used to normalize the
