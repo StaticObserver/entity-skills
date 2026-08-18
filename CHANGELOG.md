@@ -131,6 +131,28 @@ project_uid 外键；`store migrate` 链式 v1→v2→v3，旧 root→case 1:1
   吞掉，宿主语义不变；四个 scripts/ 下字节相同的
   `_invocation_log.py`，字节一致性有测试防漂移；对 agent 不可见（不
   改 SKILL.md)。
+- 调用日志修复批（同上评估报告）:`ENTITY_SKILL_INVOCATION_LOG=off`
+  （大小写不敏感精确匹配）完全静默，仓库 tests/conftest.py autouse
+  默认关闭——测试流量（曾占调用量 90%）不再污染生产统计；记录时
+  best-effort 嗅探 agent 客户端环境变量（KIMI_/CLAUDE/CODEX 常见名）
+  补 `agent_hint` 字段——只记变量名、不记值（防泄密），未命中省略该
+  字段。四份拷贝同步。
+- 错误 payload 新增机器可读 `"retryable"` 布尔（`status=="anomaly"`
+  → true，其余 false）;SKILL.md 错误契约节写明只有 anomaly（瞬时/
+  外部故障）值得原样重试，invalid_request/needs_decision 必须改变
+  输入或升级给人。
+- `record run-correct`（人工更正原语，B2 配套）:completed↔failed
+  两个已落账终态之间的人工更正，`--reason` 必填并落进 identity
+  (`correction` 节）与审计事件（from/to/reason)；在途 run 拒绝
+  （先 run-exit 到终态），同态更正是 no-op。与 `--reclassify`（按
+  日志证据重判）并存，互不替代。
+- `record run-launch --resubmit`(I3):Ledger 提交的 job 已终态且
+  失败时重新提交同一 run——先探测旧 job 确已死亡（在跑、gone 或
+  探测不到终态都拒绝，提示先 run-exit)，再正常走 preflight+提交；
+  新提交使用自己的 exactly-once 收据（`run-relaunch-<n>.json`,
+  exactly-once 按"每次提交"计），旧 scheduler 记录移入 identity
+  的 `prior_submissions`，事件与返回标注 `resubmit: true` 和
+  `previous_scheduler`。不带旗标行为不变。
 
 ### Fixed(rc 增量)
 
@@ -146,6 +168,29 @@ project_uid 外键；`store migrate` 链式 v1→v2→v3，旧 root→case 1:1
   缺 module 加载；merge 现保留这些键（modules 与 derive_paths 从
   selected 各 entry 收集的 modules 取并集），且 `derive_paths` 会把
   依赖 entry 自带的 `modules` 收进 paths。
+- 生产评估修复批（`design/skill-production-evaluation-2026-08-17.md`）：
+  - 远端 executor 非零退出不再被吞成 "Site executor returned invalid
+    JSON"：先判退出码，错误消息带 stderr 尾部（最后 ~500 字符）;
+    零退出但 stdout 无 JSON 时才报 invalid JSON 并附 stdout 头部
+    (~200 字符）。
+  - `_require_case` 拆分误导性消息：项目路径未登记（no_project）明说
+    "no project is registered at <path>"并提示改用新路径或
+    `workspace import`，按 basename 匹配已登记项目并在消息里列候选
+    （迁移后旧路径场景）；"项目已登记但无 Case"分支的建 Case 指引改
+    为真实命令 `entityctl case init <project> <name>`(run-prepare 并
+    不建 Case);store `get_site` 对未知 site_id 列出已登记 site 候选。
+  - `record run-exit` 对在跑 run 的返回增加
+    `detail: "run is still running; no state written"`。
+  - `doctor --project-root` 不再撞 argparse 裸错误：doctor 是
+    workspace 级诊断，接受该旗标并立即给出指引错误
+    (invalid_request，指向 `status --project-root <path>`)。
+- Slurm 终态分类修正（B2,sacct 终态词优先于退出码）:
+  CANCELLED/TIMEOUT/OUT_OF_MEMORY 等非 COMPLETED 终态词一律记
+  failed，即使退出码是 0:0（被 scancel/OOM 杀掉的 job 也能报干净
+  退出码——polar_cap OOM run 因此被旧逻辑误记 completed);
+  COMPLETED 或无调度器词（direct）维持退出码分类与 teardown-abort
+  救援不变；终态词一并写进 run-exit 事件 payload
+  (`scheduler_state`)。不新增终态。
 
 ### Changed
 

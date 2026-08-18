@@ -51,6 +51,7 @@ from entity_ledger_record import (
     record_intent,
     record_relocate,
     record_run_abort,
+    record_run_correct,
     record_run_exit,
     record_run_launch,
     record_run_prepare,
@@ -320,6 +321,12 @@ def install_bundle(args):
 
 
 def doctor(args):
+    if getattr(args, "project_root", None):
+        # doctor inspects the controller/workspace as a whole (store schema,
+        # bundle drift, site profiles); nothing in it is project-filterable
+        raise PlanError(
+            "doctor is workspace-scoped; use status --project-root %s"
+            % args.project_root, "invalid_request")
     home, resolution = resolve_ledger_home(args.ledger_home)
     runtime_bundle = bundle_hash(DEFAULT_BUNDLE_ROOT)
     actor = actor_identity(args)
@@ -1350,7 +1357,15 @@ def record_run_launch_command(args):
     store = OperationStore(args.ledger_home, create=False)
     return record_run_launch(
         store, args.project_root, args.run_id, args.adopt_job, args.adopt_pid,
-        actor, case_slug=args.case_slug)
+        actor, case_slug=args.case_slug, resubmit=args.resubmit)
+
+
+def record_run_correct_command(args):
+    actor = require_attributed_actor(actor_identity(args))
+    store = OperationStore(args.ledger_home, create=False)
+    return record_run_correct(store, args.project_root, args.run_id,
+                              args.status, args.reason, actor,
+                              case_slug=args.case_slug)
 
 
 def record_run_exit_command(args):
@@ -2249,6 +2264,10 @@ def build_parser():
         metavar="{doctor,status,show,render-run,snapshot-source,record,site,store,workspace,project,case,submission,export,install}"
     )
     doctor_parser = sub.add_parser("doctor")
+    doctor_parser.add_argument(
+        "--project-root", default=None,
+        help="rejected with guidance: doctor is workspace-scoped; use "
+             "status --project-root <path> for project-level state")
     doctor_parser.set_defaults(func=doctor)
 
     snapshot = sub.add_parser("snapshot-source")
@@ -2313,7 +2332,24 @@ def build_parser():
                        help="adopt an out-of-band Slurm job id into the ledger")
     adopt.add_argument("--adopt-pid", default="",
                        help="adopt an out-of-band process id into the ledger")
+    adopt.add_argument(
+        "--resubmit", action="store_true",
+        help="submit the run again after its recorded job probed terminal "
+             "and failed; the new submission gets its own exactly-once "
+             "receipt (exactly-once is per submission, not per run)")
     record_run_launch_parser.set_defaults(func=record_run_launch_command)
+    record_run_correct_parser = record_sub.add_parser("run-correct")
+    record_run_correct_parser.add_argument("--project-root", required=True)
+    record_run_correct_parser.add_argument("--run-id", default="")
+    record_run_correct_parser.add_argument(
+        "--status", required=True, choices=["completed", "failed"],
+        help="the terminal state the run is corrected to")
+    record_run_correct_parser.add_argument(
+        "--reason", required=True,
+        help="why the booked state is wrong; recorded in the identity and "
+             "the audit event")
+    add_case_argument(record_run_correct_parser)
+    record_run_correct_parser.set_defaults(func=record_run_correct_command)
     record_run_exit_parser = record_sub.add_parser("run-exit")
     record_run_exit_parser.add_argument("--project-root", required=True)
     record_run_exit_parser.add_argument("--run-id", default="")
@@ -2516,12 +2552,16 @@ def main(argv=None):
         return 0 if payload.get("ok", True) else 2
     except PlanError as exc:
         emit({"ok": False, "status": exc.status, "error": str(exc),
-              "decisions": exc.decisions, "state_mutated": False})
+              "decisions": exc.decisions, "state_mutated": False,
+              # only an anomaly (transient/external failure) is worth
+              # retrying unchanged; every other status needs new input
+              # or a human decision
+              "retryable": exc.status == "anomaly"})
         return 2
     except (IOError, OSError, ValueError, KeyError, TypeError, LedgerError,
             sqlite3.Error, tarfile.TarError) as exc:
         emit({"ok": False, "status": "anomaly", "error": str(exc),
-              "state_mutated": False})
+              "state_mutated": False, "retryable": True})
         return 2
 
 

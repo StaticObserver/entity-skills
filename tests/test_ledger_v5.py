@@ -516,6 +516,17 @@ print('|'.join([r['job_id'], r['job_name'], r['user'], r['run_root'],
         self.assertFalse(payload["ok"])
         self.assertTrue(any("drifted" in failure for failure in payload["failures"]))
 
+    def test_doctor_project_root_is_a_guided_error_not_argparse(self):
+        # I5: doctor inspects the whole workspace/controller, so project
+        # filtering has nothing to act on — accept the flag and redirect
+        code, payload = self.cli("doctor", "--project-root", self.project)
+        self.assertEqual(code, 2)
+        self.assertFalse(payload["ok"])
+        self.assertEqual(payload["status"], "invalid_request")
+        self.assertIn("doctor is workspace-scoped", payload["error"])
+        self.assertIn("status --project-root", payload["error"])
+        self.assertFalse(payload["retryable"])
+
     def _install_env(self, name):
         fake_home = os.path.join(self.temp, name)
         os.makedirs(fake_home)

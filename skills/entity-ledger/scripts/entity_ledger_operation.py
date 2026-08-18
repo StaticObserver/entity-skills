@@ -198,8 +198,21 @@ class ExecutorClient(object):
         code, stdout, stderr = run_on_site(
             self.profile, ["python3", executor, command, "--request", request_path]
         )
-        result = _json_from_stdout(stdout, "Site executor")
-        if code != 0 or result.get("status") not in {"completed", "verified"}:
+        if code != 0:
+            # a crashed executor usually writes the real reason (e.g. a
+            # Python traceback) to stderr, not stdout — surface its tail
+            tail = stderr.strip()[-500:] if stderr.strip() else ""
+            raise OperationError(
+                "Site executor exited %d%s"
+                % (code, ": " + tail if tail else ""))
+        try:
+            result = _json_from_stdout(stdout, "Site executor")
+        except OperationError as exc:
+            head = (stdout or "").strip()[:200]
+            if head:
+                raise OperationError("%s (stdout: %s)" % (exc, head))
+            raise
+        if result.get("status") not in {"completed", "verified"}:
             raise OperationError(
                 result.get("message") or stderr.strip() or "Site executor failed"
             )

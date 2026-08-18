@@ -274,6 +274,21 @@ class SiteDiscoverTest(SiteTestBase):
         self.assertEqual(code, 0, again)
         self.assertFalse(again["archive"]["machine_updated"])
 
+    def test_unknown_site_lists_registered_candidates(self):
+        # B3: a mistyped site id must name the registered sites (the
+        # deps-add astro vs astro-axion incident)
+        self.store.upsert_site({
+            "schema_version": 1, "site_id": "astro-axion",
+            "transport": {"kind": "local"}, "scheduler": {"kind": "none"},
+            "roots": {}, "policy": {}})
+        code, payload = self.cli("site", "discover", "astro")
+        self.assertEqual(code, 2)
+        self.assertIn("unknown site_id: astro", payload["error"])
+        self.assertIn("registered sites: astro-axion", payload["error"])
+        # I2: an anomaly (unexpected/store-level failure) is the retryable kind
+        self.assertEqual(payload["status"], "anomaly")
+        self.assertTrue(payload["retryable"])
+
 
 class SiteImportNotesTest(SiteTestBase):
     def setUp(self):

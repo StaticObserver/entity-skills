@@ -324,5 +324,38 @@ class CaseAddressingTest(ProjectCaseTestBase):
         self.assertIn("alpha", payload["error"])
 
 
+class RequireCaseMessageTest(ProjectCaseTestBase):
+    """B3: an unregistered --project-root must say so (never "no Case"), and
+    a basename match over the registered projects lists the moved project."""
+
+    def test_unregistered_path_is_not_a_case_problem(self):
+        stray = os.path.join(self.temp, "stray")
+        os.makedirs(stray)
+        code, payload = self.cli(
+            "record", "intent", "--project-root", stray, "--text", "x")
+        self.assertEqual(code, 2)
+        self.assertEqual(payload["status"], "needs_decision")
+        # I2: a deterministic error is never worth retrying unchanged
+        self.assertFalse(payload["retryable"])
+        self.assertIn("no project is registered", payload["error"])
+        self.assertIn("workspace import", payload["error"])
+        self.assertNotIn("run-prepare", payload["error"])
+        self.assertNotIn("registered projects with the same name",
+                         payload["error"])
+
+    def test_moved_project_path_lists_registered_candidate(self):
+        self.init_project("polar_cap")
+        old_layout = os.path.join(self.temp, "old-layout", "polar_cap")
+        os.makedirs(old_layout)
+        code, payload = self.cli(
+            "record", "intent", "--project-root", old_layout, "--text", "x")
+        self.assertEqual(code, 2)
+        self.assertIn("no project is registered", payload["error"])
+        self.assertIn("registered projects with the same name", payload["error"])
+        self.assertIn("polar_cap", payload["error"])
+        self.assertIn(os.path.realpath(self.project_dir("polar_cap")),
+                      payload["error"])
+
+
 if __name__ == "__main__":
     unittest.main()

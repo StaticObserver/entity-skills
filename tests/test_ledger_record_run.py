@@ -644,6 +644,9 @@ else:
         self.assertEqual(code, 0, probed)
         self.assertEqual(probed["state"], "running")
         self.assertFalse(probed["state_mutated"])
+        # I4: a still-running probe says in plain words that nothing was written
+        self.assertEqual(probed["detail"],
+                         "run is still running; no state written")
         self.assertEqual(self._run_identity()["status"], "submitted")
         exit_file = os.path.join(prepared["run_root"], ".entity-exit-code")
         self.assertFalse(os.path.isfile(exit_file))
@@ -737,6 +740,118 @@ else:
         self.assertEqual(identity["status"], "failed")
         self.assertEqual(identity["exit_code"], 1)
         self.assertEqual(identity["scheduler"]["state"], "FAILED")
+
+    def test_run_exit_slurm_cancelled_zero_exit_books_failed(self):
+        # B2: a scancel'ed job reports CANCELLED 0:0 — the scheduler word
+        # outranks the clean exit code (the polar_cap OOM incident booked
+        # this as completed and could not be corrected)
+        self._prepare("local-slurm", self.executable)
+        code, payload = self._launch()
+        self.assertEqual(code, 0, payload)
+        self._sacct_terminal("CANCELLED", "0:0")
+        code, probed = self.cli("record", "run-exit",
+                                "--project-root", self.project)
+        self.assertEqual(code, 0, probed)
+        self.assertEqual(probed["state"], "failed")
+        self.assertEqual(probed["exit_code"], 0)
+        identity = self._run_identity()
+        self.assertEqual(identity["status"], "failed")
+        self.assertEqual(identity["scheduler"]["state"], "CANCELLED")
+        events = self.store.export()["events"]
+        self.assertEqual(events[-1]["event_type"], "record.run-exit")
+        self.assertEqual(events[-1]["payload"]["scheduler_state"], "CANCELLED")
+        self.assertEqual(events[-1]["payload"]["status"], "failed")
+
+    def test_run_exit_slurm_timeout_books_failed(self):
+        self._prepare("local-slurm", self.executable)
+        code, payload = self._launch()
+        self.assertEqual(code, 0, payload)
+        self._sacct_terminal("TIMEOUT", "1:0")
+        code, probed = self.cli("record", "run-exit",
+                                "--project-root", self.project)
+        self.assertEqual(code, 0, probed)
+        self.assertEqual(probed["state"], "failed")
+        identity = self._run_identity()
+        self.assertEqual(identity["status"], "failed")
+        self.assertEqual(identity["scheduler"]["state"], "TIMEOUT")
+
+    def test_run_exit_slurm_completed_event_carries_scheduler_state(self):
+        # no regression: COMPLETED 0:0 still books completed, and the event
+        # records the scheduler word
+        self._prepare("local-slurm", self.executable)
+        code, payload = self._launch()
+        self.assertEqual(code, 0, payload)
+        self._sacct_terminal("COMPLETED", "0:0")
+        code, probed = self.cli("record", "run-exit",
+                                "--project-root", self.project)
+        self.assertEqual(code, 0, probed)
+        self.assertEqual(probed["state"], "completed")
+        events = self.store.export()["events"]
+        self.assertEqual(events[-1]["payload"]["status"], "completed")
+        self.assertEqual(events[-1]["payload"]["scheduler_state"], "COMPLETED")
+
+    def test_run_launch_resubmit_after_job_died(self):
+        # I3, the incident shape: the ledger-submitted job died instantly
+        # (missing executable), run-exit was never called — resubmit
+        # replaces the dead job with a fresh submission
+        self._prepare("local-slurm", self.executable)
+        code, payload = self._launch()
+        self.assertEqual(code, 0, payload)
+        self.assertEqual(self.submit_count(), 1)
+        first_scheduler = self._run_identity()["scheduler"]
+        self._sacct_terminal("FAILED", "1:0")
+        code, resubmitted = self._launch(extra=["--resubmit"])
+        self.assertEqual(code, 0, resubmitted)
+        self.assertTrue(resubmitted["resubmit"])
+        self.assertTrue(resubmitted["state_mutated"])
+        self.assertEqual(resubmitted["previous_scheduler"], first_scheduler)
+        self.assertEqual(self.submit_count(), 2)
+        identity = self._run_identity()
+        self.assertEqual(identity["status"], "submitted")
+        self.assertEqual(identity["prior_submissions"], [first_scheduler])
+        events = self.store.export()["events"]
+        self.assertEqual(events[-1]["event_type"], "record.run-launch")
+        self.assertTrue(events[-1]["payload"]["resubmit"])
+        self.assertEqual(events[-1]["payload"]["previous_scheduler"],
+                         first_scheduler)
+        # a plain launch afterwards claims the new scheduler identity
+        code, again = self._launch()
+        self.assertEqual(code, 0, again)
+        self.assertFalse(again["state_mutated"])
+        self.assertEqual(self.submit_count(), 2)
+
+    def test_run_launch_resubmit_after_booked_failure(self):
+        # the other eligible shape: run-exit already booked the failure
+        self._prepare("local-slurm", self.executable)
+        code, payload = self._launch()
+        self.assertEqual(code, 0, payload)
+        self._sacct_terminal("FAILED", "1:0")
+        code, probed = self.cli("record", "run-exit",
+                                "--project-root", self.project)
+        self.assertEqual(probed["state"], "failed")
+        code, resubmitted = self._launch(extra=["--resubmit"])
+        self.assertEqual(code, 0, resubmitted)
+        self.assertTrue(resubmitted["resubmit"])
+        self.assertEqual(self._run_identity()["status"], "submitted")
+        self.assertEqual(self.submit_count(), 2)
+
+    def test_run_launch_resubmit_refused_while_job_running(self):
+        self._prepare("local-slurm", self.executable)
+        code, payload = self._launch()
+        self.assertEqual(code, 0, payload)
+        code, refused = self._launch(extra=["--resubmit"])
+        self.assertEqual(code, 2)
+        self.assertIn("not terminal", refused["error"])
+        self.assertIn("run-exit", refused["error"])
+        self.assertEqual(self.submit_count(), 1)
+
+    def test_run_launch_resubmit_refused_without_submission(self):
+        self._prepare("local-slurm", self.executable)
+        code, refused = self._launch(extra=["--resubmit"])
+        self.assertEqual(code, 2)
+        self.assertIn("--resubmit applies to a submitted or failed run",
+                      refused["error"])
+        self.assertEqual(self.submit_count(), 0)
 
     _TEARDOWN_ERR = (
         "Entity runtime shutdown\n"

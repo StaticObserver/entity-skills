@@ -128,6 +128,53 @@ class RecordTest(unittest.TestCase):
         self.assertNotIn("error_type", records[0])
 
 
+class KillSwitchTest(unittest.TestCase):
+    def test_off_disables_logging_completely(self):
+        with tempfile.TemporaryDirectory() as td:
+            with mock.patch.dict(os.environ, {"HOME": td}):
+                for value in ("off", "OFF", " Off "):
+                    with mock.patch.dict(
+                            os.environ,
+                            {_invocation_log.ENV_OVERRIDE: value}):
+                        _invocation_log.record(
+                            "s", "x.py", [], 0, time.time())
+            self.assertEqual(os.listdir(td), [])
+
+    def test_only_the_exact_word_off_is_a_kill_switch(self):
+        with tempfile.TemporaryDirectory() as td:
+            target = os.path.join(td, "offline")
+            with mock.patch.dict(
+                    os.environ, {_invocation_log.ENV_OVERRIDE: target}):
+                _invocation_log.record("s", "x.py", [], 0, time.time())
+            self.assertTrue(os.path.isfile(target))
+
+
+class AgentHintTest(unittest.TestCase):
+    def _one_record(self, extra_env):
+        with tempfile.TemporaryDirectory() as td:
+            log = os.path.join(td, "inv.jsonl")
+            env = {_invocation_log.ENV_OVERRIDE: log}
+            # an empty value counts as unset: neutralize any hint variables
+            # the surrounding agent may have exported
+            env.update((name, "") for name in _invocation_log.AGENT_ENV_HINTS)
+            env.update(extra_env)
+            with mock.patch.dict(os.environ, env):
+                _invocation_log.record("s", "x.py", [], 0, time.time(),
+                                       script_file=__file__)
+            (record,) = [json.loads(line)
+                         for line in Path(log).read_text().splitlines()]
+        return record
+
+    def test_hint_records_variable_names_not_values(self):
+        record = self._one_record({"CLAUDECODE": "s3cr3t-value"})
+        self.assertEqual(record["agent_hint"], "CLAUDECODE")
+        self.assertNotIn("s3cr3t-value", json.dumps(record))
+
+    def test_no_hint_variable_omits_the_field(self):
+        record = self._one_record({})
+        self.assertNotIn("agent_hint", record)
+
+
 class IntegrationTest(unittest.TestCase):
     def test_entityctl_readonly_subcommand_logs_one_record(self):
         with tempfile.TemporaryDirectory() as td:

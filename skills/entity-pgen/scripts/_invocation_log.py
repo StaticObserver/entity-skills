@@ -7,6 +7,10 @@ eval-time observability trace. NEVER breaks the host tool: every
 failure in the logging path is swallowed, and the host's exit-code and
 exception semantics propagate unchanged.
 
+``ENTITY_SKILL_INVOCATION_LOG`` overrides the log path; the exact value
+``off`` (case-insensitive) disables logging entirely (test suites use this
+to keep their traffic out of the production log).
+
 Standard library only; Python 3.6 compatible. Installed skills are
 self-contained directories, so each skill ships a byte-identical copy of
 this module under its own scripts/.
@@ -26,6 +30,13 @@ SCHEMA_VERSION = 1
 ENV_OVERRIDE = "ENTITY_SKILL_INVOCATION_LOG"
 SECRET_RE = re.compile(
     r"token|secret|password|passwd|api[-_]?key|credential", re.IGNORECASE)
+# Best-effort client attribution: presence of a well-known agent-client
+# variable is recorded by NAME only (values may carry secrets).
+AGENT_ENV_HINTS = (
+    "KIMI_CLI", "KIMI_CODE",
+    "CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT",
+    "CODEX_CLI", "CODEX_HOME",
+)
 
 
 def sanitize_argv(argv):
@@ -60,6 +71,15 @@ def _log_path(now):
         "invocations", now.strftime("%Y-%m") + ".jsonl")
 
 
+def _logging_disabled():
+    return os.environ.get(ENV_OVERRIDE, "").strip().lower() == "off"
+
+
+def _agent_hint():
+    hits = [name for name in AGENT_ENV_HINTS if os.environ.get(name)]
+    return ",".join(hits) or None
+
+
 def _skill_version(script_file):
     try:
         path = os.path.join(
@@ -87,6 +107,8 @@ def record(skill, script, argv, exit_code, started, error_type=None,
            script_file=None):
     """Append one invocation record. Every failure is swallowed by design."""
     with contextlib.suppress(Exception):
+        if _logging_disabled():
+            return
         now = datetime.datetime.now(datetime.timezone.utc)
         entry = {
             "schema_version": SCHEMA_VERSION,
@@ -108,6 +130,9 @@ def record(skill, script, argv, exit_code, started, error_type=None,
         comm = _ppid_comm()
         if comm:
             entry["ppid_comm"] = comm
+        hint = _agent_hint()
+        if hint:
+            entry["agent_hint"] = hint
         path = _log_path(now)
         parent = os.path.dirname(path)
         if parent and not os.path.isdir(parent):

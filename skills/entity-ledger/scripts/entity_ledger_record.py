@@ -105,24 +105,46 @@ def show_case(store, project_root, case_slug=None):
     }
 
 
+def _registered_project_candidates(store, project_root):
+    """Basename match over the registered projects: a moved project keeps
+    its directory name, so the registry usually still holds its new path."""
+    wanted = os.path.basename(absolute(project_root))
+    found = []
+    for project in store.find_projects():
+        root = project.get("project_root") or ""
+        if project.get("slug") == wanted or (
+                root and os.path.basename(root) == wanted):
+            found.append("%s (%s)" % (project["slug"], root))
+    return sorted(found)
+
+
 def _require_case(store, project_root, case_slug=None):
     try:
         return store.resolve_project(project_root, case_slug)
     except CaseResolutionError as exc:
         if exc.reason != "no_project":
             raise case_resolution_plan_error(exc)
+        message = (
+            "no project is registered at %s; if the project moved, use the "
+            "new path or entityctl workspace import" % absolute(project_root))
+        candidates = _registered_project_candidates(store, project_root)
+        if candidates:
+            message += ("; registered projects with the same name: %s"
+                        % ", ".join(candidates))
         raise PlanError(
-            "no Case covers the project; create it first",
+            message,
             "needs_decision",
-            [{"field": "case",
-              "question": "run entityctl record run-prepare to create the Case"}],
+            [{"field": "project",
+              "question": "point --project-root at a registered project path"}],
         )
     except StoreError:
         raise PlanError(
-            "no Case covers the project; create it first",
+            "no Case covers the project; create it with "
+            "entityctl case init <project> <name>",
             "needs_decision",
             [{"field": "case",
-              "question": "run entityctl record run-prepare to create the Case"}],
+              "question": "create the Case with "
+                          "entityctl case init <project> <name>"}],
         )
 
 
@@ -972,13 +994,23 @@ def _probe_adopt_direct(profile, pid, run_root):
 
 
 def record_run_launch(store, project_root, run_id, adopt_job, adopt_pid, actor,
-                      case_slug=None):
+                      case_slug=None, resubmit=False):
     """Submit a prepared run exactly once (executor receipt) or adopt an
     out-of-band job after probing it, then book the run as submitted.  On
     Slurm Sites the scheduler first validates the rendered submission
     (run.preflight.v1 / sbatch --test-only); a rejection fails with the
     executor's remediation hint before any state is written.  Scheduler-less
-    Sites have no scheduler to consult and skip the preflight."""
+    Sites have no scheduler to consult and skip the preflight.
+
+    With ``resubmit`` a run whose recorded job died (the ledger-submitted
+    job that failed before or at ``record run-exit``) is submitted again:
+    eligibility requires a recorded scheduler identity whose job probes
+    terminal *and* failed, and the run status must be submitted (died
+    before run-exit) or failed (run-exit already booked it).  The new
+    submission gets its own exactly-once receipt (run-relaunch-<n>.json,
+    n counting earlier resubmissions), the previous scheduler record moves
+    to ``prior_submissions``, and the launch event is marked
+    ``resubmit: true``.  Exactly-once is per submission, not per run."""
     case = _require_case(store, project_root, case_slug)
     run_id = run_id or case.get("current", {}).get("run_id", "")
     if not run_id:
@@ -995,7 +1027,12 @@ def record_run_launch(store, project_root, run_id, adopt_job, adopt_pid, actor,
             [{"field": "run", "question": "select a known run id"}],
         )
     status = identity.get("status", "")
-    if status not in {"prepared", "submitted"}:
+    if resubmit:
+        if status not in {"submitted", "failed"}:
+            raise PlanError(
+                "run %s is %s; --resubmit applies to a submitted or failed "
+                "run whose recorded job died" % (run_id, status or "unknown"))
+    elif status not in {"prepared", "submitted"}:
         raise PlanError("run %s is %s; only a prepared run can be launched"
                         % (run_id, status or "unknown"))
     root = identity.get("root", {})
@@ -1011,6 +1048,8 @@ def record_run_launch(store, project_root, run_id, adopt_job, adopt_pid, actor,
     unused_kind, backend = _run_backend(profile)
     scheduler_kind = backend["scheduler"]
     adopted = bool(adopt_job or adopt_pid)
+    if adopted and resubmit:
+        raise PlanError("--resubmit cannot be combined with adoption")
     if adopted:
         if adopt_job:
             if scheduler_kind != "slurm":
@@ -1023,26 +1062,66 @@ def record_run_launch(store, project_root, run_id, adopt_job, adopt_pid, actor,
         effect["adopted"] = True
     else:
         recorded_scheduler = identity.get("scheduler", {})
+        prior_submissions = []
         if recorded_scheduler.get("job_id") or recorded_scheduler.get("pid"):
-            # The run already carries a scheduler identity — submitted by an
-            # earlier launch or adopted out-of-band (adoption leaves no
-            # executor receipt to make a re-run idempotent).  Re-running the
-            # launch without adopt flags must claim the recorded effect
-            # instead of submitting a second job.
-            return {
-                "schema_version": 1,
-                "kind": "entity-ledger.record.run-launch",
-                "ok": True,
-                "state_mutated": False,
-                "case_uid": case["case_uid"],
-                "run_id": run_id,
-                "site_id": site_id,
-                "status": identity.get("status", ""),
-                "adopted": bool(recorded_scheduler.get("adopted")),
-                "scheduler": recorded_scheduler,
-                "detail": "run already has a recorded scheduler identity; "
-                          "no new submission",
-            }
+            if not resubmit:
+                # The run already carries a scheduler identity — submitted
+                # by an earlier launch or adopted out-of-band (adoption
+                # leaves no executor receipt to make a re-run idempotent).
+                # Re-running the launch without adopt flags must claim the
+                # recorded effect instead of submitting a second job.
+                return {
+                    "schema_version": 1,
+                    "kind": "entity-ledger.record.run-launch",
+                    "ok": True,
+                    "state_mutated": False,
+                    "case_uid": case["case_uid"],
+                    "run_id": run_id,
+                    "site_id": site_id,
+                    "status": identity.get("status", ""),
+                    "adopted": bool(recorded_scheduler.get("adopted")),
+                    "scheduler": recorded_scheduler,
+                    "detail": "run already has a recorded scheduler identity; "
+                              "no new submission",
+                }
+            # --resubmit: the recorded job must probe terminal AND failed —
+            # a live or unprobeable job is never displaced by a second
+            # submission (record run-exit it first).
+            previous_scheduler = recorded_scheduler
+            probe_kind = recorded_scheduler.get("scheduler", "")
+            if probe_kind == "slurm":
+                probe_state, probe_sched_state, probe_exit = _slurm_exit_probe(
+                    profile, recorded_scheduler.get("job_id", ""))
+            elif probe_kind == "direct":
+                probe_state, probe_exit = _direct_exit_probe(
+                    profile, recorded_scheduler)
+                probe_sched_state = ""
+            else:
+                raise PlanError(
+                    "run identity has an unsupported scheduler record: %s"
+                    % (probe_kind or "none"))
+            if probe_state != "terminal":
+                raise PlanError(
+                    "the recorded job of run %s probes '%s', not terminal; "
+                    "--resubmit only replaces a dead job — record run-exit "
+                    "first (or wait for it)" % (run_id, probe_state))
+            if probe_sched_state:
+                job_failed = (probe_sched_state != "COMPLETED"
+                              or (probe_exit or 0) != 0)
+            else:
+                job_failed = probe_exit is not None and probe_exit != 0
+            if not job_failed:
+                raise PlanError(
+                    "the recorded job of run %s reached a successful "
+                    "terminal state; there is nothing to resubmit" % run_id)
+            prior_submissions = (
+                list(identity.get("prior_submissions", []))
+                + [previous_scheduler])
+        elif resubmit:
+            raise PlanError(
+                "run %s has no recorded scheduler identity; there is no "
+                "dead submission to replace — use plain record run-launch"
+                % run_id)
         for key in ["operation_id", "plan_hash", "staging_root"]:
             if not identity.get(key):
                 raise PlanError(
@@ -1089,16 +1168,23 @@ def record_run_launch(store, project_root, run_id, adopt_job, adopt_pid, actor,
             except OperationError as exc:
                 raise PlanError("run preflight failed on Site %s: %s"
                                 % (site_id, exc))
+        # each submission gets its own exactly-once receipt: the first
+        # launch uses run-launch.json, resubmission n run-relaunch-<n>.json
+        receipt_name = "run-launch.json"
+        step_id = "launch"
+        if resubmit:
+            receipt_name = "run-relaunch-%d.json" % len(prior_submissions)
+            step_id = "relaunch"
         envelope = {
             "schema_version": 1,
             "operation_id": identity["operation_id"],
             "plan_hash": identity["plan_hash"],
             "step_index": 2,
-            "step_id": "launch",
+            "step_id": step_id,
             "kind": "run.launch.v2",
             "site_id": site_id,
             "receipt": os.path.join(
-                identity["staging_root"], "receipts", "run-launch.json"),
+                identity["staging_root"], "receipts", receipt_name),
             "allowed_roots": [identity["staging_root"], run_root],
             "request": {
                 "scheduler": scheduler_kind,
@@ -1118,13 +1204,19 @@ def record_run_launch(store, project_root, run_id, adopt_job, adopt_pid, actor,
     identity = dict(identity)
     identity["status"] = "submitted"
     identity["scheduler"] = effect
+    if resubmit:
+        identity["prior_submissions"] = prior_submissions
+    event_payload = {"run_id": run_id, "site_id": site_id, "adopted": adopted,
+                     "scheduler": effect}
+    if resubmit:
+        event_payload["resubmit"] = True
+        event_payload["previous_scheduler"] = prior_submissions[-1]
     _book_run(
         store, case, identity, "submitted", {},
         "record.run-launch",
-        {"run_id": run_id, "site_id": site_id, "adopted": adopted,
-         "scheduler": effect},
+        event_payload,
         actor)
-    return {
+    result = {
         "schema_version": 1,
         "kind": "entity-ledger.record.run-launch",
         "ok": True,
@@ -1136,6 +1228,10 @@ def record_run_launch(store, project_root, run_id, adopt_job, adopt_pid, actor,
         "adopted": adopted,
         "scheduler": effect,
     }
+    if resubmit:
+        result["resubmit"] = True
+        result["previous_scheduler"] = prior_submissions[-1]
+    return result
 
 
 _ANSI_ESCAPE = re.compile(r"\x1b\[[0-9;]*m")
@@ -1337,10 +1433,13 @@ def record_run_exit(store, project_root, run_id, actor, reclassify=False,
                     case_slug=None):
     """Probe a submitted run's terminal state and book it.  A still-running
     run is reported without mutating state; an unreachable Site fails with
-    exit 2 and no write.  When the terminal exit code is non-zero, the run's
-    log tails are checked for a known harmless teardown abort (see
-    classify_teardown_abort); with both evidence groups the run is booked
-    completed with an exit_anomaly note, the real exit code preserved.
+    exit 2 and no write.  A non-COMPLETED scheduler word (CANCELLED,
+    TIMEOUT, OUT_OF_MEMORY, ...) books failed regardless of the exit code;
+    otherwise the exit code classifies.  When the terminal exit code is
+    non-zero, the run's log tails are checked for a known harmless teardown
+    abort (see classify_teardown_abort); with both evidence groups the run
+    is booked completed with an exit_anomaly note, the real exit code
+    preserved.
 
     With ``reclassify`` the scheduler probe is skipped and a run already
     booked failed is re-judged from its logs alone: a match rewrites the
@@ -1447,6 +1546,7 @@ def record_run_exit(store, project_root, run_id, actor, reclassify=False,
             "run_id": run_id,
             "state": "running",
             "scheduler_state": scheduler_state,
+            "detail": "run is still running; no state written",
         }
     if state == "gone":
         return {
@@ -1471,7 +1571,15 @@ def record_run_exit(store, project_root, run_id, actor, reclassify=False,
             "detail": "exit file holds no numeric exit code (partial write) "
                       "and the recorded process is gone",
         }
-    final = "completed" if exit_code == 0 else "failed"
+    # The scheduler's terminal word outranks the process exit code: a
+    # scancel'ed, timed-out or OOM-killed job can still report 0:0, and
+    # booking that as completed corrupts the ledger (the polar_cap OOM
+    # incident).  COMPLETED (or no scheduler word at all, e.g. direct)
+    # keeps the exit-code classification.
+    if scheduler_state and scheduler_state != "COMPLETED":
+        final = "failed"
+    else:
+        final = "completed" if exit_code == 0 else "failed"
     anomaly = None
     if final == "failed":
         err_text, out_text = _probe_run_logs(profile, identity)
@@ -1490,6 +1598,8 @@ def record_run_exit(store, project_root, run_id, actor, reclassify=False,
         identity["scheduler"] = scheduler
     event_payload = {"run_id": run_id, "site_id": site_id, "status": final,
                      "exit_code": exit_code}
+    if scheduler_state:
+        event_payload["scheduler_state"] = scheduler_state
     if anomaly is not None:
         event_payload["exit_anomaly"] = anomaly
     _book_run(
@@ -1580,6 +1690,92 @@ def record_run_abort(store, project_root, run_id, reason, actor,
         "state": "aborted",
         "reason": reason.strip(),
         "previous_status": status,
+    }
+
+
+def record_run_correct(store, project_root, run_id, status, reason, actor,
+                       case_slug=None):
+    """Human correction between the two booked terminal states
+    (completed <-> failed) — the counterpart of ``--reclassify``: that one
+    re-judges a failed run from log evidence, this one records a human
+    declaration (e.g. a run booked completed before the scheduler word was
+    consulted, see the CANCELLED 0:0 incident).  Gates before any write:
+    ``--reason`` is mandatory (it lands in the identity payload and the
+    audit event), the run must exist and already be terminal — an
+    in-flight run must reach its terminal state through ``record
+    run-exit`` first.  Correcting to the same state is a no-op."""
+    if status not in {"completed", "failed"}:
+        raise PlanError("--status must be one of: completed, failed")
+    if not reason or not reason.strip():
+        raise PlanError("--reason must be non-empty")
+    case = _require_case(store, project_root, case_slug)
+    run_id = run_id or case.get("current", {}).get("run_id", "")
+    if not run_id:
+        raise PlanError(
+            "Case has no current run",
+            "needs_decision",
+            [{"field": "run", "question": "select the run to correct"}],
+        )
+    identity = _run_identity(case, run_id)
+    if identity is None:
+        raise PlanError(
+            "unknown run identity: %s" % run_id,
+            "needs_decision",
+            [{"field": "run", "question": "select a known run id"}],
+        )
+    previous = identity.get("status", "")
+    if previous not in {"completed", "failed"}:
+        raise PlanError(
+            "run %s is %s; run-correct only rewrites a terminal state "
+            "(completed/failed) — record run-exit first"
+            % (run_id, previous or "unknown"))
+    if previous == status:
+        return {
+            "schema_version": 1,
+            "kind": "entity-ledger.record.run-correct",
+            "ok": True,
+            "state_mutated": False,
+            "case_uid": case["case_uid"],
+            "run_id": run_id,
+            "state": status,
+            "detail": "run is already %s; nothing to correct" % status,
+        }
+    payload = dict(identity)
+    payload["status"] = status
+    payload["correction"] = {"from": previous, "to": status,
+                             "reason": reason.strip(),
+                             "corrected_at": now_utc(),
+                             "corrected_by": actor.get("run_id", "")}
+    current = dict(case["current"])
+    readiness = dict(current.get("readiness", {}))
+    if current.get("run_id") == run_id:
+        readiness["run"] = status
+        current["readiness"] = readiness
+    with store.transaction() as connection:
+        connection.execute(
+            "UPDATE identities SET payload_json=? WHERE case_uid=? AND "
+            "dimension='run' AND identity_id=?",
+            (canonical_json(payload), case["case_uid"], run_id),
+        )
+        connection.execute(
+            "UPDATE cases SET current_json=?,updated_at=? WHERE case_uid=?",
+            (canonical_json(current), now_utc(), case["case_uid"]),
+        )
+        store.record_event(
+            case["case_uid"], None, "record.run-correct",
+            {"run_id": run_id, "from": previous, "to": status,
+             "reason": reason.strip()},
+            actor, connection)
+    return {
+        "schema_version": 1,
+        "kind": "entity-ledger.record.run-correct",
+        "ok": True,
+        "state_mutated": True,
+        "case_uid": case["case_uid"],
+        "run_id": run_id,
+        "state": status,
+        "previous_status": previous,
+        "reason": reason.strip(),
     }
 
 

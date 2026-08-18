@@ -108,9 +108,11 @@ python3 scripts/entityctl.py snapshot-source --project-root <project>
 python3 scripts/entityctl.py \
   --actor-run-id <run-id> --actor-provider <provider> \
   record run-prepare --project-root <project> --toml <input.toml> --site <site> [...]
-python3 scripts/entityctl.py record run-launch --project-root <project> [--run-id <id>]
+python3 scripts/entityctl.py record run-launch --project-root <project> [--run-id <id>] [--resubmit]
 python3 scripts/entityctl.py record run-exit  --project-root <project> [--run-id <id>] [--reclassify]
 python3 scripts/entityctl.py record run-abort --project-root <project> [--run-id <id>] --reason "<原因>"
+python3 scripts/entityctl.py record run-correct --project-root <project> [--run-id <id>] \
+  --status <completed|failed> --reason "<原因>"
 python3 scripts/entityctl.py record build --project-root <project> --site <site> \
   --checkpoint <deps-checkpoint.json> --executable <path>
 python3 scripts/entityctl.py record data --project-root <project> [--run-id <id>]
@@ -131,6 +133,14 @@ python3 scripts/entityctl.py record relocate --project-root <project> \
   --dimension <build|run|data> --identity-id <id> --to <新绝对路径>
 ```
 
+错误契约：失败输出 `{"ok": false, "status": ..., "error": ...,
+"retryable": ...}`（exit 2)。**只有 `status: "anomaly"`（瞬时/外部
+故障，如 SSH 断连、远端崩溃）才值得原样重试**，此时 `retryable` 为
+`true`;`invalid_request`、`needs_decision` 等其余 status 都是确定性
+错误（`retryable: false`)，原样重试永远无效——必须改变输入，或把
+`decisions` 里的问题升级给用户。不要把每条调用都包进固定次数的重试
+循环。
+
 关键语义：
 
 - `record run-prepare` 要求参数已确认（pgen skill 的
@@ -138,16 +148,31 @@ python3 scripts/entityctl.py record relocate --project-root <project> \
   `<input>.decisions.json`）；TOML 改动后需重新确认。
 - `record run-launch` 的 receipt 保证 exactly-once：重复执行不会
   重复提交，进程中断后重跑会认领已提交的作业；绕过 Ledger 自己提交
-  的作业用 `--adopt-job` / `--adopt-pid` 认领进台账。
+  的作业用 `--adopt-job` / `--adopt-pid` 认领进台账。Ledger 提交的
+  job 已终态且失败（秒挂、CANCELLED 等）时用 `--resubmit` 重提：
+  会先探测旧 job 确已死亡（在跑或探测不到终态都拒绝），新提交拿
+  自己的 exactly-once 收据（exactly-once 按"每次提交"计，不是
+  "每个 run 一次")，旧 scheduler 记录移入 identity 的
+  `prior_submissions`，事件标注 `resubmit: true`。
 - run 上了调度器后就是在途事实，不占用项目状态；等待期间你可以去
   分析上一个 run 或开发下一个 PGen，`status --live` 随时探测进度。
-- `record run-exit` 终态非零退出时会用 run_root 日志证据识别已知的
+- `record run-exit` 先信调度器终态词再信退出码：sacct 报
+  CANCELLED/TIMEOUT/OUT_OF_MEMORY 等非 COMPLETED 词时一律记
+  failed（即使退出码是 0:0——被 scancel/OOM 杀掉的 job 也能报干净
+  退出码）,scheduler_state 一并写进事件；COMPLETED 或无调度器词
+  （direct）时按退出码分类。终态非零退出时会用 run_root 日志证据识别已知的
   退出阶段 teardown abort：stdout（去 ANSI）最后一步满足
   `Step: N [of M]` 且 `N >= M - 1`，stderr 尾部命中已知 glibc
   `malloc_consolidate()` abort 签名——两组证据齐备时记 completed 并附
   `exit_anomaly`（真实 exit_code 保留），缺一维持 failed。已落账为
   failed 的 run 事后拿到日志证据时用 `--reclassify` 重判（跳过调度器
   探测，仅 failed 可用，其余状态报错零写入）。
+- `record run-correct` 是人工更正原语：已落账的终态记错了（例如
+  CANCELLED 0:0 被旧版本误记 completed）时，用 `--status
+  completed|failed --reason <原因>` 在 completed/failed 之间更正；
+  在途 run 拒绝（先 run-exit 到终态），更正为相同状态是 no-op。
+  与 `--reclassify` 并存：reclassify 按日志证据重判，run-correct
+  是人工声明，reason 必填并落进 identity 与审计事件。
 - `record run-abort` 是卡死 run 的显式逃逸口：site 永久不可达（机器
   退役、SSH 失效）或确认死亡的在途 run，由人工声明放弃。`--reason`
   必填并落进 identity 与审计事件；仅对在途 run 可用（已终态报错零

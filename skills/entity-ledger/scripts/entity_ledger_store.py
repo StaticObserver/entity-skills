@@ -373,7 +373,11 @@ class OperationStore(object):
                 "SELECT profile_json FROM sites WHERE site_id=?", (site_id,)
             ).fetchone()
             if row is None:
-                raise StoreError("unknown site_id: %s" % site_id)
+                known = [item[0] for item in connection.execute(
+                    "SELECT site_id FROM sites ORDER BY site_id")]
+                hint = ("; registered sites: %s" % ", ".join(known)
+                        ) if known else ""
+                raise StoreError("unknown site_id: %s%s" % (site_id, hint))
             return _load(row["profile_json"])
         finally:
             connection.close()
