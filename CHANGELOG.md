@@ -10,12 +10,20 @@ compatibility contracts and are not the product version.
 
 ## [Unreleased]
 
+## [0.7.1] - 2026-08-18
+
 ### Added
 
 - `project init` 现在同时创建 `analysis/scripts/` 通用脚本库骨架（幂等，
   存量 project 再次 init 也会补建）。
 - `record analysis` 增加 ssh 通道 manifest 证据探测的测试覆盖
   （`run_on_site` 假通道：happy path 落账 + 探测失败零写入）。
+
+### Fixed
+
+- env-build 生成的 `build-hdf5.sh` 克隆 HDF5 时把版本号的点替换成下划线，
+  拼成不存在的 tag `hdf5-1_14_6`；HDF5 自 1.12 起 tag 使用点号格式，
+  现直接使用 `hdf5-$VERSION`（如 `hdf5-1.14.6`）。
 
 ## [0.7.0] - 2026-08-03
 
