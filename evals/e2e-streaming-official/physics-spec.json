@@ -1,0 +1,131 @@
+{
+  "schema_version": 1,
+  "experiment_id": "e2e-streaming-official-v1",
+  "pgen": "streaming",
+  "official_pgen": {
+    "name": "streaming",
+    "source": "entity-v1.4.4 pgens/streaming/pgen.hpp (source-cache)",
+    "sha256": "debea2712c6bb4f8b2229886fbaea6dcbdc3b0dd59010d92e522d30d5d44361a",
+    "note": "the official PGen must be used unmodified; Gate B pins this fingerprint"
+  },
+  "engine": "SRPIC",
+  "metric": "Minkowski",
+  "coordinates": "Cartesian",
+  "dimension": 1,
+  "domain": {
+    "x1": [0.0, 16.0],
+    "active_cells": [128],
+    "field_boundaries": ["periodic", "periodic"],
+    "particle_boundaries": ["periodic", "periodic"]
+  },
+  "species": [
+    {
+      "name": "e-stream-plus",
+      "charge_sign": -1,
+      "mass_ratio": 1.0,
+      "density": 0.5,
+      "ppc0": 32,
+      "temperature": 0.0001,
+      "four_velocity": [0.2, 0.0, 0.0]
+    },
+    {
+      "name": "e-bg-1",
+      "charge_sign": 1,
+      "mass_ratio": 1.0,
+      "density": 0.5,
+      "ppc0": 32,
+      "temperature": 0.0001,
+      "four_velocity": [0.0, 0.0, 0.0]
+    },
+    {
+      "name": "e-stream-minus",
+      "charge_sign": -1,
+      "mass_ratio": 1.0,
+      "density": 0.5,
+      "ppc0": 32,
+      "temperature": 0.0001,
+      "four_velocity": [-0.2, 0.0, 0.0]
+    },
+    {
+      "name": "e-bg-2",
+      "charge_sign": 1,
+      "mass_ratio": 1.0,
+      "density": 0.5,
+      "ppc0": 32,
+      "temperature": 0.0001,
+      "four_velocity": [0.0, 0.0, 0.0]
+    }
+  ],
+  "initial_fields": {
+    "E": [0.0, 0.0, 0.0],
+    "B": [0.0, 0.0, 0.0],
+    "note": "classic unmagnetized two-stream (official twostream.toml has no background B); the streaming PGen defaults Bmag=0"
+  },
+  "random_seed": {
+    "value": 20260805,
+    "calibration": "resolved-gold-run-2026-08-09",
+    "note": "the official streaming PGen exposes no seed knob: particle loading uses the kernel's global random sequence; the effective default is the binary behavior recorded in the gold run (no TOML entry exists to freeze)"
+  },
+  "compile": {
+    "backend": "cuda",
+    "arch": "VOLTA70",
+    "precision": "single",
+    "deposit": "zigzag",
+    "shape_order": 1,
+    "output": true,
+    "mpi": false,
+    "debug": false,
+    "tests": false,
+    "cxx_standard": 20
+  },
+  "site": {
+    "name": "astro-streaming",
+    "ssh_alias": "astro",
+    "site_root": "/home/yangyangcai/entity-compute",
+    "scheduler": "slurm",
+    "note": "0.7.0 site-tree layout (site_root tree, entity-site.yaml marker); registered by the pilot with the verified VOLTA70 deps stack"
+  },
+  "resources": {
+    "scheduler": "slurm",
+    "run_job": {
+      "partition": "fat",
+      "gres": "gpu:V100:1",
+      "qos": "qos512",
+      "time_limit": null,
+      "nodes": 1,
+      "tasks": 1,
+      "gpus": 1,
+      "walltime_ceiling": "00:10:00",
+      "note": "no --time by user decision (2026-08-05); the fat partition default MaxTime applies. walltime_ceiling is the eval budget Gate C checks sacct Elapsed against, not a Slurm directive"
+    },
+    "build_job": {
+      "partition": "fat",
+      "cpus": 32,
+      "gres": null,
+      "note": "compilation also runs as a Slurm CPU-only job; the mgmt login node forbids heavy work"
+    },
+    "analysis_job": {
+      "partitions": ["intelhigh", "amdlow"],
+      "note": "analysis/rendering jobs go to intelhigh (amdlow when queued); never fat — checkable item, adjudicated by Gate A from the transcript"
+    }
+  },
+  "required_outputs": {
+    "field_snapshots_min": 2,
+    "particle_snapshots_min": 2,
+    "field_quantities": ["E", "B", "J", "Rho"],
+    "particle_quantities": ["x1", "ux1", "ux2", "ux3", "weight", "species"]
+  },
+  "output": {
+    "particle_stride_max": 20
+  },
+  "runtime": {
+    "status": "calibrated-gold-run-2026-08-09",
+    "final_time": 50.0,
+    "timestep": null,
+    "cfl": 0.5,
+    "field_interval": 5.0,
+    "particle_interval": 5.0,
+    "stats_interval": 10,
+    "note": "calibrated by the 2026-08-09 gold run (run-879cd51744bad483, V100): final_time=50 amply covers the instability (growth from noise, saturation at t~13.8, settled post-saturation behavior); single-job walltime ~2 s compute on the V100 (Slurm elapsed 2 s), far under the 10 min budget"
+  }
+}

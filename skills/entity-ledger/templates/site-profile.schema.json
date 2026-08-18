@@ -2,7 +2,7 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "title": "Entity Ledger Site profile",
   "type": "object",
-  "required": ["schema_version", "site_id", "transport", "scheduler", "roots", "policy"],
+  "required": ["schema_version", "site_id", "transport", "scheduler"],
   "additionalProperties": true,
   "properties": {
     "schema_version": {"const": 1},
@@ -30,9 +30,14 @@
         "kind": {"enum": ["none", "slurm", "pbs", "custom"]}
       }
     },
+    "site_root": {
+      "type": "string",
+      "pattern": "^/",
+      "description": "Computation Site tree root. When present, new build/run/staging resources land in <site_root>/projects/<project>/{builds,runs,staging}/<case>/<id> and roots below is only a legacy fallback."
+    },
     "roots": {
       "type": "object",
-      "description": "Absolute paths on this Site; independent roots, no shared parent required.",
+      "description": "Legacy layout: independent absolute roots, no shared parent required. Profiles with site_root derive the execution roots from the site tree instead.",
       "properties": {
         "source_root": {"type": "string", "pattern": "^/"},
         "build_root": {"type": "string", "pattern": "^/"},
@@ -42,6 +47,46 @@
       },
       "additionalProperties": {"type": "string", "pattern": "^/"}
     },
+    "machine": {
+      "type": "object",
+      "description": "Machine facts probed by `entityctl site discover` and recorded in the site archive.",
+      "properties": {
+        "os": {"type": "string"},
+        "arch": {"type": "string"},
+        "gpus": {"type": "array", "items": {"type": "string"}}
+      },
+      "additionalProperties": true
+    },
+    "projects": {
+      "type": "array",
+      "items": {"type": "string"},
+      "description": "Project slugs that have a subtree under <site_root>/projects/."
+    },
+    "deps": {
+      "type": "array",
+      "description": "Shared dependency stacks registered for this Site (see the site archive deps registry).",
+      "items": {
+        "type": "object",
+        "required": ["stack_id"],
+        "properties": {
+          "stack_id": {"type": "string"},
+          "status": {"enum": ["verified", "suspect", "broken"]},
+          "packages": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": {"type": "string"},
+                "version": {"type": "string"},
+                "prefix": {"type": "string"}
+              }
+            }
+          },
+          "recipe": {"type": "string"}
+        },
+        "additionalProperties": true
+      }
+    },
     "policy": {
       "type": "object",
       "description": "Safe defaults; run `entityctl site discover <site>` to enumerate legal values before filling these.",
@@ -49,6 +94,11 @@
         "default_partition": {"type": "string"},
         "default_qos": {"type": "string"},
         "default_submit_user": {"type": "string"},
+        "default_gres": {
+          "type": "string",
+          "pattern": "^gpu(:[A-Za-z0-9_.-]+)?:[0-9]+$",
+          "description": "Slurm gres spec gpu[:type]:count (e.g. gpu:V100:1); used when render-run/record run-prepare pass no explicit --gres. Slurm backend only."
+        },
         "default_cpus_per_gpu": {"type": "integer", "minimum": 1},
         "max_cpu_per_gpu": {"type": "integer", "minimum": 1}
       },

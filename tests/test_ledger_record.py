@@ -314,6 +314,72 @@ class RecordTest(unittest.TestCase):
         self.assertEqual(board["data"]["state"], "inventoried")
         self.assertEqual(board["data"]["detail"], "3 files")
 
+    # B2: record run-correct rewrites a booked terminal state by human
+    # declaration (the counterpart of --reclassify's evidence re-judgment)
+
+    def _terminal_run(self, status):
+        self._register_run()
+        case = self.store.get_case(self.case_uid)
+        identity = dict(case["identities"]["run"]["items"][0])
+        identity["status"] = status
+        self.store.add_identity(self.case_uid, "run", identity["id"],
+                                identity, True)
+        return identity["id"]
+
+    def _correct(self, status, reason="correction"):
+        return self.cli(
+            "--actor-run-id", "correct-test", "record", "run-correct",
+            "--project-root", self.project, "--status", status,
+            "--reason", reason)
+
+    def test_run_correct_rewrites_state_and_books_event(self):
+        self._terminal_run("completed")
+        code, payload = self._correct(
+            "failed", "sacct actually shows CANCELLED 0:0; misrecorded as "
+            "completed during migration week")
+        self.assertEqual(code, 0, payload)
+        self.assertTrue(payload["state_mutated"])
+        self.assertEqual(payload["state"], "failed")
+        self.assertEqual(payload["previous_status"], "completed")
+        case = self.store.get_case(self.case_uid)
+        identity = case["identities"]["run"]["items"][0]
+        self.assertEqual(identity["status"], "failed")
+        correction = identity["correction"]
+        self.assertEqual(correction["from"], "completed")
+        self.assertEqual(correction["to"], "failed")
+        self.assertIn("CANCELLED", correction["reason"])
+        self.assertEqual(correction["corrected_by"], "correct-test")
+        self.assertEqual(case["current"]["readiness"]["run"], "failed")
+        events = self.store.export()["events"]
+        self.assertEqual(events[-1]["event_type"], "record.run-correct")
+        self.assertEqual(events[-1]["payload"]["from"], "completed")
+        self.assertEqual(events[-1]["payload"]["to"], "failed")
+        self.assertIn("CANCELLED", events[-1]["payload"]["reason"])
+        self.assertEqual(events[-1]["actor"]["run_id"], "correct-test")
+
+    def test_run_correct_to_same_state_is_a_noop(self):
+        self._terminal_run("failed")
+        events_before = len(self.store.export()["events"])
+        code, payload = self._correct("failed")
+        self.assertEqual(code, 0, payload)
+        self.assertFalse(payload["state_mutated"])
+        self.assertIn("nothing to correct", payload["detail"])
+        case = self.store.get_case(self.case_uid)
+        identity = case["identities"]["run"]["items"][0]
+        self.assertNotIn("correction", identity)
+        self.assertEqual(len(self.store.export()["events"]), events_before)
+
+    def test_run_correct_refuses_inflight_run_with_zero_writes(self):
+        self._register_run()  # status submitted
+        events_before = len(self.store.export()["events"])
+        code, payload = self._correct("failed")
+        self.assertEqual(code, 2)
+        self.assertIn("run-exit", payload["error"])
+        case = self.store.get_case(self.case_uid)
+        identity = case["identities"]["run"]["items"][0]
+        self.assertEqual(identity["status"], "submitted")
+        self.assertEqual(len(self.store.export()["events"]), events_before)
+
 
 if __name__ == "__main__":
     unittest.main()

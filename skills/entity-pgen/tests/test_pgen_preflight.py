@@ -122,11 +122,11 @@ class PGenPreflightTest(unittest.TestCase):
         os.symlink(self.checkout, link)
         target = "laptop:%s" % os.path.join(link, "pgen.hpp")
         code, payload, error = self.preflight("write", target)
-        self.assertEqual(code, 2, error)
-        self.assertEqual(payload["mode"], "router-required")
+        self.assertEqual(code, 0, error)
+        self.assertEqual(payload["mode"], "managed-write")
         self.assertEqual(payload["case_uid"], "case-smoke-uid")
 
-    def test_registered_source_is_managed_and_write_fails_closed(self):
+    def test_registered_source_allows_managed_write(self):
         self.create_case()
         target = "laptop:%s" % os.path.join(self.checkout, "pgen.hpp")
         code, payload, error = self.preflight("read", target)
@@ -134,11 +134,56 @@ class PGenPreflightTest(unittest.TestCase):
         self.assertEqual(payload["mode"], "managed-readonly")
         self.assertEqual(payload["case_uid"], "case-smoke-uid")
 
-        code, payload, unused = self.preflight("write", target)
-        self.assertEqual(code, 2)
+        code, payload, error = self.preflight("write", target)
+        self.assertEqual(code, 0, error)
+        self.assertTrue(payload["allowed"])
+        self.assertEqual(payload["mode"], "managed-write")
+        self.assertEqual(payload["case_uid"], "case-smoke-uid")
+        self.assertIn("snapshot-source", payload["reason"])
+
+    def test_source_identity_pointing_at_authority_allows_managed_write(self):
+        self.create_case()
+        self.store.add_identity(
+            "case-smoke-uid", "source", "src-test",
+            {"id": "src-test", "kind": "source", "site_id": "laptop",
+             "root": {"site_id": "laptop", "path": self.checkout},
+             "fingerprint": "sha256:0"}, current=True)
+        target = "laptop:%s" % os.path.join(self.checkout, "pgen.hpp")
+        code, payload, error = self.preflight("write", target)
+        self.assertEqual(code, 0, error)
+        self.assertEqual(payload["mode"], "managed-write")
+
+    def test_build_identity_root_fails_closed(self):
+        self.create_case()
+        build_root = os.path.join(self.checkout, "build")
+        os.makedirs(build_root)
+        self.store.add_identity(
+            "case-smoke-uid", "build", "build-test",
+            {"id": "build-test", "kind": "build", "site_id": "laptop",
+             "root": {"site_id": "laptop", "path": build_root}}, current=True)
+        target = "laptop:%s" % os.path.join(build_root, "entity.x")
+        code, payload, error = self.preflight("write", target)
+        self.assertEqual(code, 2, error)
         self.assertFalse(payload["allowed"])
         self.assertEqual(payload["mode"], "router-required")
-        self.assertIn("v5 pgen Goal", payload["reason"])
+        self.assertIn("artifact", payload["reason"])
+
+    def test_active_run_root_fails_closed(self):
+        run_root = os.path.join(self.checkout, "runs", "run-1")
+        os.makedirs(run_root)
+        self.store.upsert_case(
+            "case-smoke-uid", "smoke", self.checkout,
+            {"authority": {"site_id": "laptop", "path": self.checkout},
+             "transfer_policy": "snapshot"},
+            {"source_id": "", "build_id": "", "run_id": "run-1",
+             "active_run": {"site_id": "laptop", "path": run_root},
+             "data_id": "", "analysis_id": ""},
+        )
+        target = "laptop:%s" % os.path.join(run_root, "input.toml")
+        code, payload, error = self.preflight("write", target)
+        self.assertEqual(code, 2, error)
+        self.assertFalse(payload["allowed"])
+        self.assertEqual(payload["mode"], "router-required")
 
     def test_unregistered_site_and_path_are_not_managed(self):
         self.create_case()

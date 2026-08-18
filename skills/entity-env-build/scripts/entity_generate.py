@@ -906,6 +906,27 @@ def cmd_build(args: argparse.Namespace) -> None:
             protocol_error("generate.build", msg)
         raise SystemExit(msg)
 
+    compile_cfg = req.get("compile", {})
+    if not isinstance(compile_cfg, dict):
+        compile_cfg = {}
+    build_dir = str(compile_cfg.get("build_dir") or default_build_dir(req))
+    if (not args.reuse_build_dir and not args.clean_build
+            and os.path.isdir(build_dir) and os.listdir(build_dir)):
+        msg = (
+            f"refusing to generate the build script: compile.build_dir points at "
+            f"the existing non-empty directory {build_dir}. "
+            "Re-configuring on top of it would re-link/overwrite the existing "
+            "build tree — if that tree is already registered in the Ledger, the "
+            "registered evidence (executable sha256) would diverge from the disk "
+            "contents. Use a new build_dir (a new build identity) for this round; "
+            "to confirm an in-place rebuild, explicitly pass --reuse-build-dir "
+            "(--clean-build empties the tree first and also counts as explicit "
+            "confirmation)."
+        )
+        if args.json:
+            protocol_error("generate.build", msg)
+        raise SystemExit(msg)
+
     if args.checkpoint:
         if not args.checkpoint.exists():
             msg = f"entity-deps.local.json not found: {args.checkpoint}"
@@ -1028,6 +1049,9 @@ def main() -> None:
     p_build.add_argument("--output", type=Path)
     p_build.add_argument("--clean-build", action="store_true",
                          help="Remove build tree before cmake configure (disables incremental build)")
+    p_build.add_argument("--reuse-build-dir", action="store_true",
+                         help="Allow compile.build_dir to point at an existing non-empty "
+                              "build tree (explicit confirmation of an in-place rebuild)")
     p_build.add_argument("--allow-warnings", action="store_true",
                          help="Allow compatibility.status=warn only when decisions.compatibility_warnings_accepted is set.")
     p_build.add_argument("--allow-stale-env", action="store_true",
@@ -1055,4 +1079,6 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    from _invocation_log import trace_invocation
+    with trace_invocation("entity-env-build", "entity_generate.py", sys.argv[1:], script_file=__file__):
+        main()

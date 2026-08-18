@@ -2,6 +2,13 @@
 > last_updated: <YYYY-MM-DD>
 
 <!--
+  [deprecated] site-notes has been superseded by the workspace
+  sites/<site>.yaml archive: prose goes into the archive's notes section,
+  structured information (transport/scheduler/site_root/deps registry) goes
+  into the corresponding sections; `entityctl site import-notes` can migrate
+  old notes in one pass. This template is kept only as a reference for the
+  legacy flow; for new sites, maintain sites/<site>.yaml directly.
+
   Template for ~/.entity-env-build/site-notes/<hostname>.md
   Generated at runtime by the AI agent — not shipped with the skill source.
 

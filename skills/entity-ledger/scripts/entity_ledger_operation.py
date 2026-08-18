@@ -198,8 +198,21 @@ class ExecutorClient(object):
         code, stdout, stderr = run_on_site(
             self.profile, ["python3", executor, command, "--request", request_path]
         )
-        result = _json_from_stdout(stdout, "Site executor")
-        if code != 0 or result.get("status") not in {"completed", "verified"}:
+        if code != 0:
+            # a crashed executor usually writes the real reason (e.g. a
+            # Python traceback) to stderr, not stdout — surface its tail
+            tail = stderr.strip()[-500:] if stderr.strip() else ""
+            raise OperationError(
+                "Site executor exited %d%s"
+                % (code, ": " + tail if tail else ""))
+        try:
+            result = _json_from_stdout(stdout, "Site executor")
+        except OperationError as exc:
+            head = (stdout or "").strip()[:200]
+            if head:
+                raise OperationError("%s (stdout: %s)" % (exc, head))
+            raise
+        if result.get("status") not in {"completed", "verified"}:
             raise OperationError(
                 result.get("message") or stderr.strip() or "Site executor failed"
             )
@@ -282,8 +295,8 @@ def _slurm_reconcile_job(profile, scheduler, job_id, live_state, observed_at):
     return divergences, remote_calls
 
 
-def status_for_project(store, project_root, live=False):
-    case = store.resolve_project(project_root)
+def status_for_project(store, project_root, live=False, case_slug=None):
+    case = store.resolve_project(project_root, case_slug)
     current = case["current"]
     run_id = current.get("run_id", "")
     run_identity = find_identity(
@@ -292,9 +305,15 @@ def status_for_project(store, project_root, live=False):
         "schema_version": 1, "kind": "entity-ledger.status", "ok": True,
         "state_mutated": False, "remote_calls": 0,
         "project_root": case.get("project_root"), "case_uid": case["case_uid"],
+        "case_id": case.get("case_id", ""),
+        "project_uid": case.get("project_uid"),
         "current": current, "run": run_identity, "live": None, "divergences": [],
     }
     if not live or not run_identity:
+        return result
+    if run_identity.get("status") == "aborted":
+        # human-declared dead (record run-abort): the Site is presumed
+        # unreachable, so probing it would only produce divergence noise
         return result
     scheduler = run_identity.get("scheduler", {})
     if not scheduler:

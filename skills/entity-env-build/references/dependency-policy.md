@@ -6,6 +6,13 @@ Use this reference when selecting C++ dependency sources during environment prob
 
 For C++ compilers and libraries, search in this order:
 
+0. **Site deps registry** — verified stacks exported by `entityctl site deps
+   <site> --json` (signature matching the current requirements) are reused
+   directly for their packages; see the lookup order in SKILL.md section 2.
+   The `env_sh` path in the registry is for human reading and auditing
+   only — the env-build environment is always rebuilt by
+   `entity_generate.py env` from the current checkpoint's packages; the
+   registry's env.sh is never sourced directly
 1. **System modules/packages** — `module load`, `dnf`/`apt`/`brew`, or system paths
 2. **Spack** — `spack find`, `spack load`
 3. **Source build** — last resort; generate scripts with `entity_generate.py deps`

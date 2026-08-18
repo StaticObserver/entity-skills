@@ -1,6 +1,6 @@
 ---
 name: entity-pgen
-description: Design, implement, explain, review, and modify Entity problem generators (PGen), together with their companion TOML configuration and docs/design.md. Suitable for well-scoped, clearly bounded PGen-domain work that can be used directly, including standalone new or existing PGens, initial fields or particles, boundaries, custom behavior, output, normalization, and PGen-TOML consistency. Writes inside ledger-managed cases are currently refused (managed writes must be recorded via the ledger's record primitive); route case lifecycle, cross-domain work, builds, runs, unclassified failures, Entity core changes, and scientific analysis to the corresponding owning skill.
+description: Design, implement, explain, review, and modify Entity problem generators (PGen), together with their companion TOML configuration and docs/design.md. Suitable for well-scoped, clearly bounded PGen-domain work that can be used directly, including standalone new or existing PGens, initial fields or particles, boundaries, custom behavior, output, normalization, and PGen-TOML consistency. Writes directly inside a ledger-managed case source (source authority) are allowed — the ledger does not intervene in the PGen process; once changes settle, its snapshot-source primitive re-detects and records them. Registered build/run/data artifact roots and active run roots still refuse writes. Route case lifecycle, cross-domain work, builds, runs, unclassified failures, Entity core changes, and scientific analysis to the corresponding owning skill.
 ---
 
 # Entity PGen
@@ -19,10 +19,14 @@ Classify the task before loading domain references or modifying files:
   directly under standalone or managed paths. Do not create procedural artifacts.
 - **Standalone write**: modifies only PGen-owned artifacts, with an exact target
   location that is not inside a ledger-managed case. May proceed directly.
-- **Managed write**: modifies a source locator already registered in the ledger
-  v5 store. Currently always refused: managed writes must be recorded via the
-  ledger's record primitive; the pgen skill does not post to the ledger directly.
-  Route the request to `entity-ledger`.
+- **Managed write**: modifies files inside a registered case's source authority.
+  May proceed directly: the ledger does not intervene in the PGen process (free
+  exploration); once changes settle, `entity-ledger`'s
+  `entityctl snapshot-source` re-detects and records the new source identity.
+  After a TOML change, `confirm` must be re-run before submitting a run.
+  Registered identity roots (build/run/data artifacts) and active run roots are
+  the ledger's evidence, are not part of the PGen working surface, and still
+  refuse writes.
 
 Before every write, run:
 
@@ -35,13 +39,20 @@ python3 <entity-pgen-skill>/scripts/pgen_preflight.py \
 
 Resolve `<entity-pgen-skill>` from this `SKILL.md`; do not assume the current
 working directory is the skill directory. Run preflight for each intended
-target, or for their narrowest common parent directory. Proceed only when it
-returns `"allowed": true`. Preflight queries the ledger v5 store to check
-whether the target locator falls under a registered case source, identity root,
-or active run; it never infers managed status from ancestor directories. If it
-reports `router-required`, do not write; return the target, the detected case,
-the requested change, and the reason to `entity-ledger`. Never modify the
-ledger's control state.
+target, or for their narrowest common parent directory. `--ledger-home` may be
+omitted: when omitted, the controller location is determined by the workspace
+resolution order (the `ENTITY_LEDGER_HOME` environment variable also counts as
+explicit; then, in order, the `ENTITY_WORKSPACE` environment variable >
+the `~/.entity-ledger/active-workspace` pointer > the legacy `~/.entity-ledger`
+compatibility fallback), pointing at the workspace's `.ledger/`.
+Proceed only when it returns `"allowed": true`. Preflight queries the ledger
+store and distinguishes whether the target locator falls under a case's source
+authority (`managed-write`, allowed), a registered artifact root (build/run/data
+identity) or an active run (`router-required`, refused), or is unregistered
+(`standalone-write`, allowed); it never infers managed status from ancestor
+directories. If it reports `router-required`, do not write; return the target,
+the detected case, the requested change, and the reason to `entity-ledger`.
+Never modify the ledger's control state.
 
 JSON is always printed, even on failure (exit code 2). The `store_present`
 field indicates whether the registry was actually queried: `true` means the

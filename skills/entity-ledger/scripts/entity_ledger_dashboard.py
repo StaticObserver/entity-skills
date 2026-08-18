@@ -14,6 +14,12 @@ import os
 
 from entity_ledger_common import find_identity, load_simulation_confirmation
 from entity_ledger_facts import _git_revision
+from entity_ledger_store import StoreError
+from entity_ledger_workspace import (
+    WorkspaceError,
+    load_project_yaml,
+    workspace_for_ledger_home,
+)
 
 
 BOARD_ORDER = ["source", "pgen", "build", "run", "data", "analysis"]
@@ -21,29 +27,45 @@ BOARD_ORDER = ["source", "pgen", "build", "run", "data", "analysis"]
 
 def _pgen_cell(project_root):
     """PGen readiness from local confirmation records: a TOML input counts as
-    confirmed only when its ``.decisions.json`` still matches the file bytes."""
+    confirmed only when its ``.decisions.json`` still matches the file bytes.
+    Scans the project root and, for workspace projects, the registered
+    source authority directory (project.yaml ``source``)."""
     if not os.path.isdir(project_root):
         return {"state": "unknown", "detail": "project root not on this machine"}
+    scan_roots = [project_root]
+    try:
+        source_rel = load_project_yaml(project_root).get("source") or ""
+    except WorkspaceError:
+        source_rel = ""
+    if source_rel:
+        source_dir = os.path.join(project_root, source_rel)
+        if (os.path.isdir(source_dir)
+                and os.path.realpath(source_dir) != os.path.realpath(project_root)):
+            scan_roots.append(source_dir)
     confirmed = []
     unconfirmed = []
-    for name in sorted(os.listdir(project_root)):
-        if not name.endswith(".toml"):
-            continue
-        unused_record, matches = load_simulation_confirmation(
-            os.path.join(project_root, name))
-        if matches:
-            confirmed.append(name)
-        else:
-            unconfirmed.append(name)
+    for root in scan_roots:
+        prefix = "" if root == project_root else (
+            os.path.relpath(root, project_root) + "/")
+        for name in sorted(os.listdir(root)):
+            if not name.endswith(".toml"):
+                continue
+            unused_record, matches = load_simulation_confirmation(
+                os.path.join(root, name))
+            if matches:
+                confirmed.append(prefix + name)
+            else:
+                unconfirmed.append(prefix + name)
     if confirmed and not unconfirmed:
         return {"state": "confirmed", "detail": ", ".join(confirmed)}
     if confirmed:
         return {"state": "partial",
-                "detail": "confirmed %s; unconfirmed %s" % (", ".join(confirmed),
-                                                            ", ".join(unconfirmed))}
+                "detail": "confirmed %s; unconfirmed %s" % (
+                    ", ".join(confirmed), ", ".join(unconfirmed))}
     if unconfirmed:
         return {"state": "unconfirmed", "detail": ", ".join(unconfirmed)}
-    return {"state": "unknown", "detail": "no TOML inputs under project root"}
+    return {"state": "unknown",
+            "detail": "no TOML inputs under project root or source authority"}
 
 
 def _source_cell(case, project_root, alerts):
@@ -108,6 +130,8 @@ def _run_cell(case, current, live):
         detail += "; exit %s" % payload["exit_code"]
     if payload.get("exit_anomaly"):
         detail += "; known benign teardown abort"
+    if payload.get("abort"):
+        detail += "; aborted manually (%s)" % payload["abort"].get("reason", "")
     if live:
         live_state = live.get("state", "")
         if live_state == "EXITED":
@@ -137,6 +161,31 @@ def _data_cell(case, current):
             "detail": "%s files" % payload.get("files", "?")}
 
 
+def _analysis_cell(case, current):
+    """Readiness of the current analysis identity.  Staleness is derived at
+    read time (the board is always computed from stored facts): an analysis
+    is stale exactly when its parent data is no longer the current data."""
+    analysis_id = current.get("analysis_id", "")
+    payload = find_identity(
+        case.get("identities", {}).get("analysis", {}).get("items", []),
+        analysis_id)
+    if not analysis_id or payload is None:
+        return {"state": "none", "detail": "—"}
+    parent_data = payload.get("parents", {}).get("data_id", "")
+    stale = bool(parent_data) and parent_data != current.get("data_id", "")
+    detail = "%s @ %s" % (payload.get("script", analysis_id),
+                          payload.get("site_id", "?"))
+    if payload.get("manifest"):
+        detail += " (manifest %s)" % payload["manifest"]
+    if payload.get("env_stack"):
+        detail += " (env %s)" % payload["env_stack"]
+    if payload.get("hardcoded_paths"):
+        detail += "; script has hardcoded paths (legacy, parameterization recommended)"
+    if stale:
+        detail += "; parent data is no longer current"
+    return {"state": "stale" if stale else "established", "detail": detail}
+
+
 def derive_next_steps(board, run_id):
     """The deriver: map board facts to suggested next steps.  These rules
     replace a stored state machine — they are computed on every read and can
@@ -149,6 +198,9 @@ def derive_next_steps(board, run_id):
     elif run_state == "failed":
         steps.append("run %s failed; check run_root logs to find the cause, "
                      "fix it and rerun" % run_id)
+    elif run_state == "aborted":
+        steps.append("run %s was aborted manually; to continue, derive a new "
+                     "run with changed inputs/parameters and rerun" % run_id)
     elif run_state in {"submitted", "running"}:
         steps.append("run %s is running; track the terminal state with "
                      "status --live or record run-exit" % run_id)
@@ -172,10 +224,37 @@ def derive_next_steps(board, run_id):
     return steps[:4]
 
 
-def build_dashboard(store, project_root, status=None):
+def _intent_drift(store, case, db_intent):
+    """Detect a hand-edited intent.md that diverged from the db intent (the
+    db is the authority).  Returns the drift note or ""."""
+    if not db_intent:
+        return ""
+    workspace = workspace_for_ledger_home(store.home)
+    if not workspace or not case.get("project_uid"):
+        return ""
+    try:
+        project = store.get_project(case["project_uid"])
+    except StoreError:
+        return ""
+    path = os.path.join(
+        workspace, "projects", project["slug"], "cases",
+        case["case_id"], "intent.md")
+    if not os.path.isfile(path):
+        return ""
+    try:
+        with open(path, "r") as handle:
+            text = handle.read().strip()
+    except (IOError, OSError):
+        return ""
+    if text == db_intent:
+        return ""
+    return "intent.md diverged from the db record (db is authoritative): %s" % path
+
+
+def build_dashboard(store, project_root, status=None, case_slug=None):
     """Assemble the dashboard from controller-local facts.  ``status`` is an
     optional status_for_project result supplying live probes and divergences."""
-    case = store.resolve_project(project_root)
+    case = store.resolve_project(project_root, case_slug)
     current = case.get("current", {})
     live = (status or {}).get("live")
     alerts = []
@@ -188,8 +267,7 @@ def build_dashboard(store, project_root, status=None):
         "build": _build_cell(case, current),
         "run": _run_cell(case, current, live),
         "data": _data_cell(case, current),
-        "analysis": {"state": "none" if not current.get("analysis_id") else "ready",
-                     "detail": current.get("analysis_id") or "—"},
+        "analysis": _analysis_cell(case, current),
     }
     ledger = []
     for item in case.get("identities", {}).get("run", {}).get("items", []):
@@ -200,20 +278,28 @@ def build_dashboard(store, project_root, status=None):
             "scheduler": _scheduler_brief(item),
         })
     # The intent is the only stored pointer (not derivable): it is written
-    # explicitly into current["intent"] by entityctl record intent; when it has
-    # not been written the dashboard shows "not recorded"
+    # explicitly into current["intent"] by entityctl record intent; when it
+    # has not been written the dashboard shows "not recorded"
     intent_record = current.get("intent") or {}
     intent = intent_record.get("text") or "not recorded"
     if intent_record.get("recorded_at") and intent_record.get("text"):
         intent += " (recorded at %s)" % intent_record["recorded_at"]
     pending = list(alerts)
+    drift = _intent_drift(store, case, intent_record.get("text", ""))
+    if drift:
+        pending.append(drift)
     if board["pgen"]["state"] in {"unconfirmed", "partial"}:
         pending.append("simulation parameters unconfirmed: %s" % board["pgen"]["detail"])
+    project = None
+    if case.get("project_uid"):
+        project = store.get_project(case["project_uid"])
     return {
         "schema_version": 1, "kind": "entity-ledger.dashboard",
         "state_mutated": False,
         "remote_calls": (status or {}).get("remote_calls", 0),
         "case_uid": case["case_uid"], "case_id": case.get("case_id", ""),
+        "project_uid": case.get("project_uid"),
+        "project": project,
         "project_root": case.get("project_root") or project_root,
         "updated_at": case.get("updated_at", ""),
         "intent": intent, "board": board, "runs": ledger,
@@ -223,13 +309,20 @@ def build_dashboard(store, project_root, status=None):
     }
 
 
+def _project_line(dashboard):
+    project = dashboard.get("project")
+    if project:
+        return "Project  %s (%s)" % (project["slug"], dashboard["project_root"])
+    return "Project  %s" % dashboard["project_root"]
+
+
 def render_text(dashboard):
     """Compact human-readable rendering; normal output stays well under 4 KiB."""
     lines = [
         "Case %s (%s)  updated %s" % (dashboard["case_id"],
                                       dashboard["case_uid"],
                                       dashboard["updated_at"] or "?"),
-        "Project  %s" % dashboard["project_root"],
+        _project_line(dashboard),
         "Goal  %s" % dashboard["intent"],
         "",
         "Readiness board",

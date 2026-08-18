@@ -22,7 +22,7 @@ from entity_ledger_operation import status_for_project
 from entity_ledger_record import record_run_launch, record_run_prepare
 from entity_ledger_common import atomic_write_json
 import entity_ledger_common
-from entity_ledger_store import OperationStore
+from entity_ledger_store import OperationStore, STORE_SCHEMA_VERSION
 
 
 class LedgerV5Test(unittest.TestCase):
@@ -291,7 +291,8 @@ else:
             "input_name": "input.toml",
             "compute": {"nodes": 1, "tasks": 1, "gpus": 1, "cpus_per_task": 2,
                         "walltime": "00:10:00", "partition": "test", "qos": "",
-                        "submit_user": "tester", "precision": "double"},
+                        "submit_user": "tester", "precision": "double",
+                        "gres": "gpu:1"},
         })
         self.assertIn("srun %s -input input.toml" % self.executable, script)
         self.assertNotIn("srun %s input.toml" % self.executable, script)
@@ -435,7 +436,8 @@ print('|'.join([r['job_id'], r['job_name'], r['user'], r['run_root'],
             "executable": self.executable, "input_name": "input.toml",
             "compute": {"nodes": 1, "tasks": 1, "gpus": 1, "cpus_per_task": 2,
                         "walltime": "00:10:00", "partition": "", "qos": "",
-                        "submit_user": "tester", "precision": "double"},
+                        "submit_user": "tester", "precision": "double",
+                        "gres": ""},
         }
         first = RENDER_BACKENDS["direct"](run_spec)
         self.assertEqual(first, RENDER_BACKENDS["direct"](run_spec))
@@ -450,7 +452,8 @@ print('|'.join([r['job_id'], r['job_name'], r['user'], r['run_root'],
             "executable": self.executable, "input_name": "input.toml",
             "compute": {"nodes": 1, "tasks": 1, "gpus": 1, "cpus_per_task": 2,
                         "walltime": "", "partition": "", "qos": "",
-                        "submit_user": "tester", "precision": "double"},
+                        "submit_user": "tester", "precision": "double",
+                        "gres": ""},
         }
         first = RENDER_BACKENDS["direct"](run_spec)
         self.assertEqual(first, RENDER_BACKENDS["direct"](run_spec))
@@ -497,7 +500,8 @@ print('|'.join([r['job_id'], r['job_name'], r['user'], r['run_root'],
         version_file = os.path.join(ROOT, "skills", "entity-ledger", "VERSION")
         with open(version_file, "r") as handle:
             self.assertEqual(payload["runtime_bundle"]["version"], handle.read().strip())
-        self.assertEqual(payload["controller"]["store_schema_version"], 2)
+        self.assertEqual(payload["controller"]["store_schema_version"],
+                         STORE_SCHEMA_VERSION)
         self.assertEqual(payload["failures"], [])
 
     def test_doctor_fails_on_client_bundle_drift(self):
@@ -512,10 +516,48 @@ print('|'.join([r['job_id'], r['job_name'], r['user'], r['run_root'],
         self.assertFalse(payload["ok"])
         self.assertTrue(any("drifted" in failure for failure in payload["failures"]))
 
+    def test_doctor_project_root_is_a_guided_error_not_argparse(self):
+        # I5: doctor inspects the whole workspace/controller, so project
+        # filtering has nothing to act on — accept the flag and redirect
+        code, payload = self.cli("doctor", "--project-root", self.project)
+        self.assertEqual(code, 2)
+        self.assertFalse(payload["ok"])
+        self.assertEqual(payload["status"], "invalid_request")
+        self.assertIn("doctor is workspace-scoped", payload["error"])
+        self.assertIn("status --project-root", payload["error"])
+        self.assertFalse(payload["retryable"])
+
+    def _install_env(self, name):
+        fake_home = os.path.join(self.temp, name)
+        os.makedirs(fake_home)
+        return {"HOME": fake_home,
+                "ENTITY_SKILLS_HOME": os.path.join(fake_home, ".entity-skills")}
+
+    def test_install_provider_selects_one_client(self):
+        env = self._install_env("install-one")
+        with mock.patch.dict(os.environ, env):
+            code, payload = self.cli("install", "--provider", "claude")
+        self.assertEqual(code, 0, payload)
+        self.assertEqual(payload["providers"], ["claude"])
+        skills = os.path.join(env["HOME"], ".claude", "skills", "entity-ledger")
+        self.assertTrue(os.path.islink(skills))
+        self.assertFalse(os.path.exists(os.path.join(env["HOME"], ".codex")))
+        self.assertFalse(os.path.exists(os.path.join(env["HOME"], ".kimi-code")))
+
+    def test_install_default_projects_every_client(self):
+        env = self._install_env("install-all")
+        with mock.patch.dict(os.environ, env):
+            code, payload = self.cli("install")
+        self.assertEqual(code, 0, payload)
+        self.assertEqual(payload["providers"], ["codex", "claude", "kimi"])
+        for provider in ("codex", "claude", "kimi-code"):
+            self.assertTrue(os.path.islink(os.path.join(
+                env["HOME"], "." + provider, "skills", "entity-ledger")))
+
     def test_store_migrate_shell_reports_current_schema(self):
         code, payload = self.cli("store", "migrate")
         self.assertEqual(code, 0, payload)
-        self.assertEqual(payload["store_schema_version"], 2)
+        self.assertEqual(payload["store_schema_version"], STORE_SCHEMA_VERSION)
         self.assertFalse(payload["state_mutated"])
         empty_home = os.path.join(self.temp, "empty-controller")
         process = __import__("subprocess").Popen(
@@ -847,6 +889,46 @@ raise SystemExit(1)
         valid = dict(self.profile, site_id="ok-ssh")
         valid["transport"] = {"kind": "ssh", "ssh_alias": "deploy@login-1.example"}
         self.assertEqual(validate_site_profile(valid)["site_id"], "ok-ssh")
+
+    def test_site_add_rejects_bad_default_gres(self):
+        profile = dict(self.profile, site_id="bad-gres")
+        profile["policy"] = dict(self.profile["policy"],
+                                 default_gres="V100:1")
+        profile_path = os.path.join(self.temp, "bad-gres-site.json")
+        atomic_write_json(profile_path, profile)
+        code, payload = self.cli("site", "add", "--profile", profile_path)
+        self.assertEqual(code, 2)
+        self.assertFalse(payload["ok"])
+        self.assertFalse(payload["state_mutated"])
+        self.assertIn("default_gres", payload["error"])
+        # generic and typed forms are both legal
+        from entity_ledger_common import validate_site_profile
+        for gres in ("gpu:1", "gpu:V100:1"):
+            valid = dict(self.profile, site_id="ok-gres")
+            valid["policy"] = {"default_gres": gres}
+            self.assertEqual(validate_site_profile(valid)["site_id"], "ok-gres")
+
+    def test_site_discover_suggests_default_gres_for_single_gpu_type(self):
+        self._write_executable("sinfo", """print('gpu1|up|3-00:00:00|gpu:V100:1|1|48')
+""")
+        self._write_executable("sacctmgr", """print('normal')
+""")
+        code, payload = self.cli("site", "discover", "local-slurm")
+        self.assertEqual(code, 0, payload)
+        self.assertEqual(payload["suggested_policy"]["default_partition"], "gpu1")
+        self.assertEqual(payload["suggested_policy"]["default_gres"], "gpu:V100:1")
+
+    def test_site_discover_warns_on_multiple_gpu_types(self):
+        self._write_executable("sinfo", """print('fat|up|3-00:00:00|gpu:V100:1,gpu:A100:1|1|48')
+""")
+        self._write_executable("sacctmgr", """print('normal')
+""")
+        code, payload = self.cli("site", "discover", "local-slurm")
+        self.assertEqual(code, 0, payload)
+        self.assertNotIn("default_gres", payload["suggested_policy"])
+        self.assertTrue(any("default_gres" in warning
+                            for warning in payload["warnings"]))
+
 
 
 if __name__ == "__main__":

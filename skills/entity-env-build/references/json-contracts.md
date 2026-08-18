@@ -56,9 +56,15 @@ Required before validation/build:
 - a supported Entity version/dependency profile.
 
 `compile.build_dir` defaults to `entity.build_root` and is written back before
-script generation. All paths are absolute paths on `entity.site_id`; they do
-not imply a common parent directory. New workflows must use v2. Schema v1
-`checkout_root/workdir` exists only for explicit legacy compatibility.
+script generation. Guard: if that directory already exists and is non-empty
+(the typical accident is inheriting a stale `build_dir` from requirements
+copied from a previous round), generation is refused — re-linking on top of
+it would distort the evidence of the already-registered build; to confirm an
+in-place rebuild you must explicitly pass `--reuse-build-dir` (or
+`--clean-build`, which empties the tree first). All paths are absolute paths
+on `entity.site_id`; they do not imply a common parent directory.
+New workflows must use v2. Schema v1 `checkout_root/workdir` exists only for
+explicit legacy compatibility.
 
 ## entity-deps.local.json
 
@@ -78,6 +84,7 @@ The checkpoint has the same schema version as its request and records:
     "version_bucket": "",
     "dependency_profile": ""
   },
+  "stack_id": "",
   "candidates": {},
   "selected": {},
   "decisions": {},
@@ -88,6 +95,12 @@ The checkpoint has the same schema version as its request and records:
   "status": {"checkpoint": "partial", "satisfies_requirements_json": false, "ready_for_entity_build": false, "reuse_notes": []}
 }
 ```
+
+`stack_id` is an optional top-level field: it is written by
+`--from-registry` only when the checkpoint's `selected` exactly matches the
+packages of a registry stack; after `--from-discovery` fill-in or
+`record-install` changes `selected`, the field is removed and demoted to a
+`status.reuse_notes` record.
 
 Each selected dependency records the provider, prefix/bin/include/lib/config
 paths, version, compiler/MPI signature, environment additions, compile
@@ -129,6 +142,46 @@ Compatibility status:
 An override records a user decision and can demote a known check to a
 warning. It cannot mask missing paths, source/build site mismatch, unsupported
 schema/versions, or missing executables.
+
+## Site deps registry and stack_id
+
+A checkpoint may carry a top-level `stack_id`: it references the site deps
+stack that this checkpoint consumes (or produced). The registry is maintained
+on the Ledger side (the deps section of the workspace `sites/<site>.yaml`)
+and exported via `entityctl site deps <site> --json`:
+
+```json
+{
+  "site_id": "cluster-a",
+  "stacks": [
+    {
+      "stack_id": "gcc12.3.0-kokkos5.1.0-1a2b3c4d",
+      "kind": "build",
+      "status": "verified",
+      "signature": {"backend": "cuda", "mpi": false, "gpu_aware_mpi": false,
+                    "output": true, "cxx_standard": "20",
+                    "dependency_profile": "modern"},
+      "packages": [{"name": "kokkos", "version": "5.1.0",
+                    "prefix": "/site/deps/<stack_id>/kokkos", "provider": "module"}],
+      "recipe": {"providers": {"kokkos": "module"}, "parameter_digest": "sha256:..."},
+      "env_sh": "/site/deps/<stack_id>/env.sh"
+    }
+  ]
+}
+```
+
+With `entity_checkpoint.py create --from-registry <registry.json>`, the
+first stack whose signature exactly matches the current requirements and
+which has `status=verified` and `kind=build` (absent means build; the
+registry may mix in `kind=analysis` Python environment stacks, which build
+consumption does not match) prefills `selected` (each package keeps its
+original provider; provenance is recorded in `validation.source`) and writes
+the `stack_id` into the checkpoint; uncovered dependencies are filled in by
+`--from-discovery`/on-the-spot probing. Registry entries then undergo the
+same compatibility checks as probed entries. After confirm + compatibility
+`pass`, a new stack is written back to the registry with
+`entityctl site deps-add <site> --from-checkpoint <entity-deps.local.json>`
+(zero writes when the evidence does not match).
 
 ## Derived artifacts
 

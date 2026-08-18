@@ -1,0 +1,58 @@
+{
+  "schema_version": 1,
+  "experiment_id": "e2e-streaming-official-v1",
+  "calibration": "gold-run-2026-08-09",
+  "gold_run": {
+    "run_id": "run-879cd51744bad483",
+    "data_id": "data-138282d17045e948",
+    "analysis_id": "analysis-eeb468cba15dff30",
+    "site": "astro-streaming",
+    "slurm_job_id": "357003",
+    "note": "official streaming pgen, VOLTA70/single, 128 cells x 32 ppc0, drifts ±0.2c, t_final=50 (stats end at t=49.44; the t=50 snapshot was lost to the known harmless teardown abort)"
+  },
+  "note": "Frozen from the 2026-08-09 gold run on astro (V100). Two-stream is GROWTH physics: the neutral-streaming conservation criteria (drift retention, B1 background, E^2 noise ceiling) were replaced by growth-rate band, growth factor, and saturation checks. Bands carry ~±50% margin around the gold observations so a correct re-run passes while a broken build/physics fails.",
+  "metrics": {
+    "particle_count_conservation": {
+      "definition": "Macro-particle count per species must not change between first and last particle snapshot (periodic box).",
+      "formula": "N_sp(t_last) - N_sp(t_first) == 0 for each species",
+      "tolerance": 0,
+      "calibration": "exact (gold: 102 -> 102 sampled per streaming species)"
+    },
+    "min_particles_per_species": {
+      "definition": "Enough macro-particles per species are sampled at the last particle snapshot for statistics to be meaningful.",
+      "formula": "min over species of N_sp_sampled(t_last) >= tolerance",
+      "tolerance": 64,
+      "calibration": "gold sampled 102 per streaming species (8 ppc x 128 cells / stride 10); floor set at ~60%"
+    },
+    "stats_time_monotonic": {
+      "definition": "Stats time column strictly increases and contains no NaN/Inf (output sanity).",
+      "formula": "all(diff(time) > 0) and all(isfinite(rows))",
+      "tolerance": 0,
+      "calibration": "structural"
+    },
+    "energy_relative_drift": {
+      "definition": "Total energy (T00) conserved within discretization error across the whole run (growth physics moves energy between channels; the total must still hold).",
+      "formula": "max over stats rows of abs(T00(t) - T00(t0)) / T00(t0) <= tolerance",
+      "tolerance": 0.01,
+      "calibration": "gold max drift 0.00200; 5x margin"
+    },
+    "e1_growth_rate": {
+      "definition": "Linear-growth rate of the two-stream instability: least-squares slope of ln(<E1^2>) over the auto window (first point above 10x noise floor through the peak), divided by 2 (field amplitude rate).",
+      "formula": "gamma = slope(ln(<E1^2>))/2 within band",
+      "band": [0.08, 0.20],
+      "calibration": "gold gamma = 0.1366 (window [0.69, 13.81], 22 points); cold symmetric two-stream theory (±0.2c, 0.5 n0 per beam) gives ~0.1-0.15; band is gold ±50% and covers theory"
+    },
+    "e1_squared_growth_factor": {
+      "definition": "<E1^2> must rise well above the numerical noise floor — the instability must actually grow.",
+      "formula": "max(<E1^2>) / <E1^2>(t0) >= minimum",
+      "minimum": 1000,
+      "calibration": "gold factor 7.08e3 (noise 4.83e-7 -> peak 3.42e-3); floor at ~1/7 of gold"
+    },
+    "saturation_before_final": {
+      "definition": "The instability must saturate inside the simulated time: <E1^2> peaks strictly before the final stats time.",
+      "formula": "argmax_t(<E1^2>) < t_final",
+      "tolerance": 0,
+      "calibration": "gold peak at t=13.81 vs final 49.44"
+    }
+  }
+}

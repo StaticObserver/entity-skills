@@ -100,4 +100,6 @@ def main(argv=None):
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    from _invocation_log import trace_invocation
+    with trace_invocation("entity-ledger", "entity_ledger_remote.py", sys.argv[1:], script_file=__file__):
+        sys.exit(main())

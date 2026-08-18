@@ -18,6 +18,7 @@ compatible.
 
 from __future__ import print_function
 
+import glob
 import json
 import os
 import re
@@ -28,6 +29,8 @@ from entity_ledger_common import (
     now_utc,
     run_on_site,
     sha256_file,
+    site_file_sha256,
+    valid_gres,
 )
 from entity_ledger_executor import ExecutorError, RENDER_BACKENDS
 from entity_ledger_facts import (
@@ -40,17 +43,49 @@ from entity_ledger_facts import (
     _simulation_confirmation,
     _site_policy,
     _source_identity,
+    case_path_segment,
+    case_resolution_plan_error,
     derive_run_paths,
+    merged_execution_profile,
     require_verified_checkpoint,
 )
 from entity_ledger_operation import ExecutorClient, OperationError, _same_path
 from entity_ledger_remote import archive_manifest, make_manifest, snapshot_archive
-from entity_ledger_store import StoreError, canonical_hash, canonical_json
+from entity_ledger_store import (
+    CaseResolutionError,
+    StoreError,
+    canonical_hash,
+    canonical_json,
+)
+from entity_ledger_workspace import (
+    derive_stack_id,
+    list_site_archives,
+    stack_signature,
+    workspace_for_ledger_home,
+)
 
 
-def show_case(store, project_root):
+def show_case(store, project_root, case_slug=None):
     """Read-only Case fact detail: the full controller-local projection."""
-    case = store.resolve_project(project_root)
+    case = store.resolve_project(project_root, case_slug)
+    project = None
+    if case.get("project_uid"):
+        project = store.get_project(case["project_uid"])
+    current_data = case.get("current", {}).get("data_id", "")
+    analyses = []
+    for item in case.get("identities", {}).get("analysis", {}).get(
+            "items", []):
+        parent_data = item.get("parents", {}).get("data_id", "")
+        analyses.append({
+            "analysis_id": item.get("id", ""),
+            "script": item.get("script", ""),
+            "params": item.get("params", {}),
+            "data_id": parent_data,
+            "env_stack": item.get("env_stack", ""),
+            "hardcoded_paths": bool(item.get("hardcoded_paths")),
+            "status": item.get("status", ""),
+            "stale": bool(parent_data) and parent_data != current_data,
+        })
     return {
         "schema_version": 1,
         "kind": "entity-ledger.show",
@@ -58,24 +93,58 @@ def show_case(store, project_root):
         "state_mutated": False,
         "case_uid": case["case_uid"],
         "case_id": case["case_id"],
+        "project_uid": case.get("project_uid"),
+        "project": project,
         "project_root": case["project_root"],
         "source": case["source"],
         "current": case["current"],
         "identities": case["identities"],
+        "analyses": analyses,
         "created_at": case["created_at"],
         "updated_at": case["updated_at"],
     }
 
 
-def _require_case(store, project_root):
+def _registered_project_candidates(store, project_root):
+    """Basename match over the registered projects: a moved project keeps
+    its directory name, so the registry usually still holds its new path."""
+    wanted = os.path.basename(absolute(project_root))
+    found = []
+    for project in store.find_projects():
+        root = project.get("project_root") or ""
+        if project.get("slug") == wanted or (
+                root and os.path.basename(root) == wanted):
+            found.append("%s (%s)" % (project["slug"], root))
+    return sorted(found)
+
+
+def _require_case(store, project_root, case_slug=None):
     try:
-        return store.resolve_project(project_root)
+        return store.resolve_project(project_root, case_slug)
+    except CaseResolutionError as exc:
+        if exc.reason != "no_project":
+            raise case_resolution_plan_error(exc)
+        message = (
+            "no project is registered at %s; if the project moved, use the "
+            "new path or entityctl workspace import" % absolute(project_root))
+        candidates = _registered_project_candidates(store, project_root)
+        if candidates:
+            message += ("; registered projects with the same name: %s"
+                        % ", ".join(candidates))
+        raise PlanError(
+            message,
+            "needs_decision",
+            [{"field": "project",
+              "question": "point --project-root at a registered project path"}],
+        )
     except StoreError:
         raise PlanError(
-            "no Case covers the project; create it first",
+            "no Case covers the project; create it with "
+            "entityctl case init <project> <name>",
             "needs_decision",
             [{"field": "case",
-              "question": "run entityctl record run-prepare to create the Case"}],
+              "question": "create the Case with "
+                          "entityctl case init <project> <name>"}],
         )
 
 
@@ -91,7 +160,43 @@ def _load_checkpoint(path):
     if not isinstance(checkpoint, dict):
         raise PlanError("build checkpoint must contain a JSON object")
     require_verified_checkpoint(checkpoint)
-    return path
+    return path, checkpoint
+
+
+def _checkpoint_stack_id(checkpoint):
+    """The deps stack a checkpoint was built from, derived with the same
+    deterministic rule as site deps-add; "" when the checkpoint has no
+    selected dependencies (old checkpoints simply carry no reference)."""
+    selected = checkpoint.get("selected", {})
+    if not isinstance(selected, dict) or not selected:
+        return ""
+    embedded = checkpoint.get("requirements", {}).get("embedded", {})
+    signature = stack_signature(
+        embedded.get("environment", {}), embedded.get("entity", {}),
+        embedded.get("compile", {}))
+    return derive_stack_id(selected, signature)
+
+
+def _stack_registry_hint(store, site_id, stack_id):
+    """Advisory only: suggest deps-add when the build's stack is not in the
+    site registry yet.  Never blocks the record."""
+    if not stack_id:
+        return ""
+    workspace = workspace_for_ledger_home(store.home)
+    if not workspace:
+        return ""
+    archives = list_site_archives(workspace)
+    record = archives.get(site_id)
+    if record is None:
+        return ""
+    registered = any(stack.get("stack_id") == stack_id
+                     for stack in record.get("deps") or [])
+    if registered:
+        return ""
+    return ("build stack %s is not registered in the deps registry of "
+            "Site %s; after verification passes, record it with entityctl "
+            "site deps-add %s --from-checkpoint <entity-deps.local.json>"
+            % (stack_id, site_id, site_id))
 
 
 def _probe_executable(profile, executable):
@@ -114,14 +219,227 @@ def _probe_executable(profile, executable):
     return executable, _content_sha256(profile, executable)
 
 
-def record_intent(store, project_root, text, actor):
+def _sync_intent_file(store, case, text):
+    """Best-effort mirror of the db intent into the case's intent.md (the db
+    stays the authority).  Only writes when the case lives in a workspace
+    case directory; returns the file path or ""."""
+    workspace = workspace_for_ledger_home(store.home)
+    if not workspace or not case.get("project_uid"):
+        return ""
+    try:
+        project = store.get_project(case["project_uid"])
+    except StoreError:
+        return ""
+    case_dir = os.path.join(
+        workspace, "projects", project["slug"], "cases", case["case_id"])
+    if not os.path.isdir(case_dir):
+        return ""
+    path = os.path.join(case_dir, "intent.md")
+    with open(path, "w") as handle:
+        handle.write(text.strip() + "\n")
+    return path
+
+
+def _rewrite_locator_paths(value, old_root, new_root):
+    """Recursively rewrite payload strings that point at (or under) the old
+    resource root; sibling trees (e.g. staging roots) stay untouched."""
+    if isinstance(value, str):
+        if value == old_root:
+            return new_root
+        if value.startswith(old_root + os.sep):
+            return new_root + value[len(old_root):]
+        return value
+    if isinstance(value, list):
+        return [_rewrite_locator_paths(item, old_root, new_root)
+                for item in value]
+    if isinstance(value, dict):
+        return dict((key, _rewrite_locator_paths(item, old_root, new_root))
+                    for key, item in value.items())
+    return value
+
+
+# Run states from which a resource may be relocated; anything else is an
+# in-flight run and must reach its terminal state first (record run-exit).
+# "aborted" is the human-declared terminal state (record run-abort).
+TERMINAL_RUN_STATES = {"completed", "failed", "exited", "aborted"}
+
+
+def _read_site_json(profile, path, label):
+    if profile.get("transport", {}).get("kind") == "local":
+        if not os.path.isfile(path):
+            raise PlanError(
+                "%s not found at the new location: %s" % (label, path))
+        try:
+            with open(path, "r") as handle:
+                return json.load(handle)
+        except (IOError, OSError, ValueError) as exc:
+            raise PlanError("cannot read %s: %s" % (label, exc))
+    code, stdout, unused = run_on_site(profile, ["cat", path])
+    if code != 0:
+        raise PlanError(
+            "%s not found at the new location: %s" % (label, path))
+    try:
+        return json.loads(stdout)
+    except ValueError as exc:
+        raise PlanError("cannot parse %s: %s" % (label, exc))
+
+
+def _site_path_exists(profile, path):
+    if profile.get("transport", {}).get("kind") == "local":
+        return os.path.exists(path)
+    code, unused, unused_err = run_on_site(profile, ["test", "-e", path])
+    return code == 0
+
+
+def _relocate_evidence(profile, identity, new_root):
+    """Re-probe the moved resource at its new root; any mismatch aborts
+    before a single store write."""
+    kind = identity.get("kind")
+    if kind == "run":
+        manifest = _read_site_json(
+            profile, os.path.join(new_root, "run-manifest.json"),
+            "run manifest")
+        if manifest.get("run_id") != identity.get("id"):
+            raise PlanError(
+                "run manifest at the new location names %s, not %s"
+                % (manifest.get("run_id"), identity.get("id")))
+        return {"run_manifest": os.path.join(new_root, "run-manifest.json")}
+    if kind == "build":
+        outputs = identity.get("outputs", [])
+        locator = outputs[0].get("locator", {}) if outputs else {}
+        name = os.path.basename(locator.get("path", "")) or "entity.xc"
+        executable = os.path.join(new_root, name)
+        expected = identity.get("executable_sha256", "")
+        if expected:
+            digest = site_file_sha256(profile, executable)
+            if digest != expected:
+                raise PlanError(
+                    "executable fingerprint mismatch at the new location: "
+                    "%s (expected %s, got %s)" % (executable, expected, digest))
+            return {"executable": executable, "executable_sha256": digest}
+        if not _site_path_exists(profile, executable):
+            raise PlanError(
+                "executable not found at the new location: %s" % executable)
+        return {"executable": executable}
+    if kind == "data":
+        manifest = os.path.join(new_root, "data-inventory.json")
+        _read_site_json(profile, manifest, "data inventory manifest")
+        return {"manifest": manifest}
+    raise PlanError(
+        "relocate supports build/run/data identities (got %s)" % kind)
+
+
+def _relocated_layout(profile, new_root):
+    """site-tree only when the new root sits under the site tree's
+    <site_root>/projects convention; anything else stays legacy-roots."""
+    site_root = profile.get("site_root", "")
+    if site_root:
+        convention = os.path.join(os.path.normpath(site_root), "projects")
+        try:
+            if os.path.commonpath([new_root, convention]) == convention:
+                return "site-tree"
+        except ValueError:
+            pass
+    return "legacy-roots"
+
+
+def record_relocate(store, project_root, dimension, identity_id, new_root,
+                    actor, case_slug=None):
+    """Re-register a moved resource: after the agent moved the files, probe
+    the evidence at the new root and only then update the identity Locator
+    plus the current projection, with an audit event.  Evidence mismatch
+    means zero writes; in-flight runs are refused."""
+    if dimension not in ("build", "run", "data"):
+        raise PlanError(
+            "relocate dimension must be build, run or data (got %s)" % dimension)
+    case = _require_case(store, project_root, case_slug)
+    identity = find_identity(
+        case.get("identities", {}).get(dimension, {}).get("items", []),
+        identity_id)
+    if identity is None:
+        raise PlanError(
+            "unknown %s identity: %s" % (dimension, identity_id),
+            "needs_decision",
+            [{"field": "identity",
+              "question": "select a recorded %s identity" % dimension}],
+        )
+    root = identity.get("root", {})
+    old_root = root.get("path", "")
+    site_id = root.get("site_id") or identity.get("site_id", "")
+    if not old_root or not site_id:
+        raise PlanError("identity has no usable root locator")
+    if not new_root or not str(new_root).startswith("/"):
+        raise PlanError("relocate target must be an absolute path")
+    new_root = os.path.normpath(new_root)
+    old_root = os.path.normpath(old_root)
+    if (dimension == "run"
+            and identity.get("status", "") not in TERMINAL_RUN_STATES):
+        raise PlanError(
+            "run %s is in flight (status=%s); relocate after record "
+            "run-exit books the terminal state"
+            % (identity_id, identity.get("status", "")),
+            "needs_decision",
+            [{"field": "run",
+              "question": "wait for the terminal state, then relocate"}],
+        )
+    if new_root == old_root:
+        return {
+            "schema_version": 1,
+            "kind": "entity-ledger.record.relocate",
+            "ok": True,
+            "state_mutated": False,
+            "case_uid": case["case_uid"],
+            "dimension": dimension,
+            "identity_id": identity_id,
+            "message": "identity already locates at %s" % new_root,
+        }
+    profile = store.get_site(site_id)
+    if not _site_path_exists(profile, new_root):
+        raise PlanError(
+            "new location does not exist on Site %s: %s" % (site_id, new_root))
+    evidence = _relocate_evidence(profile, identity, new_root)
+    payload = _rewrite_locator_paths(identity, old_root, new_root)
+    payload["root"] = {"site_id": site_id, "path": new_root}
+    payload["layout"] = _relocated_layout(profile, new_root)
+    current = _rewrite_locator_paths(case["current"], old_root, new_root)
+    with store.transaction() as connection:
+        connection.execute(
+            "UPDATE identities SET payload_json=? WHERE case_uid=? AND "
+            "dimension=? AND identity_id=?",
+            (canonical_json(payload), case["case_uid"], dimension, identity_id),
+        )
+        connection.execute(
+            "UPDATE cases SET current_json=?,updated_at=? WHERE case_uid=?",
+            (canonical_json(current), now_utc(), case["case_uid"]),
+        )
+        store.record_event(
+            case["case_uid"], None, "record.relocate",
+            {"dimension": dimension, "identity_id": identity_id,
+             "from": old_root, "to": new_root, "evidence": evidence},
+            actor, connection)
+    return {
+        "schema_version": 1,
+        "kind": "entity-ledger.record.relocate",
+        "ok": True,
+        "state_mutated": True,
+        "case_uid": case["case_uid"],
+        "dimension": dimension,
+        "identity_id": identity_id,
+        "from": {"site_id": site_id, "path": old_root},
+        "to": {"site_id": site_id, "path": new_root},
+        "evidence": evidence,
+    }
+
+
+def record_intent(store, project_root, text, actor, case_slug=None):
     """Record the current research intent of a Case.  The intent is the only
     stored pointer: it cannot be derived from artifacts, so it is written
     explicitly and shown on the dashboard.  Recording a new intent replaces
-    the previous one (history stays in the audit events)."""
+    the previous one (history stays in the audit events).  The db is the
+    authority; the case directory's intent.md is rewritten as a mirror."""
     if not text or not text.strip():
         raise PlanError("intent text must be non-empty")
-    case = _require_case(store, project_root)
+    case = _require_case(store, project_root, case_slug)
     current = dict(case["current"])
     current["intent"] = {"text": text.strip(), "recorded_at": now_utc()}
     with store.transaction() as connection:
@@ -139,18 +457,21 @@ def record_intent(store, project_root, text, actor):
         "state_mutated": True,
         "case_uid": case["case_uid"],
         "intent": current["intent"],
+        "intent_file": _sync_intent_file(store, case, text),
     }
 
 
-def record_build(store, project_root, site_id, checkpoint, executable, actor):
+def record_build(store, project_root, site_id, checkpoint, executable, actor,
+                 case_slug=None):
     """Register a verified build identity.  The build_id is content-addressed
     from (case, checkpoint, executable, site), so recording the same build
     twice is a successful no-op."""
-    case = _require_case(store, project_root)
+    case = _require_case(store, project_root, case_slug)
     profile = store.get_site(site_id)
-    checkpoint_path = _load_checkpoint(checkpoint)
+    checkpoint_path, checkpoint = _load_checkpoint(checkpoint)
     executable, executable_sha256 = _probe_executable(profile, executable)
     checkpoint_sha256 = sha256_file(checkpoint_path)
+    stack_id = _checkpoint_stack_id(checkpoint)
     seed = {"case_uid": case["case_uid"], "checkpoint_sha256": checkpoint_sha256,
             "executable": executable, "executable_sha256": executable_sha256,
             "site_id": site_id}
@@ -167,6 +488,8 @@ def record_build(store, project_root, site_id, checkpoint, executable, actor):
         "outputs": [{"kind": "file",
                      "locator": {"site_id": site_id, "path": executable}}],
     }
+    if stack_id:
+        identity["stack_id"] = stack_id
     current = dict(case["current"])
     readiness = dict(current.get("readiness", {}))
     current["build_id"] = build_id
@@ -183,6 +506,10 @@ def record_build(store, project_root, site_id, checkpoint, executable, actor):
             case["case_uid"], None, "record.build",
             {"build_id": build_id, "site_id": site_id, "executable": executable},
             actor, connection)
+    warnings = []
+    hint = _stack_registry_hint(store, site_id, stack_id)
+    if hint:
+        warnings.append(hint)
     return {
         "schema_version": 1,
         "kind": "entity-ledger.record.build",
@@ -191,6 +518,8 @@ def record_build(store, project_root, site_id, checkpoint, executable, actor):
         "case_uid": case["case_uid"],
         "build_id": build_id,
         "site_id": site_id,
+        "stack_id": stack_id,
+        "warnings": warnings,
         "evidence": {
             "executable": executable,
             "executable_sha256": executable_sha256,
@@ -205,10 +534,11 @@ def _run_identity(case, run_id):
         case.get("identities", {}).get("run", {}).get("items", []), run_id)
 
 
-def _inventory_envelope(case_uid, run_id, site_id, staging_root, run_root):
+def _inventory_envelope(case_uid, run_id, site_id, staging_root, run_root,
+                        case_segment=None):
     digest = canonical_hash({"case_uid": case_uid, "run_id": run_id})
     digest = digest.split(":", 1)[1][:16]
-    staging = os.path.join(staging_root, case_uid, "op-" + digest)
+    staging = os.path.join(staging_root, case_segment or case_uid, "op-" + digest)
     manifest = os.path.join(run_root, "data-inventory.json")
     envelope = {
         "schema_version": 1,
@@ -226,11 +556,11 @@ def _inventory_envelope(case_uid, run_id, site_id, staging_root, run_root):
     return "data-" + digest, manifest, envelope
 
 
-def record_data(store, project_root, run_id, actor):
+def record_data(store, project_root, run_id, actor, case_slug=None):
     """Inventory a run's outputs and book the data identity.  The data_id is
     content-addressed from (case, run), so re-inventorying the same run is
     idempotent and refreshes the recorded file count."""
-    case = _require_case(store, project_root)
+    case = _require_case(store, project_root, case_slug)
     current = case.get("current", {})
     run_id = run_id or current.get("run_id", "")
     if not run_id:
@@ -251,12 +581,14 @@ def record_data(store, project_root, run_id, actor):
     run_root = root.get("path", "") or run_identity.get("scheduler", {}).get("run_root", "")
     if not site_id or not run_root:
         raise PlanError("run identity has no usable root locator")
-    profile = store.get_site(site_id)
+    profile, layout = merged_execution_profile(
+        store, store.get_site(site_id), case)
     staging_root = profile.get("roots", {}).get("staging_root")
     if not staging_root:
         raise PlanError("execution Site is missing staging_root")
     data_id, manifest, envelope = _inventory_envelope(
-        case["case_uid"], run_id, site_id, staging_root, run_root)
+        case["case_uid"], run_id, site_id, staging_root, run_root,
+        case_segment=case_path_segment(layout, case))
     client = ExecutorClient(profile)
     client.invoke("execute", envelope)
     verified = client.invoke("verify", envelope)
@@ -308,10 +640,12 @@ def record_data(store, project_root, run_id, actor):
     }
 
 
-def _compute_request(gpus, walltime, precision):
+def _compute_request(gpus, walltime, precision, gres=""):
     """Validate the CLI compute overrides before site policy fills the rest.
     An empty walltime means no time limit: the sbatch carries no --time and
-    the direct backend runs without a timeout wrapper."""
+    the direct backend runs without a timeout wrapper.  An empty gres defers
+    to the site policy default_gres, then to the generic gpu:<gpus> form;
+    the direct backend ignores gres entirely."""
     if not isinstance(gpus, int) or isinstance(gpus, bool) or gpus < 1:
         raise PlanError("gpus must be a positive integer")
     if walltime and not re.match(r"^[0-9]+(?:-[0-9]{2})?:[0-9]{2}:[0-9]{2}$",
@@ -319,18 +653,23 @@ def _compute_request(gpus, walltime, precision):
         raise PlanError("walltime must use HH:MM:SS or D-HH:MM:SS")
     if precision not in {"single", "double"}:
         raise PlanError("precision must be single or double")
-    return {"gpus": gpus, "walltime": walltime, "precision": precision}
+    if gres and not valid_gres(gres):
+        raise PlanError("gres must match gpu[:type]:count (e.g. gpu:V100:1)")
+    return {"gpus": gpus, "walltime": walltime, "precision": precision,
+            "gres": gres}
 
 
-def _derive_run(store, project_root, input_value, site_id, compute, executable):
+def _derive_run(store, project_root, input_value, site_id, compute, executable,
+                case_slug=None):
     """Content-addressed run derivation shared by render-run and record
     run-prepare: identical inputs always yield the same run_id, paths, and
     synthetic executor envelope identity."""
     project_root = absolute(project_root)
     if not os.path.isdir(project_root):
         raise PlanError("project root does not exist: %s" % project_root)
-    case, create_case = _resolve_case(store, project_root, {})
-    profile = store.get_site(site_id)
+    case, create_case = _resolve_case(store, project_root, {}, case_slug)
+    profile, layout = merged_execution_profile(
+        store, store.get_site(site_id), case)
     unused_kind, backend = _run_backend(profile)
     scheduler_kind = backend["scheduler"]
     roots = profile.get("roots", {})
@@ -354,11 +693,13 @@ def _derive_run(store, project_root, input_value, site_id, compute, executable):
     input_sha256 = sha256_file(input_path)
     paths = derive_run_paths(
         case["case_uid"], site_id, roots, scheduler_kind, source_id,
-        input_sha256, executable, build_id, normalized)
+        input_sha256, executable, build_id, normalized,
+        case_segment=case_path_segment(layout, case))
     plan_hash = canonical_hash({"kind": "entity-ledger.record.run",
                                 "seed": paths["seed"]})
     return {
         "case": case, "create_case": create_case, "profile": profile,
+        "layout": layout,
         "scheduler_kind": scheduler_kind, "input_path": input_path,
         "input_sha256": input_sha256, "source_id": source_id,
         "source_fingerprint": source_fingerprint,
@@ -373,12 +714,13 @@ def _run_spec(derived):
 
 
 def render_run(store, project_root, input_value, site_id, gpus, walltime,
-               precision, executable):
+               precision, executable, gres="", case_slug=None):
     """Pure preview: render the submit script and the derived run paths
     without touching controller or Site state (no confirmation gate)."""
-    compute = _compute_request(gpus, walltime, precision)
+    compute = _compute_request(gpus, walltime, precision, gres)
     derived = _derive_run(
-        store, project_root, input_value, site_id, compute, executable)
+        store, project_root, input_value, site_id, compute, executable,
+        case_slug)
     try:
         script = RENDER_BACKENDS[derived["scheduler_kind"]](_run_spec(derived))
     except ExecutorError as exc:
@@ -392,6 +734,7 @@ def render_run(store, project_root, input_value, site_id, gpus, walltime,
         "case_uid": derived["case"]["case_uid"],
         "run_id": paths["run_id"],
         "site_id": site_id,
+        "layout": derived["layout"],
         "scheduler": derived["scheduler_kind"],
         "run_root": paths["run_root"],
         "submit_script": paths["submit_script"],
@@ -455,20 +798,34 @@ def _book_run(store, case, identity, readiness_state, current_updates,
 
 
 def record_run_prepare(store, project_root, input_value, site_id, gpus,
-                       walltime, precision, executable, actor):
+                       walltime, precision, executable, actor, gres="",
+                       run_id="", case_slug=None):
     """Prepare a run root on its Site and book the run identity as prepared.
 
     Gates (all before any state write): the pgen simulation confirmation must
     match the current input bytes, and an existing run identity that already
     advanced past ``prepared`` is never rewound.  The Case is created on first
     use in the same transaction as the run booking — after the executor
-    succeeded — and the executor receipt makes re-runs idempotent."""
-    compute = _compute_request(gpus, walltime, precision)
+    succeeded — and the executor receipt makes re-runs idempotent.
+
+    With ``--run-id`` (the id a preceding render-run previewed) the freshly
+    derived run must equal it: the run_id is content-addressed from source,
+    TOML, compute and build, so a mismatch proves the inputs drifted between
+    render and prepare — the call fails with zero writes instead of silently
+    preparing a second, different run.  A match means the render's previewed
+    run root/script/manifest are exactly the ones prepare materializes."""
+    compute = _compute_request(gpus, walltime, precision, gres)
     derived = _derive_run(
-        store, project_root, input_value, site_id, compute, executable)
+        store, project_root, input_value, site_id, compute, executable,
+        case_slug)
+    paths = derived["paths"]
+    if run_id and paths["run_id"] != run_id:
+        raise PlanError(
+            "derived run %s differs from --run-id %s: the inputs (source, "
+            "TOML, compute or build) drifted since render-run — re-render "
+            "and use the new id" % (paths["run_id"], run_id))
     confirmation = _simulation_confirmation(derived["input_path"])
     case = derived["case"]
-    paths = derived["paths"]
     existing = _run_identity(case, paths["run_id"])
     if existing is not None and existing.get("status", "") != "prepared":
         raise PlanError(
@@ -520,6 +877,7 @@ def record_run_prepare(store, project_root, input_value, site_id, gpus,
     _check_receipt_identity(envelope, verified)
     identity = {
         "id": paths["run_id"], "kind": "run", "site_id": site_id,
+        "layout": derived["layout"],
         "root": {"site_id": site_id, "path": paths["run_root"]},
         "parents": {"source_id": derived["source_id"],
                     "build_id": derived["build_id"]},
@@ -548,6 +906,7 @@ def record_run_prepare(store, project_root, input_value, site_id, gpus,
         "case_uid": case["case_uid"],
         "run_id": paths["run_id"],
         "site_id": site_id,
+        "layout": derived["layout"],
         "run_root": paths["run_root"],
         "created_case": created_case,
         "confirmation": {"confirmed_by": confirmation.get("confirmed_by", ""),
@@ -636,14 +995,25 @@ def _probe_adopt_direct(profile, pid, run_root):
             "exit_file": os.path.join(run_root, ".entity-exit-code")}
 
 
-def record_run_launch(store, project_root, run_id, adopt_job, adopt_pid, actor):
+def record_run_launch(store, project_root, run_id, adopt_job, adopt_pid, actor,
+                      case_slug=None, resubmit=False):
     """Submit a prepared run exactly once (executor receipt) or adopt an
     out-of-band job after probing it, then book the run as submitted.  On
     Slurm Sites the scheduler first validates the rendered submission
     (run.preflight.v1 / sbatch --test-only); a rejection fails with the
     executor's remediation hint before any state is written.  Scheduler-less
-    Sites have no scheduler to consult and skip the preflight."""
-    case = _require_case(store, project_root)
+    Sites have no scheduler to consult and skip the preflight.
+
+    With ``resubmit`` a run whose recorded job died (the ledger-submitted
+    job that failed before or at ``record run-exit``) is submitted again:
+    eligibility requires a recorded scheduler identity whose job probes
+    terminal *and* failed, and the run status must be submitted (died
+    before run-exit) or failed (run-exit already booked it).  The new
+    submission gets its own exactly-once receipt (run-relaunch-<n>.json,
+    n counting earlier resubmissions), the previous scheduler record moves
+    to ``prior_submissions``, and the launch event is marked
+    ``resubmit: true``.  Exactly-once is per submission, not per run."""
+    case = _require_case(store, project_root, case_slug)
     run_id = run_id or case.get("current", {}).get("run_id", "")
     if not run_id:
         raise PlanError(
@@ -659,7 +1029,12 @@ def record_run_launch(store, project_root, run_id, adopt_job, adopt_pid, actor):
             [{"field": "run", "question": "select a known run id"}],
         )
     status = identity.get("status", "")
-    if status not in {"prepared", "submitted"}:
+    if resubmit:
+        if status not in {"submitted", "failed"}:
+            raise PlanError(
+                "run %s is %s; --resubmit applies to a submitted or failed "
+                "run whose recorded job died" % (run_id, status or "unknown"))
+    elif status not in {"prepared", "submitted"}:
         raise PlanError("run %s is %s; only a prepared run can be launched"
                         % (run_id, status or "unknown"))
     root = identity.get("root", {})
@@ -668,9 +1043,15 @@ def record_run_launch(store, project_root, run_id, adopt_job, adopt_pid, actor):
     if not site_id or not run_root:
         raise PlanError("run identity has no usable root locator")
     profile = store.get_site(site_id)
+    # Site-tree profiles (site_root, no explicit roots) need the derived
+    # roots filled in — prepare/data go through merged_execution_profile;
+    # launch must too, or ExecutorClient finds no staging_root.
+    profile, unused_layout = merged_execution_profile(store, profile, case)
     unused_kind, backend = _run_backend(profile)
     scheduler_kind = backend["scheduler"]
     adopted = bool(adopt_job or adopt_pid)
+    if adopted and resubmit:
+        raise PlanError("--resubmit cannot be combined with adoption")
     if adopted:
         if adopt_job:
             if scheduler_kind != "slurm":
@@ -683,26 +1064,66 @@ def record_run_launch(store, project_root, run_id, adopt_job, adopt_pid, actor):
         effect["adopted"] = True
     else:
         recorded_scheduler = identity.get("scheduler", {})
+        prior_submissions = []
         if recorded_scheduler.get("job_id") or recorded_scheduler.get("pid"):
-            # The run already carries a scheduler identity — submitted by an
-            # earlier launch or adopted out-of-band (adoption leaves no
-            # executor receipt to make a re-run idempotent).  Re-running the
-            # launch without adopt flags must claim the recorded effect
-            # instead of submitting a second job.
-            return {
-                "schema_version": 1,
-                "kind": "entity-ledger.record.run-launch",
-                "ok": True,
-                "state_mutated": False,
-                "case_uid": case["case_uid"],
-                "run_id": run_id,
-                "site_id": site_id,
-                "status": identity.get("status", ""),
-                "adopted": bool(recorded_scheduler.get("adopted")),
-                "scheduler": recorded_scheduler,
-                "detail": "run already has a recorded scheduler identity; "
-                          "no new submission",
-            }
+            if not resubmit:
+                # The run already carries a scheduler identity — submitted
+                # by an earlier launch or adopted out-of-band (adoption
+                # leaves no executor receipt to make a re-run idempotent).
+                # Re-running the launch without adopt flags must claim the
+                # recorded effect instead of submitting a second job.
+                return {
+                    "schema_version": 1,
+                    "kind": "entity-ledger.record.run-launch",
+                    "ok": True,
+                    "state_mutated": False,
+                    "case_uid": case["case_uid"],
+                    "run_id": run_id,
+                    "site_id": site_id,
+                    "status": identity.get("status", ""),
+                    "adopted": bool(recorded_scheduler.get("adopted")),
+                    "scheduler": recorded_scheduler,
+                    "detail": "run already has a recorded scheduler identity; "
+                              "no new submission",
+                }
+            # --resubmit: the recorded job must probe terminal AND failed —
+            # a live or unprobeable job is never displaced by a second
+            # submission (record run-exit it first).
+            previous_scheduler = recorded_scheduler
+            probe_kind = recorded_scheduler.get("scheduler", "")
+            if probe_kind == "slurm":
+                probe_state, probe_sched_state, probe_exit = _slurm_exit_probe(
+                    profile, recorded_scheduler.get("job_id", ""))
+            elif probe_kind == "direct":
+                probe_state, probe_exit = _direct_exit_probe(
+                    profile, recorded_scheduler)
+                probe_sched_state = ""
+            else:
+                raise PlanError(
+                    "run identity has an unsupported scheduler record: %s"
+                    % (probe_kind or "none"))
+            if probe_state != "terminal":
+                raise PlanError(
+                    "the recorded job of run %s probes '%s', not terminal; "
+                    "--resubmit only replaces a dead job — record run-exit "
+                    "first (or wait for it)" % (run_id, probe_state))
+            if probe_sched_state:
+                job_failed = (probe_sched_state != "COMPLETED"
+                              or (probe_exit or 0) != 0)
+            else:
+                job_failed = probe_exit is not None and probe_exit != 0
+            if not job_failed:
+                raise PlanError(
+                    "the recorded job of run %s reached a successful "
+                    "terminal state; there is nothing to resubmit" % run_id)
+            prior_submissions = (
+                list(identity.get("prior_submissions", []))
+                + [previous_scheduler])
+        elif resubmit:
+            raise PlanError(
+                "run %s has no recorded scheduler identity; there is no "
+                "dead submission to replace — use plain record run-launch"
+                % run_id)
         for key in ["operation_id", "plan_hash", "staging_root"]:
             if not identity.get(key):
                 raise PlanError(
@@ -749,16 +1170,23 @@ def record_run_launch(store, project_root, run_id, adopt_job, adopt_pid, actor):
             except OperationError as exc:
                 raise PlanError("run preflight failed on Site %s: %s"
                                 % (site_id, exc))
+        # each submission gets its own exactly-once receipt: the first
+        # launch uses run-launch.json, resubmission n run-relaunch-<n>.json
+        receipt_name = "run-launch.json"
+        step_id = "launch"
+        if resubmit:
+            receipt_name = "run-relaunch-%d.json" % len(prior_submissions)
+            step_id = "relaunch"
         envelope = {
             "schema_version": 1,
             "operation_id": identity["operation_id"],
             "plan_hash": identity["plan_hash"],
             "step_index": 2,
-            "step_id": "launch",
+            "step_id": step_id,
             "kind": "run.launch.v2",
             "site_id": site_id,
             "receipt": os.path.join(
-                identity["staging_root"], "receipts", "run-launch.json"),
+                identity["staging_root"], "receipts", receipt_name),
             "allowed_roots": [identity["staging_root"], run_root],
             "request": {
                 "scheduler": scheduler_kind,
@@ -778,13 +1206,19 @@ def record_run_launch(store, project_root, run_id, adopt_job, adopt_pid, actor):
     identity = dict(identity)
     identity["status"] = "submitted"
     identity["scheduler"] = effect
+    if resubmit:
+        identity["prior_submissions"] = prior_submissions
+    event_payload = {"run_id": run_id, "site_id": site_id, "adopted": adopted,
+                     "scheduler": effect}
+    if resubmit:
+        event_payload["resubmit"] = True
+        event_payload["previous_scheduler"] = prior_submissions[-1]
     _book_run(
         store, case, identity, "submitted", {},
         "record.run-launch",
-        {"run_id": run_id, "site_id": site_id, "adopted": adopted,
-         "scheduler": effect},
+        event_payload,
         actor)
-    return {
+    result = {
         "schema_version": 1,
         "kind": "entity-ledger.record.run-launch",
         "ok": True,
@@ -796,6 +1230,10 @@ def record_run_launch(store, project_root, run_id, adopt_job, adopt_pid, actor):
         "adopted": adopted,
         "scheduler": effect,
     }
+    if resubmit:
+        result["resubmit"] = True
+        result["previous_scheduler"] = prior_submissions[-1]
+    return result
 
 
 _ANSI_ESCAPE = re.compile(r"\x1b\[[0-9;]*m")
@@ -865,28 +1303,53 @@ def _tail_log(profile, path):
     return stdout
 
 
+def _glob_run_logs(profile, run_root, pattern):
+    """Glob log files at the run root or one level below — Entity names its
+    own logs after simulation.name (``<name>.err``/``<name>.out`` inside the
+    ``<name>/`` output subdirectory), so fixed filenames alone miss them."""
+    if profile.get("transport", {}).get("kind") == "local":
+        return sorted(
+            glob.glob(os.path.join(run_root, pattern))
+            + glob.glob(os.path.join(run_root, "*", pattern)))
+    code, stdout, unused = run_on_site(profile, [
+        "bash", "-c",
+        'ls -1 "$1"/' + pattern + ' "$1"/*/' + pattern + ' 2>/dev/null; true',
+        "bash", run_root])
+    if code != 0:
+        return []
+    return [line.strip() for line in stdout.splitlines() if line.strip()]
+
+
 def _probe_run_logs(profile, identity):
     """Collect (stderr_text, stdout_text) tails from the run's log files.
-    simulation.err and the direct-backend run.log count as stderr evidence;
-    simulation.out, slurm-<job_id>.out and run.log count as stdout
-    evidence."""
+    simulation.err, Entity's <name>.err and the direct-backend run.log count
+    as stderr evidence; simulation.out, <name>.out, slurm-<job_id>.out and
+    run.log count as stdout evidence.  Slurm merges stderr into the out file
+    unless --error is given, so slurm-<job_id>.out is evidence for both."""
     scheduler = identity.get("scheduler", {})
     run_root = identity.get("root", {}).get("path", "") \
         or scheduler.get("run_root", "")
     if not run_root:
         return "", ""
-    err_names = ["simulation.err", "run.log"]
-    out_names = ["simulation.out"]
+    err_paths = [os.path.join(run_root, name)
+                 for name in ("simulation.err", "run.log")]
+    out_paths = [os.path.join(run_root, "simulation.out")]
     job_id = scheduler.get("job_id", "")
     if job_id:
-        out_names.append("slurm-%s.out" % job_id)
-    out_names.append("run.log")
+        slurm_out = os.path.join(run_root, "slurm-%s.out" % job_id)
+        out_paths.append(slurm_out)
+        err_paths.append(slurm_out)
+    out_paths.append(os.path.join(run_root, "run.log"))
+    for path in _glob_run_logs(profile, run_root, "*.err"):
+        if path not in err_paths:
+            err_paths.append(path)
+    for path in _glob_run_logs(profile, run_root, "*.out"):
+        if path not in out_paths and path not in err_paths:
+            out_paths.append(path)
     err_text = "\n".join(text for text in (
-        _tail_log(profile, os.path.join(run_root, name))
-        for name in err_names) if text)
+        _tail_log(profile, path) for path in err_paths) if text)
     out_text = "\n".join(text for text in (
-        _tail_log(profile, os.path.join(run_root, name))
-        for name in out_names) if text)
+        _tail_log(profile, path) for path in out_paths) if text)
     return err_text, out_text
 
 
@@ -941,7 +1404,7 @@ def _slurm_exit_probe(profile, job_id):
         return "running", stdout.strip().splitlines()[0].upper(), None
     try:
         code, stdout, stderr = run_on_site(
-            profile, ["sacct", "-n", "-X", "-j", job_id,
+            profile, ["sacct", "-n", "-X", "-P", "-j", job_id,
                       "--format=State,ExitCode"])
     except OSError as exc:
         raise PlanError("cannot query Slurm accounting for job %s: %s"
@@ -968,19 +1431,23 @@ def _slurm_exit_probe(profile, job_id):
     return "terminal", scheduler_state, exit_code
 
 
-def record_run_exit(store, project_root, run_id, actor, reclassify=False):
+def record_run_exit(store, project_root, run_id, actor, reclassify=False,
+                    case_slug=None):
     """Probe a submitted run's terminal state and book it.  A still-running
     run is reported without mutating state; an unreachable Site fails with
-    exit 2 and no write.  When the terminal exit code is non-zero, the run's
-    log tails are checked for a known harmless teardown abort (see
-    classify_teardown_abort); with both evidence groups the run is booked
-    completed with an exit_anomaly note, the real exit code preserved.
+    exit 2 and no write.  A non-COMPLETED scheduler word (CANCELLED,
+    TIMEOUT, OUT_OF_MEMORY, ...) books failed regardless of the exit code;
+    otherwise the exit code classifies.  When the terminal exit code is
+    non-zero, the run's log tails are checked for a known harmless teardown
+    abort (see classify_teardown_abort); with both evidence groups the run
+    is booked completed with an exit_anomaly note, the real exit code
+    preserved.
 
     With ``reclassify`` the scheduler probe is skipped and a run already
     booked failed is re-judged from its logs alone: a match rewrites the
     identity to completed with exit_anomaly, a miss reports state_mutated
     false.  Any status other than failed is an error with zero writes."""
-    case = _require_case(store, project_root)
+    case = _require_case(store, project_root, case_slug)
     run_id = run_id or case.get("current", {}).get("run_id", "")
     if not run_id:
         raise PlanError(
@@ -1081,6 +1548,7 @@ def record_run_exit(store, project_root, run_id, actor, reclassify=False):
             "run_id": run_id,
             "state": "running",
             "scheduler_state": scheduler_state,
+            "detail": "run is still running; no state written",
         }
     if state == "gone":
         return {
@@ -1105,7 +1573,15 @@ def record_run_exit(store, project_root, run_id, actor, reclassify=False):
             "detail": "exit file holds no numeric exit code (partial write) "
                       "and the recorded process is gone",
         }
-    final = "completed" if exit_code == 0 else "failed"
+    # The scheduler's terminal word outranks the process exit code: a
+    # scancel'ed, timed-out or OOM-killed job can still report 0:0, and
+    # booking that as completed corrupts the ledger (the polar_cap OOM
+    # incident).  COMPLETED (or no scheduler word at all, e.g. direct)
+    # keeps the exit-code classification.
+    if scheduler_state and scheduler_state != "COMPLETED":
+        final = "failed"
+    else:
+        final = "completed" if exit_code == 0 else "failed"
     anomaly = None
     if final == "failed":
         err_text, out_text = _probe_run_logs(profile, identity)
@@ -1124,6 +1600,8 @@ def record_run_exit(store, project_root, run_id, actor, reclassify=False):
         identity["scheduler"] = scheduler
     event_payload = {"run_id": run_id, "site_id": site_id, "status": final,
                      "exit_code": exit_code}
+    if scheduler_state:
+        event_payload["scheduler_state"] = scheduler_state
     if anomaly is not None:
         event_payload["exit_anomaly"] = anomaly
     _book_run(
@@ -1144,7 +1622,342 @@ def record_run_exit(store, project_root, run_id, actor, reclassify=False):
     }
 
 
-def snapshot_source(store, project_root, actor):
+def record_run_abort(store, project_root, run_id, reason, actor,
+                     case_slug=None):
+    """Declare an in-flight run dead by human decision — the escape hatch
+    for a run whose Site is permanently unreachable (retired machine, dead
+    SSH), where no exit evidence can ever be probed.  Gates before any
+    write: the run must exist and be in flight; a terminal run fails with
+    zero writes.  ``reason`` is mandatory and lands in the identity payload
+    and the audit event.  Aborted is terminal: the run can be relocated and
+    migrated, and live status no longer probes it.  ``--reclassify`` does
+    not apply to an aborted run; if the Site comes back, the outputs can
+    still be inventoried with ``record data``."""
+    if not reason or not reason.strip():
+        raise PlanError("--reason must be non-empty")
+    case = _require_case(store, project_root, case_slug)
+    run_id = run_id or case.get("current", {}).get("run_id", "")
+    if not run_id:
+        raise PlanError(
+            "Case has no current run",
+            "needs_decision",
+            [{"field": "run", "question": "select the run to abort"}],
+        )
+    identity = _run_identity(case, run_id)
+    if identity is None:
+        raise PlanError(
+            "unknown run identity: %s" % run_id,
+            "needs_decision",
+            [{"field": "run", "question": "select a known run id"}],
+        )
+    status = identity.get("status", "")
+    if status in TERMINAL_RUN_STATES:
+        raise PlanError(
+            "run %s is already terminal (%s); run-abort only applies to an "
+            "in-flight run" % (run_id, status))
+    payload = dict(identity)
+    payload["status"] = "aborted"
+    payload["abort"] = {"reason": reason.strip(),
+                        "aborted_at": now_utc(),
+                        "aborted_by": actor.get("run_id", "")}
+    current = dict(case["current"])
+    active = current.get("active_run") or {}
+    if active.get("path") == identity.get("root", {}).get("path", ""):
+        current["active_run"] = None
+    readiness = dict(current.get("readiness", {}))
+    readiness["run"] = "aborted"
+    current["readiness"] = readiness
+    with store.transaction() as connection:
+        connection.execute(
+            "UPDATE identities SET payload_json=? WHERE case_uid=? AND "
+            "dimension='run' AND identity_id=?",
+            (canonical_json(payload), case["case_uid"], run_id),
+        )
+        connection.execute(
+            "UPDATE cases SET current_json=?,updated_at=? WHERE case_uid=?",
+            (canonical_json(current), now_utc(), case["case_uid"]),
+        )
+        store.record_event(
+            case["case_uid"], None, "record.run-abort",
+            {"run_id": run_id, "reason": reason.strip(),
+             "previous_status": status},
+            actor, connection)
+    return {
+        "schema_version": 1,
+        "kind": "entity-ledger.record.run-abort",
+        "ok": True,
+        "state_mutated": True,
+        "case_uid": case["case_uid"],
+        "run_id": run_id,
+        "state": "aborted",
+        "reason": reason.strip(),
+        "previous_status": status,
+    }
+
+
+def record_run_correct(store, project_root, run_id, status, reason, actor,
+                       case_slug=None):
+    """Human correction between the two booked terminal states
+    (completed <-> failed) — the counterpart of ``--reclassify``: that one
+    re-judges a failed run from log evidence, this one records a human
+    declaration (e.g. a run booked completed before the scheduler word was
+    consulted, see the CANCELLED 0:0 incident).  Gates before any write:
+    ``--reason`` is mandatory (it lands in the identity payload and the
+    audit event), the run must exist and already be terminal — an
+    in-flight run must reach its terminal state through ``record
+    run-exit`` first.  Correcting to the same state is a no-op."""
+    if status not in {"completed", "failed"}:
+        raise PlanError("--status must be one of: completed, failed")
+    if not reason or not reason.strip():
+        raise PlanError("--reason must be non-empty")
+    case = _require_case(store, project_root, case_slug)
+    run_id = run_id or case.get("current", {}).get("run_id", "")
+    if not run_id:
+        raise PlanError(
+            "Case has no current run",
+            "needs_decision",
+            [{"field": "run", "question": "select the run to correct"}],
+        )
+    identity = _run_identity(case, run_id)
+    if identity is None:
+        raise PlanError(
+            "unknown run identity: %s" % run_id,
+            "needs_decision",
+            [{"field": "run", "question": "select a known run id"}],
+        )
+    previous = identity.get("status", "")
+    if previous not in {"completed", "failed"}:
+        raise PlanError(
+            "run %s is %s; run-correct only rewrites a terminal state "
+            "(completed/failed) — record run-exit first"
+            % (run_id, previous or "unknown"))
+    if previous == status:
+        return {
+            "schema_version": 1,
+            "kind": "entity-ledger.record.run-correct",
+            "ok": True,
+            "state_mutated": False,
+            "case_uid": case["case_uid"],
+            "run_id": run_id,
+            "state": status,
+            "detail": "run is already %s; nothing to correct" % status,
+        }
+    payload = dict(identity)
+    payload["status"] = status
+    payload["correction"] = {"from": previous, "to": status,
+                             "reason": reason.strip(),
+                             "corrected_at": now_utc(),
+                             "corrected_by": actor.get("run_id", "")}
+    current = dict(case["current"])
+    readiness = dict(current.get("readiness", {}))
+    if current.get("run_id") == run_id:
+        readiness["run"] = status
+        current["readiness"] = readiness
+    with store.transaction() as connection:
+        connection.execute(
+            "UPDATE identities SET payload_json=? WHERE case_uid=? AND "
+            "dimension='run' AND identity_id=?",
+            (canonical_json(payload), case["case_uid"], run_id),
+        )
+        connection.execute(
+            "UPDATE cases SET current_json=?,updated_at=? WHERE case_uid=?",
+            (canonical_json(current), now_utc(), case["case_uid"]),
+        )
+        store.record_event(
+            case["case_uid"], None, "record.run-correct",
+            {"run_id": run_id, "from": previous, "to": status,
+             "reason": reason.strip()},
+            actor, connection)
+    return {
+        "schema_version": 1,
+        "kind": "entity-ledger.record.run-correct",
+        "ok": True,
+        "state_mutated": True,
+        "case_uid": case["case_uid"],
+        "run_id": run_id,
+        "state": status,
+        "previous_status": previous,
+        "reason": reason.strip(),
+    }
+
+
+def _resolve_analysis_data(case, data_ref):
+    """--data accepts a data_id directly or a run_id, which resolves to that
+    run's recorded data identity (record data first otherwise)."""
+    data_items = case.get("identities", {}).get("data", {}).get("items", [])
+    identity = find_identity(data_items, data_ref)
+    if identity is not None:
+        return identity
+    run = find_identity(
+        case.get("identities", {}).get("run", {}).get("items", []), data_ref)
+    if run is None:
+        raise PlanError(
+            "unknown run/data identity: %s" % data_ref,
+            "needs_decision",
+            [{"field": "data",
+              "question": "select a recorded run or data identity"}],
+        )
+    for item in data_items:
+        if item.get("parents", {}).get("run_id") == run.get("id"):
+            return item
+    raise PlanError(
+        "run %s has no recorded data identity" % data_ref,
+        "needs_decision",
+        [{"field": "data",
+          "question": "run entityctl record data first"}],
+    )
+
+
+def _analysis_script(store, case, script):
+    """The script must live in the project's analysis script library
+    (projects/<p>/analysis/scripts/); returns (normalized relative path,
+    sha256)."""
+    if not script or os.path.isabs(script):
+        raise PlanError("--script must be a path relative to analysis/scripts/")
+    script = os.path.normpath(script)
+    if ".." in script.split(os.sep):
+        raise PlanError("--script must be a path relative to analysis/scripts/")
+    project_root = case.get("project_root") or ""
+    if case.get("project_uid"):
+        try:
+            project_root = store.get_project(
+                case["project_uid"]).get("project_root") or project_root
+        except StoreError:
+            pass
+    if not project_root:
+        raise PlanError("case has no project root for the script library")
+    scripts_root = os.path.join(absolute(project_root), "analysis", "scripts")
+    path = os.path.join(scripts_root, script)
+    try:
+        inside = os.path.commonpath(
+            [os.path.realpath(path), os.path.realpath(scripts_root)]
+        ) == os.path.realpath(scripts_root)
+    except ValueError:
+        inside = False
+    if not inside or not os.path.isfile(path):
+        raise PlanError(
+            "analysis script not found in the project script library: %s "
+            "(expected under %s)" % (script, scripts_root))
+    return script, sha256_file(path)
+
+
+def record_analysis(store, project_root, case_slug, script, data_ref, params,
+                    output_root, env_stack, hardcoded_paths, actor):
+    """Book an analysis execution (identity chain dimension 6).  Execution
+    itself is the agent's free exploration; this primitive only re-probes
+    the evidence and registers the fact — zero writes on any mismatch.
+
+    Evidence gates: the script must exist in the project script library
+    (content-hashed at booking time); ``<output_root>/analysis-manifest.json``
+    must exist on its Site and name the claimed data_id (and, when the
+    manifest carries script/params fields, they must match).  The
+    analysis_id is derived deterministically from (data_id, script hash,
+    params), so re-registering the same analysis is idempotent."""
+    case = _require_case(store, project_root, case_slug)
+    try:
+        params = json.loads(params) if isinstance(params, str) else params
+    except ValueError as exc:
+        raise PlanError("--params must be a JSON object: %s" % exc)
+    if not isinstance(params, dict):
+        raise PlanError("--params must be a JSON object")
+    data_identity = _resolve_analysis_data(case, data_ref)
+    data_id = data_identity.get("id") or data_identity.get("identity_id", "")
+    script, script_sha256 = _analysis_script(store, case, script)
+    if not output_root or not str(output_root).startswith("/"):
+        raise PlanError("--output-root must be an absolute path on its Site")
+    output_root = os.path.normpath(output_root)
+    site_id = data_identity.get("root", {}).get("site_id") \
+        or data_identity.get("site_id", "")
+    profile = store.get_site(site_id)
+    manifest_path = os.path.join(output_root, "analysis-manifest.json")
+    manifest = _read_site_json(profile, manifest_path, "analysis manifest")
+    if manifest.get("data_id") != data_id:
+        raise PlanError(
+            "analysis manifest at the output root names data %s, not %s"
+            % (manifest.get("data_id"), data_id))
+    if manifest.get("script") and manifest["script"] != script:
+        raise PlanError(
+            "analysis manifest names script %s, not %s"
+            % (manifest["script"], script))
+    if manifest.get("script_sha256") \
+            and manifest["script_sha256"] != script_sha256:
+        raise PlanError("analysis manifest script hash differs from the "
+                        "script library copy")
+    if manifest.get("params") is not None \
+            and manifest["params"] != params:
+        raise PlanError("analysis manifest params differ from --params")
+    analysis_id = "analysis-" + canonical_hash({
+        "data_id": data_id, "script_sha256": script_sha256,
+        "params": params,
+    }).split(":", 1)[1][:16]
+    run_id = data_identity.get("parents", {}).get("run_id", "")
+    profile_merged, layout = merged_execution_profile(store, profile, case)
+    conventional = ""
+    if layout == "site-tree":
+        conventional = os.path.normpath(os.path.join(
+            profile_merged["roots"]["analysis_root"],
+            case_path_segment(layout, case), analysis_id))
+    identity = {
+        "id": analysis_id, "kind": "analysis", "site_id": site_id,
+        "root": {"site_id": site_id, "path": output_root},
+        "parents": {"data_id": data_id, "run_id": run_id},
+        "script": script,
+        "script_sha256": script_sha256,
+        "params": params,
+        "env_stack": env_stack or "",
+        "hardcoded_paths": bool(hardcoded_paths),
+        "manifest": manifest_path,
+        "status": "registered",
+    }
+    # A parent that already left current still records (history has value),
+    # but as a historical entry: current.analysis_id and the is_current
+    # marker are not rolled back to it.
+    parent_current = data_id == case.get("current", {}).get("data_id", "")
+    warnings = []
+    if not parent_current:
+        warnings.append(
+            "parent data %s is no longer current; recorded as a historical "
+            "entry, current.analysis_id unchanged" % data_id)
+    current = dict(case["current"])
+    with store.transaction() as connection:
+        store.add_identity(
+            case["case_uid"], "analysis", analysis_id, identity,
+            parent_current, connection)
+        if parent_current:
+            current["analysis_id"] = analysis_id
+            connection.execute(
+                "UPDATE cases SET current_json=?,updated_at=? WHERE case_uid=?",
+                (canonical_json(current), now_utc(), case["case_uid"]),
+            )
+        store.record_event(
+            case["case_uid"], None, "record.analysis",
+            {"analysis_id": analysis_id, "data_id": data_id,
+             "script": script, "env_stack": env_stack or "",
+             "hardcoded_paths": bool(hardcoded_paths),
+             "parent_current": parent_current},
+            actor, connection)
+    return {
+        "schema_version": 1,
+        "kind": "entity-ledger.record.analysis",
+        "ok": True,
+        "state_mutated": True,
+        "case_uid": case["case_uid"],
+        "analysis_id": analysis_id,
+        "data_id": data_id,
+        "run_id": run_id,
+        "script": script,
+        "script_sha256": script_sha256,
+        "output_root": output_root,
+        "env_stack": env_stack or "",
+        "hardcoded_paths": bool(hardcoded_paths),
+        "parent_current": parent_current,
+        "warnings": warnings,
+        "conventional_root": conventional,
+        "at_conventional_root": bool(conventional) and output_root == conventional,
+    }
+
+
+def snapshot_source(store, project_root, actor, case_slug=None):
     """Freeze the project source into a content-addressed snapshot archive
     under the controller's snapshots root.  When a Case covers the project,
     the snapshot is also registered as the current source identity; without
@@ -1174,7 +1987,7 @@ def snapshot_source(store, project_root, actor):
         archived = True
     snapshot_id = manifest["snapshot_id"]
     try:
-        case = store.resolve_project(project_root)
+        case = store.resolve_project(project_root, case_slug)
     except StoreError:
         case = None
     recorded = False

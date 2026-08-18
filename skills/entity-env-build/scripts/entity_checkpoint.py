@@ -3,7 +3,7 @@
 
 Subcommands:
   validate <requirements.json>
-  create <requirements.json> [--merge <old.json>] [--from-discovery <discovery.json>]
+  create <requirements.json> [--merge <old.json>] [--from-discovery <discovery.json>] [--from-registry <registry.json>]
   confirm <requirements.json> --checkpoint <entity-deps.local.json> --by <actor> [--confirm-defaults]
   record-install --checkpoint <entity-deps.local.json> --dep <name> ...
 """
@@ -31,6 +31,7 @@ from entity_state import record_step
 from entity_schema import (
     CONSISTENCY_RULES,
     OPTIONAL_DEFAULTS,
+    PROFILES,
     REQUIRED_BUILD,
     entity_paths,
     parameter_card,
@@ -202,6 +203,102 @@ def cmd_validate(args: argparse.Namespace) -> None:
 # ===========================================================================
 
 
+# Shared contract with the Ledger side (entityctl site deps / deps-add): a
+# registry stack matches a requirements.json only when every signature field
+# is equal.  env-build intentionally re-implements these few lines instead
+# of importing Ledger modules — the skill must stay usable on machines
+# without a workspace.  tests/vectors/stack-signature.json pins both sides.
+REGISTRY_PACKAGE_KEYS = (
+    "version", "prefix", "bin", "include", "lib", "cmake_config", "modules",
+)
+
+
+def _normalize_signature(value: Any) -> Dict[str, Any]:
+    value = value if isinstance(value, dict) else {}
+    output = value.get("output", True)
+    return {
+        "backend": str(value.get("backend", "") or ""),
+        "mpi": bool(value.get("mpi", False)),
+        "gpu_aware_mpi": bool(value.get("gpu_aware_mpi", False)),
+        "output": bool(True if output is None else output),
+        "cxx_standard": str(value.get("cxx_standard", "") or ""),
+        "dependency_profile": str(value.get("dependency_profile", "") or ""),
+    }
+
+
+def registry_signature(req: Dict[str, Any]) -> Dict[str, Any]:
+    environment = req.get("environment", {}) if isinstance(req.get("environment"), dict) else {}
+    entity = req.get("entity", {}) if isinstance(req.get("entity"), dict) else {}
+    compile_cfg = req.get("compile", {}) if isinstance(req.get("compile"), dict) else {}
+    # omitted fields resolve to the version-profile effective values, never ""
+    profile = str(entity.get("dependency_profile") or "") or "modern"
+    cxx_standard = (
+        str(compile_cfg.get("cxx_standard") or "")
+        or str(PROFILES.get(profile, {}).get("cxx_standard", ""))
+    )
+    return _normalize_signature({
+        "backend": environment.get("backend", ""),
+        "mpi": environment.get("mpi", False),
+        "gpu_aware_mpi": environment.get("gpu_aware_mpi", False),
+        "output": environment.get("output", True),
+        "cxx_standard": cxx_standard,
+        "dependency_profile": profile,
+    })
+
+
+def select_registry_stack(registry: Any, req: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """First verified stack whose signature matches the requirements; None
+    on a miss (the caller then falls back to live probing)."""
+    stacks = registry.get("stacks") if isinstance(registry, dict) else registry
+    if not isinstance(stacks, list):
+        return None
+    wanted = registry_signature(req)
+    for stack in stacks:
+        if not isinstance(stack, dict):
+            continue
+        # the registry may mix analysis (Python environment) stacks; a build
+        # request only ever consumes build stacks (missing kind == build,
+        # for archives written before the field existed)
+        if stack.get("kind", "build") != "build":
+            continue
+        if stack.get("status") != "verified":
+            continue
+        # normalize both sides: a hand-written archive may carry e.g. an
+        # integer cxx_standard and must still match
+        if _normalize_signature(stack.get("signature")) == wanted:
+            return stack
+    return None
+
+
+def discovery_from_stack(stack: Dict[str, Any]) -> Dict[str, Any]:
+    """Convert a registry stack's packages into discovery entries.  The
+    original provider is a fact and is preserved (the origin is carried by
+    validation.source); copying exactly the registry package keys keeps the
+    deps-add -> export -> --from-registry -> record build stack_id loop
+    closed.  The compatibility check re-verifies these entries exactly like
+    probed ones, so a stale registry degrades to a normal compatibility
+    failure, never to a silently weakened gate."""
+    selected: Dict[str, Any] = {}
+    for package in stack.get("packages") or []:
+        if not isinstance(package, dict) or not package.get("name"):
+            continue
+        entry: Dict[str, Any] = {
+            "name": package["name"],
+            "validation": {
+                "installed": True,
+                "source": "site-registry",
+                "stack_id": stack.get("stack_id", ""),
+            },
+        }
+        if package.get("provider"):
+            entry["provider"] = package["provider"]
+        for key in REGISTRY_PACKAGE_KEYS:
+            if package.get(key) not in (None, "", []):
+                entry[key] = package[key]
+        selected[package["name"]] = entry
+    return selected
+
+
 def detect_target() -> Dict[str, Any]:
     return {
         "hostname": socket.gethostname(),
@@ -297,6 +394,22 @@ def build_checkpoint(
         },
     }
 
+    # Site-specific environment plumbing (lmod init, module loads, extra
+    # exports) lives in checkpoint["paths"] and is what env.sh actually
+    # consumes; a merge must carry it over from the old checkpoint or the
+    # regenerated env.sh silently loses the module setup.
+    if isinstance(merge_from, dict):
+        merged_paths = merge_from.get("paths", {})
+        if isinstance(merged_paths, dict):
+            for key in ("pre_commands", "extra_env"):
+                if merged_paths.get(key):
+                    checkpoint["paths"][key] = merged_paths[key]
+            # union, don't clobber: derive_paths already collected the
+            # merged entries' own per-entry modules
+            for mod in merged_paths.get("modules") or []:
+                if mod and mod not in checkpoint["paths"].setdefault("modules", []):
+                    checkpoint["paths"]["modules"].append(mod)
+
     return checkpoint
 
 
@@ -307,12 +420,43 @@ def cmd_create(args: argparse.Namespace) -> None:
     if args.from_discovery:
         discovery = load_json(args.from_discovery)
 
+    registry_stack = None
+    if args.from_registry:
+        registry_stack = select_registry_stack(
+            load_json(args.from_registry), req)
+        if registry_stack:
+            # Registry entries win per dependency; probed candidates only
+            # fill the gaps (on-the-spot discovery fill-in).
+            combined = discovery_from_stack(registry_stack)
+            for dep, entry in (discovery or {}).items():
+                combined.setdefault(dep, entry)
+            discovery = combined
+
     merge_from = None
     if args.merge:
         if args.merge.exists():
             merge_from = load_json(args.merge)
 
     checkpoint = build_checkpoint(req, discovery, merge_from)
+    if registry_stack:
+        # stack_id only stays valid while selected is exactly the stack's
+        # packages; any gap-filling (probe discovery, merged checkpoint)
+        # breaks the identity and downgrades the reference to a note.
+        stack_package_names = set(
+            package.get("name")
+            for package in registry_stack.get("packages") or []
+            if isinstance(package, dict))
+        if set(checkpoint.get("selected", {})) == stack_package_names:
+            checkpoint["stack_id"] = registry_stack["stack_id"]
+            checkpoint["status"].setdefault("reuse_notes", []).append(
+                "resolved from site registry stack %s; compatibility check still "
+                "required before build" % registry_stack["stack_id"]
+            )
+        else:
+            checkpoint["status"].setdefault("reuse_notes", []).append(
+                "stack_id unset: selected was extended beyond site registry "
+                "stack %s by gap-filling" % registry_stack["stack_id"]
+            )
 
     if args.output:
         output_path = args.output
@@ -331,9 +475,12 @@ def cmd_create(args: argparse.Namespace) -> None:
     )
 
     if args.json:
-        protocol_ok("checkpoint.create", output=str(output_path.resolve()))
+        protocol_ok("checkpoint.create", output=str(output_path.resolve()),
+                    registry_stack=(registry_stack or {}).get("stack_id", ""))
     else:
         print(f"entity-deps.local.json written to {output_path.resolve()}")
+        if registry_stack:
+            print(f"resolved from site registry stack {registry_stack['stack_id']}")
 
 
 # ===========================================================================
@@ -470,6 +617,9 @@ def cmd_record_install(args: argparse.Namespace) -> None:
 
     selected[dep] = entry
     checkpoint["paths"] = derive_paths(selected)
+    # recording an install changes selected, so any registry stack reference
+    # no longer describes this checkpoint — downgrade it to a note
+    stale_stack = checkpoint.pop("stack_id", None)
     checkpoint["compatibility"] = {
         "status": "unknown",
         "checked_at": "",
@@ -480,6 +630,11 @@ def cmd_record_install(args: argparse.Namespace) -> None:
     if isinstance(status, dict):
         status["checkpoint"] = "partial"
         status["ready_for_entity_build"] = False
+        if stale_stack:
+            status.setdefault("reuse_notes", []).append(
+                "stack_id unset: selected changed by record-install "
+                "(was %s)" % stale_stack
+            )
 
     write_json_atomic(args.checkpoint, checkpoint)
     record_step(
@@ -517,6 +672,11 @@ def main() -> None:
     p_cre.add_argument("requirements_json", type=Path, help="Path to requirements.json")
     p_cre.add_argument("--from-discovery", type=Path, dest="from_discovery",
                        help="JSON file with dependency candidate entries")
+    p_cre.add_argument("--from-registry", type=Path, dest="from_registry",
+                       help="Site deps registry JSON exported by "
+                            "`entityctl site deps <site> --json`; a verified "
+                            "stack whose signature matches the requirements "
+                            "prefills selected, probed candidates fill the gaps")
     p_cre.add_argument("--merge", type=Path, dest="merge",
                        help="Existing entity-deps.local.json to merge selected/decisions from")
     p_cre.add_argument("--output", type=Path,
@@ -564,4 +724,7 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    import sys
+    from _invocation_log import trace_invocation
+    with trace_invocation("entity-env-build", "entity_checkpoint.py", sys.argv[1:], script_file=__file__):
+        main()

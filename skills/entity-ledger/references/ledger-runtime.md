@@ -6,13 +6,21 @@ This is an internal/debugging reference. For normal work use the
 
 ## Controller
 
-`$ENTITY_LEDGER_HOME/ledger.db` (default `~/.entity-ledger/ledger.db`) is
-the single structured authority. Schema v2 stores Sites, Cases, project
-bindings, identities, compact evidence, and events in SQLite (events are
-passive audit). Large artifacts and logs remain on their owner Site.
-Concurrency control is a `BEGIN IMMEDIATE` file lock; the Operation/Step
-records of the old plan/apply protocol were archived to
-`<ledger_home>/archive/` during the v1→v2 migration.
+`ledger.db` is the single structured authority. Schema v3 stores Sites,
+Projects (project_uid + slug + root, 1:N Cases), Cases (with a
+project_uid foreign key), identities, compact evidence, and events in
+SQLite (events are passive audit). Large artifacts and logs remain on
+their owner Site. Concurrency control is a `BEGIN IMMEDIATE` file lock;
+the Operation/Step records of the old plan/apply protocol were archived
+to `<ledger_home>/archive/` during the v1→v2 migration.
+
+Resolution order for the controller home (the directory holding
+ledger.db): explicit parameters (`--ledger-home` or
+`ENTITY_LEDGER_HOME`) > the `ENTITY_WORKSPACE` environment variable
+(`<workspace>/.ledger`) > the `~/.entity-ledger/active-workspace`
+pointer > the legacy `~/.entity-ledger` (compatibility fallback, with a
+one-time deprecation warning on stderr). The snapshots directory resolves
+to the same home as the db.
 
 Export without changing controller state:
 
@@ -22,23 +30,23 @@ python3 scripts/entityctl.py export --output /absolute/ledger-export.json
 
 ## record writes and receipts
 
-Each record primitive first derives the identity locally in the controller
-(content-addressed hash), then hands a structured envelope via
-`ExecutorClient` to the executor on the execution Site. Writing primitives
-carry their own evidence probes: the executor re-reads and verifies the
-receipt/output fingerprints, and only when everything passes does the
-primitive record the identity, the current projection, and the audit event
-in a single SQLite transaction. Any failed step means zero writes; fix the
-cause and rerun the same primitive.
+Each record primitive first derives the identity locally in the
+controller (content-addressed hash), then hands a structured envelope via
+`ExecutorClient` to the executor on the execution Site. Writing
+primitives carry their own evidence probes: the executor re-reads and
+verifies the receipt/output fingerprints, and only when everything passes
+does the primitive record the identity, the current projection, and the
+audit event in a single SQLite transaction. Any failed step means zero
+writes; fix the cause and rerun the same primitive.
 
-Submitting a job (`record run-launch`) is an external effect that must not
-be blindly replayed; internally the executor advances the receipt through
-`intent_written → effect_observed → outputs_verified`: repeated execution
-short-circuits on an already-verified receipt; when the process is
-interrupted after submission but before verification, it finds the uniquely
-matching submitted effect by launch comment in the scheduler/process table
-and adopts it — it never submits twice. Multiple matches are an anomaly —
-adopting any one of them is unsafe.
+Submitting a job (`record run-launch`) is an external effect that must
+not be blindly replayed; internally the executor advances the receipt
+through `intent_written → effect_observed → outputs_verified`: repeated
+execution short-circuits on an already-verified receipt; when the process
+is interrupted after submission but before verification, it finds the
+uniquely matching submitted effect by launch comment in the
+scheduler/process table and adopts it — it never submits twice. Multiple
+matches are an anomaly — adopting any one of them is unsafe.
 
 ## Rename and storage migration boundaries
 
@@ -53,8 +61,8 @@ boundaries:
   construction phases such as `--help`. The `ENTITY_ROUTER_HOME`
   environment variable is still honored (when `ENTITY_LEDGER_HOME` is not
   set).
-- **Receipt identity**: for runs that were prepared/inventoried before the
-  rename, the receipts in their staging receipts record the old
+- **Receipt identity**: for runs that were prepared/inventoried before
+  the rename, the receipts in their staging receipts record the old
   `plan_hash` (which embeds the old kind string). Rerunning prepare/data
   for the same run hits "existing receipt belongs to another Step". Fix:
   delete the run's old receipts under
@@ -62,35 +70,36 @@ boundaries:
   primitive.
 - **In-flight job recovery**: in-flight jobs submitted before the rename
   carry a launch comment with the `entity-router:` prefix. Recovery
-  matching (the squeue/sacct scan for Slurm and the pgrep scan for direct)
-  accepts both the `entity-ledger:` and `entity-router:` prefixes, so old
-  jobs are adopted rather than resubmitted; new submissions always use the
-  `entity-ledger:` prefix.
+  matching (the squeue/sacct scan for Slurm and the pgrep scan for
+  direct) accepts both the `entity-ledger:` and `entity-router:`
+  prefixes, so old jobs are adopted rather than resubmitted; new
+  submissions always use the `entity-ledger:` prefix.
 
 ## Executor transport
 
-Local and SSH run the same `entity_ledger_executor.py` validate/execute/verify
-logic and the same request envelope protocol, but the invocation differs: on a
-local Site the `ExecutorClient` calls it in-process (receipt persistence and
-allowed_roots checks are identical, skipping the script copy, the request
-file, and the subprocess); on an SSH Site a content-addressed executor copy
-is deployed to the remote and invoked as a subprocess. The remote copy lives
-at:
+Local and SSH run the same `entity_ledger_executor.py`
+validate/execute/verify logic and the same request envelope protocol, but
+the invocation differs: on a local Site the `ExecutorClient` calls it
+in-process (receipt persistence and allowed_roots checks are identical,
+skipping the script copy, the request file, and the subprocess); on an
+SSH Site a content-addressed executor copy is deployed to the remote and
+invoked as a subprocess:
 
 ```text
 <staging_root>/.entity-ledger-executor/<sha256>/entity_ledger_executor.py
 ```
 
-The SSH transport only stages the exact payload/request JSON, invokes actions
-on the whitelist, and returns structured results. Run submission accepts a
-validated `run_spec`; the executor renders the submission script selected
-by the Site profile's `scheduler.kind` — `slurm` corresponds to an sbatch
-script, `direct` to a self-contained `run.sh`. Caller-provided shell,
-commands, pre-commands, or script text are all rejected.
+The SSH transport only stages the exact payload/request JSON, invokes
+actions on the whitelist, and returns structured results. Run submission
+accepts a validated `run_spec`; the executor renders the submission
+script selected by the Site profile's `scheduler.kind` — `slurm`
+corresponds to an sbatch script, `direct` to a self-contained `run.sh`.
+Caller-provided shell, commands, pre-commands, or script text are all
+rejected.
 
 The launch effect identity varies by backend. Slurm records
-`{"scheduler": "slurm", "job_id": ..., "comment": ...}`; the direct backend
-(Sites without a scheduler) records a detached process:
+`{"scheduler": "slurm", "job_id": ..., "comment": ...}`; the direct
+backend (Sites without a scheduler) records a detached process:
 
 ```json
 {"scheduler": "direct", "pid": 418795, "pgid": 418795,
@@ -107,21 +116,35 @@ adopts a unique match.
 
 ## Site profile
 
-Sites are registered directly into the store:
+The authority for site information is the workspace's
+`sites/<site>.yaml` profile (transport, scheduler, machine, site_root,
+projects, deps registry, notes); `entityctl site sync` refreshes the
+profile into the store, and `site list/show` gives a merged view of db +
+profile. Sites from the old workflow's `site add` can still be written
+directly into the db (flagged db-only in the merged view).
 
 ```bash
-python3 scripts/entityctl.py site add --profile /absolute/site-profile.json
+python3 scripts/entityctl.py site sync
 python3 scripts/entityctl.py site list
 ```
 
-The required runtime roots are `build_root`, `run_root`, and
-`staging_root`; a run Site must also declare a transport and a scheduler
-(`slurm`, or `none` for Sites without a scheduler). A policy may provide
-`default_cpus_per_gpu`, `default_partition`, `default_qos`,
-`default_submit_user`, and `max_cpu_per_gpu`. The direct backend ignores
-`default_partition` and `default_qos` (they normalize to empty strings)
-and defaults the submit user to the current user. Secrets and cluster
-repair commands must never appear in a profile.
+When the profile carries `site_root`, new builds/runs/staging land in
+`<site_root>/projects/<project>/{builds,runs,staging}/<case>/<id>`
+(layout `site-tree`); legacy profiles without `site_root` need the three
+independent roots `build_root`, `run_root`, and `staging_root` (layout
+`legacy-roots`), and old Locators remain resolvable. A run Site must
+also declare a transport and a scheduler (`slurm`, or `none` for Sites
+without a scheduler). A policy may provide `default_cpus_per_gpu`,
+`default_partition`, `default_qos`, `default_submit_user`,
+`default_gres` (a Slurm gres spec `gpu[:type]:count`, e.g.
+`gpu:V100:1`, used to pin the GPU type when a partition has several), and
+`max_cpu_per_gpu`. gres resolution order for a run: explicit `--gres` >
+policy `default_gres` > generic `gpu:<N>`; the resolved value is recorded
+in the run identity's compute. The direct backend ignores
+`default_partition` and `default_qos` (they normalize to empty strings),
+likewise ignores gres (normalized to ""), and defaults the submit user
+to the current user. Secrets and cluster repair commands must never
+appear in a profile or in the archive.
 
 ## Live status probing
 
@@ -133,7 +156,7 @@ root. On a Site without a scheduler: the exit file, a `kill -0` liveness
 probe, and a foreign-process scan — when the Site refuses that scan, the
 result degrades to `unknown` (never treated as a failure). `--live` also
 reports `divergences`, classifying out-of-band changes: `job_gone` (the
-backend has no record of a recorded job or process), `state_mismatch` (the
-job reached a terminal state the Ledger never observed), and
-`untracked_job` (a foreign scheduler job or process is running in the Case
-run root — evidence that the record primitives were bypassed).
+backend has no record of a recorded job or process), `state_mismatch`
+(the job reached a terminal state the Ledger never observed), and
+`untracked_job` (a foreign scheduler job or process is running in the
+Case run root — evidence that the record primitives were bypassed).

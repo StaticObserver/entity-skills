@@ -5,23 +5,31 @@ A skills package that helps agents run astrophysical simulations with
 
 `skills/entity-ledger/SKILL.md` is the deterministic record entry point for
 simulation projects. The Ledger converges the public model into
-`Project → Case → Identity → Evidence`: the agent handles conversation with
-the user, scientific judgment, and workflow orchestration, while the Ledger
-provides deterministic primitives — read (status/show), generate
-(render-run/snapshot-source), record (record build/run-prepare/run-launch/
-run-exit/data/intent), and probe (status --live). Write primitives carry
-built-in evidence probes: verify first, then commit to the ledger, with zero
-writes on failure. Well-scoped read-only or standalone domain tasks can still
-invoke the corresponding owner skill directly.
+`Workspace → Project → Case → Identity → Evidence`: the Workspace is the
+single working directory (the projects/ project tree, sites/ site records,
+.ledger/ controller state — self-contained and movable as a whole); a Project
+is the research-topic container holding the source authority; a Case is one
+research thread with a clear intent inside a project; a Computation Site is a
+conventional file tree on a compute machine
+(`<site_root>/{deps,checkouts,projects}`) plus the structured record in the
+workspace. The agent handles conversation with the user, scientific judgment,
+and workflow orchestration, while the Ledger provides deterministic
+primitives — read (status/show), generate (render-run/snapshot-source),
+record (record build/run-prepare/run-launch/run-exit/data/intent/relocate),
+and probe (status --live). Write primitives carry built-in evidence probes:
+verify first, then commit to the ledger, with zero writes on failure.
+Well-scoped read-only or standalone domain tasks can still invoke the
+corresponding owner skill directly.
 
 - `entity-pgen`: PGen, matching TOML, and design records;
 - `entity-env-build`: dependency environment and Entity build;
 - `entity-nt2py`: nt2py data access, plotting, and export.
 
 The workflow order is orchestrated by the agent according to the user's goal;
-no separate run skill is established. The SQLite `ledger.db` (schema v2) is
-the only structured controller authority; Local runs the same executor logic
-in-process, while SSH uses a content-addressed executor copy.
+no separate run skill is established. The SQLite `ledger.db` (schema v3,
+located in the workspace's `.ledger/`) is the only structured controller
+authority; Local runs the same executor logic in-process, while SSH uses a
+content-addressed executor copy.
 
 ```text
 entity-skills/
@@ -43,25 +51,33 @@ entity-skills/
 ```
 
 For the current architecture, see
-`design/router-case-centric-restructure-2026-07-23.md`; for the migration
-plan, see `design/router-restructure-migration-2026-07-23.md`. `router-v5-*`,
-`architecture-v4.md`, and `model-efficient-router-flow.md` are historical
-designs and do not represent the current public entry point. For the skill
-execution observability contract, see `design/skill-observability.md`.
-`design/` and `legacy/` are not part of the Ledger runtime context.
+`design/workspace-and-computation-site-2026-08-03.md`; for the development
+plan, see `design/workspace-development-plan-2026-08-03.md`.
+`router-case-centric-restructure-2026-07-23.md` and the earlier
+`router-v5-*`, `architecture-v4.md` are historical designs and do not
+represent the current public entry point. For the skill execution
+observability contract, see `design/skill-observability.md`. `design/` and
+`legacy/` are not part of the Ledger runtime context.
 
 ## Shared Control State
 
-Codex, Claude Code, Kimi Code, and plain shells share
-`~/.entity-ledger/ledger.db` on the control machine by default (schema v2:
-Site, Case, project bindings, identity, and audit events; concurrency is a
-single-writer file lock). Identity, events, and evidence references are not
+Codex, Claude Code, Kimi Code, and plain shells share the controller state by
+default: the active workspace's `.ledger/ledger.db` (schema v3: Site,
+Project, Case, identity, and audit events; concurrency is a single-writer
+file lock). The controller home resolution order is `--ledger-home` (together
+with `ENTITY_LEDGER_HOME`/`ENTITY_ROUTER_HOME`, all in the explicit tier) >
+the `ENTITY_WORKSPACE` environment variable > the
+`~/.entity-ledger/active-workspace` pointer > legacy `~/.entity-ledger`
+(compatibility fallback). Identity, events, and evidence references are not
 written to client-private directories or source repositories. When the remote
 is unavailable, the last control snapshot can still be read, but cached
 evidence does not represent current remote facts.
 
 ```bash
 python3 skills/entity-ledger/scripts/entityctl.py doctor
+python3 skills/entity-ledger/scripts/entityctl.py workspace init /absolute/workspace
+python3 skills/entity-ledger/scripts/entityctl.py workspace adopt /absolute/workspace
+python3 skills/entity-ledger/scripts/entityctl.py workspace where
 python3 skills/entity-ledger/scripts/entityctl.py \
   --actor-run-id <run-id> --actor-provider <provider> \
   install --source-root /path/to/entity-skills/skills
@@ -73,7 +89,7 @@ python3 skills/entity-ledger/scripts/entityctl.py export --output /absolute/expo
 
 # Read project status (dashboard: readiness board + Run ledger + pending items + suggested next steps)
 python3 skills/entity-ledger/scripts/entityctl.py status \
-  --project-root /absolute/project [--live] [--json]
+  --project-root /absolute/project [--case <slug>] [--live] [--json]
 python3 skills/entity-ledger/scripts/entityctl.py show --project-root /absolute/project
 
 # Generate (zero writes)
@@ -94,6 +110,13 @@ python3 skills/entity-ledger/scripts/entityctl.py ... record build --project-roo
 python3 skills/entity-ledger/scripts/entityctl.py ... record data   --project-root ...
 python3 skills/entity-ledger/scripts/entityctl.py ... record intent --project-root ... \
   --text "<current research goal>"
+python3 skills/entity-ledger/scripts/entityctl.py ... record analysis --project-root ... \
+  --script <path relative to scripts/> --data <run_id|data_id> --params '<json>' \
+  --output-root <site output directory>
+python3 skills/entity-ledger/scripts/entityctl.py ... record run-abort --project-root ... \
+  --reason "<site permanently unreachable, etc.>"
+python3 skills/entity-ledger/scripts/entityctl.py ... record relocate --project-root ... \
+  --dimension <build|run|data> --identity-id <id> --to <new absolute path>
 ```
 
 `record run-prepare` requires the simulation parameters to be confirmed (the
@@ -109,13 +132,16 @@ queries.
 and Kimi Code keep only symlink projections pointing to the same bundle,
 instead of maintaining three separate copies of the files.
 
-Direct invocation of `entity-pgen` falls into read-only and standalone
-modification. It must run its own preflight before writing; the preflight
-queries the Ledger store, and a target that falls within a registered Case's
-source/identity/active-run Locator is treated as managed — managed writes must
-be registered through the Ledger's record primitives. Ledger control state
-lives in an independent control root and does not rely on `_case/` markers in
-source ancestor directories.
+Direct invocation of `entity-pgen` falls into read-only, standalone
+modification, and managed writes. It must run its own preflight before
+writing; the preflight queries the Ledger store: a target inside a registered
+Case's source authority is a `managed-write` and may be written directly —
+the Ledger does not intervene in the PGen process; once the change settles,
+`entityctl snapshot-source` re-probes the tree and books the new source
+identity; a target inside a registered build/run/data identity root or the
+active run is refused (`router-required`). Ledger control state lives in an
+independent control root and does not rely on `_case/` markers in source
+ancestor directories.
 
 ## Repository and Release
 

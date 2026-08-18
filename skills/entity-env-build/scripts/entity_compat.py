@@ -1394,4 +1394,7 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    import sys
+    from _invocation_log import trace_invocation
+    with trace_invocation("entity-env-build", "entity_compat.py", sys.argv[1:], script_file=__file__):
+        main()

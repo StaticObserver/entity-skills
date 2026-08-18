@@ -20,8 +20,9 @@ from entity_ledger_common import (
     run_on_site,
     site_file_sha256,
     source_manifest,
+    valid_gres,
 )
-from entity_ledger_store import StoreError, canonical_hash
+from entity_ledger_store import CaseResolutionError, canonical_hash
 
 
 class PlanError(LedgerError):
@@ -76,7 +77,13 @@ def _source_site(store, project_root):
         raise PlanError(
             "no local Site source_root covers the project",
             "needs_decision",
-            [{"field": "site", "question": "register a local source Site for the project"}],
+            [{"field": "site",
+              "question": "register a local source Site for the project: add a "
+                          "site archive (sites/<site>.yaml) with transport "
+                          "{\"kind\": \"local\"} and roots.source_root covering "
+                          "the project directory — a good value is the "
+                          "workspace root, not your whole home — then run "
+                          "`entityctl site sync` and retry"}],
         )
     matches.sort(reverse=True)
     return matches[0][1]
@@ -179,6 +186,22 @@ def _slurm_site_policy(profile, compute):
             [{"field": "compute.partition",
               "question": "select a Slurm partition for Site %s" % profile["site_id"]}],
         )
+    # gres resolution order: explicit CLI --gres > policy default_gres >
+    # generic "gpu:<gpus>".  The resolved string is what the sbatch renders
+    # and what the run identity records.
+    gres = str(normalized.get("gres") or "")
+    if not gres:
+        gres = str(policy.get("default_gres") or "")
+    if not gres:
+        gres = "gpu:%s" % normalized["gpus"]
+    if not valid_gres(gres):
+        raise PlanError(
+            "compute.gres must match gpu[:type]:count (got %r)" % gres,
+            "needs_decision",
+            [{"field": "compute.gres",
+              "question": "provide a valid gres such as gpu:1 or gpu:V100:1"}],
+        )
+    normalized["gres"] = gres
     maximum = policy.get("max_cpu_per_gpu")
     if maximum is not None and normalized["cpus_per_task"] > int(maximum):
         raise PlanError(
@@ -197,7 +220,8 @@ def _slurm_site_policy(profile, compute):
 def _direct_site_policy(profile, compute):
     """Policy for scheduler-less Sites: no partition/QoS/scheduler account
     exists, so those fields normalize to empty strings and the submit user
-    defaults to the current user without a needs_decision round-trip."""
+    defaults to the current user without a needs_decision round-trip.  gres
+    is Slurm-only: the direct backend ignores it and normalizes it to ""."""
     policy = profile.get("policy", {})
     normalized = dict(compute)
     normalized.setdefault("nodes", 1)
@@ -205,6 +229,7 @@ def _direct_site_policy(profile, compute):
     normalized.setdefault("cpus_per_task", int(policy.get("default_cpus_per_gpu", 1)))
     normalized.setdefault("partition", "")
     normalized.setdefault("qos", "")
+    normalized["gres"] = ""
     if "submit_user" not in normalized:
         if policy.get("default_submit_user"):
             normalized["submit_user"] = policy["default_submit_user"]
@@ -259,8 +284,66 @@ def _operation_id(seed):
     return "op-" + canonical_hash(seed).split(":", 1)[1][:16]
 
 
+def execution_roots(store, profile, case):
+    """Execution roots for build/run/staging/analysis derivation.
+
+    Profiles declaring ``site_root`` use the Computation Site tree
+    ``<site_root>/projects/<project-slug>/{builds,runs,staging,analysis}``
+    and are marked ``site-tree``; legacy profiles (no site_root) keep their
+    independent roots and are marked ``legacy-roots``.  Returns
+    ``(roots, layout)``; every value may be None for the caller's missing-
+    root check.  Old Locators recorded under either layout stay readable —
+    this only decides where *new* resources land."""
+    site_root = profile.get("site_root", "")
+    if site_root:
+        slug = ""
+        if case.get("project_uid"):
+            try:
+                slug = store.get_project(case["project_uid"])["slug"]
+            except StoreError:
+                slug = ""
+        if not slug:
+            slug = os.path.basename(case.get("project_root") or "") \
+                or case["case_uid"]
+        base = os.path.join(site_root, "projects", slug)
+        return ({
+            "build_root": os.path.join(base, "builds"),
+            "run_root": os.path.join(base, "runs"),
+            "staging_root": os.path.join(base, "staging"),
+            "analysis_root": os.path.join(base, "analysis"),
+        }, "site-tree")
+    roots = profile.get("roots", {})
+    return ({
+        "build_root": roots.get("build_root"),
+        "run_root": roots.get("run_root"),
+        "staging_root": roots.get("staging_root"),
+        "analysis_root": roots.get("analysis_root"),
+    }, "legacy-roots")
+
+
+def merged_execution_profile(store, profile, case):
+    """A profile copy whose roots are filled from ``execution_roots`` so all
+    downstream derivation (build_root checks, ExecutorClient staging,
+    inventory staging) works unchanged under either layout."""
+    roots, layout = execution_roots(store, profile, case)
+    merged = dict(profile.get("roots", {}))
+    for key, value in roots.items():
+        if value:
+            merged[key] = value
+    profile = dict(profile)
+    profile["roots"] = merged
+    return profile, layout
+
+
+def case_path_segment(layout, case):
+    """Path segment below runs/staging: the human-readable case slug in the
+    site tree, the stable case_uid under legacy roots."""
+    return case["case_id"] if layout == "site-tree" else case["case_uid"]
+
+
 def derive_run_paths(case_uid, site_id, roots, scheduler_kind, source_id,
-                     input_sha256, executable, build_id, compute):
+                     input_sha256, executable, build_id, compute,
+                     case_segment=None):
     """Derive the content-addressed run identity and every path a run
     Operation touches from the run seed and the Site roots."""
     seed = {
@@ -271,8 +354,9 @@ def derive_run_paths(case_uid, site_id, roots, scheduler_kind, source_id,
     }
     run_id = "run-" + canonical_hash(seed).split(":", 1)[1][:16]
     operation_id = _operation_id(seed)
-    run_root = os.path.join(roots["run_root"], case_uid, run_id)
-    staging_root = os.path.join(roots["staging_root"], case_uid, operation_id)
+    segment = case_segment or case_uid
+    run_root = os.path.join(roots["run_root"], segment, run_id)
+    staging_root = os.path.join(roots["staging_root"], segment, operation_id)
     return {
         "seed": seed,
         "run_id": run_id,
@@ -330,10 +414,27 @@ def _simulation_confirmation(input_path):
     return record
 
 
-def _resolve_case(store, project_root, goal):
+def case_resolution_plan_error(exc):
+    """Uniform needs_decision mapping for Case-resolution failures shared by
+    facts._resolve_case and record._require_case."""
+    question = ("select the case with --case <%s>" % "|".join(exc.cases)
+                if exc.cases
+                else "create the case with entityctl case init")
+    return PlanError(
+        str(exc), "needs_decision",
+        [{"field": "case", "question": question}],
+    )
+
+
+def _resolve_case(store, project_root, goal, case_slug=None):
     try:
-        return store.resolve_project(project_root), False
-    except StoreError:
+        return store.resolve_project(project_root, case_slug), False
+    except CaseResolutionError as exc:
+        # Only a missing Project (or a Project without any case) auto-creates
+        # on first run; an ambiguous or unknown --case selection is a user
+        # decision, never a silent new Case.
+        if exc.reason not in ("no_project", "no_cases"):
+            raise case_resolution_plan_error(exc)
         source_site = _source_site(store, project_root)
         case_uid = "case-" + canonical_hash({"project_root": project_root}).split(":", 1)[1][:16]
         case = {

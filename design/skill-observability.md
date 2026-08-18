@@ -432,3 +432,41 @@ three providers, and the zero-intrusion runtime boundary. All adapters import
 only observable tool call/output fingerprints; the Kimi adapter traverses the
 main and sub-agent wires and reads the platform-native usage, but does not
 retain `think` content.
+
+## 17. Production Invocation Logging (passive invocation logging)
+
+Status: implemented (2026-08-09).
+
+This is a different layer from the evaluation trace described earlier in this
+document (skill_observability, the complete evidence chain for controlled
+evaluation rounds): production invocation logging is **passive** — every time a
+CLI of the four entity skills is actually invoked, one JSONL record is
+appended, with the goal of accumulating real usage data during everyday use.
+
+- **What is recorded**: schema_version, timestamp (UTC Z), duration_ms, skill,
+  script, argv (after redaction), cwd, exit_code, error_type (optional),
+  skill_version (when a VERSION file exists), pid, ppid_comm (best-effort), and
+  host. Each CLI entry point (`entityctl`, the ledger's executor/remote
+  standalone CLIs, the four env-build CLIs, pgen_preflight, inspect_nt2_data)
+  is wrapped in its `__main__` block with a thin context manager, without
+  intruding into library code.
+- **Where it is written**: by default
+  `~/.entity-skills/observability/invocations/<yyyy-mm>.jsonl` (UTC monthly
+  rotation, append-only, O_APPEND, mkdir -p as needed); the environment
+  variable `ENTITY_SKILL_INVOCATION_LOG` can override with a full file path
+  (for tests and one-off collection).
+- **Privacy boundary**: in argv, the values of flags matching
+  token/secret/password/passwd/api[-_]?key/credential (case-insensitive) are
+  always recorded as `<redacted>` (both `--flag value` and `--flag=value`
+  forms are handled), while the flag names themselves are preserved; no
+  secrets are recorded; the log is observational data and **never becomes a
+  second authoritative state** — the Ledger's ledger.db remains the sole
+  authority, and invocation logs never participate in any state derivation.
+- **Never-fail principle**: all exceptions on the logging path (unwritable
+  directory, full disk, ps failure, etc.) are swallowed; the return value,
+  exit code, and exception semantics of the wrapped main flow are completely
+  unchanged. Each of the four skills keeps a byte-identical copy of
+  `_invocation_log.py` under its scripts/ directory (installed skill
+  directories are self-contained and cannot import across skills; entity-ledger
+  may be absent in the skills-no-router variant), protected from drift by the
+  byte-identity test in `tests/test_invocation_log.py`.

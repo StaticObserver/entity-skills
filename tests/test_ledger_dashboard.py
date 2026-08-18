@@ -92,6 +92,23 @@ class DashboardTest(unittest.TestCase):
         self.assertEqual(dashboard["board"]["pgen"]["state"], "unconfirmed")
         self.assertTrue(any("unconfirmed" in item for item in dashboard["pending"]))
 
+    def test_pgen_cell_scans_source_authority_dir(self):
+        # workspace layout: the TOML lives in the registered source
+        # authority (project.yaml "source"), not at the project root
+        with open(os.path.join(self.project, "project.yaml"), "w") as handle:
+            handle.write("project_uid: project-demo\nslug: demo\n"
+                         "schema_version: 1\ncreated_at: 2026-08-09T00:00:00Z\n"
+                         "source: source\n")
+        os.makedirs(os.path.join(self.project, "source"))
+        path = self._write_toml(name=os.path.join("source", "input.toml"))
+        dashboard = self._dashboard()
+        self.assertEqual(dashboard["board"]["pgen"]["state"], "unconfirmed")
+        self.assertIn("source/input.toml", dashboard["board"]["pgen"]["detail"])
+        self._confirm(path)
+        dashboard = self._dashboard()
+        self.assertEqual(dashboard["board"]["pgen"]["state"], "confirmed")
+        self.assertEqual(dashboard["board"]["pgen"]["detail"], "source/input.toml")
+
     def test_run_ledger_and_deriver(self):
         self.store.add_identity(
             self.case_uid, "run", "run-1",
@@ -161,8 +178,9 @@ class DashboardTest(unittest.TestCase):
         connection = self.store._connect()
         try:
             connection.execute(
-                "INSERT INTO projects(project_root,case_uid,updated_at) "
-                "VALUES(NULL,?,'2026-07-24T00:00:00Z')", (self.case_uid,))
+                "INSERT INTO projects(project_uid,slug,project_root,created_at,"
+                "updated_at) VALUES('project-null','null-root',NULL,"
+                "'2026-07-24T00:00:00Z','2026-07-24T00:00:00Z')")
             connection.commit()
         finally:
             connection.close()

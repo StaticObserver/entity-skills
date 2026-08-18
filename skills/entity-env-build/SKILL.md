@@ -95,8 +95,39 @@ If the result is `partial`, resolve the choice conflicts; do not pass
 
 ### 2. Reuse or build the dependency checkpoint
 
-First read the site notes under `~/.entity-env-build/site-notes/<site_id>.md`,
-then check the exact `artifacts_root/entity-deps.local.json` (if it exists).
+Resolve the dependencies of requirements.json in the following lookup order;
+use the first hit and fill the gaps layer by layer:
+
+1. **Site deps registry** (authoritative: `sites/<site>.yaml` in the
+   workspace): export the registry on the controller and pass it to create —
+   ```bash
+   entityctl site deps <site_id> --json > /tmp/site-deps.json
+   python3 scripts/entity_checkpoint.py create /artifacts/requirements.json \
+     --from-registry /tmp/site-deps.json \
+     --output /artifacts/entity-deps.local.json
+   ```
+   A stack whose signature (backend/mpi/gpu_aware_mpi/output/cxx_standard/
+   dependency_profile) exactly matches the current requirements and whose
+   `status=verified` directly prefills `selected` (each package keeps its
+   original provider; provenance is carried by
+   `validation.source=site-registry`). The registry may mix in `kind=analysis`
+   Python environment stacks — build consumption only matches `kind=build`
+   (absent means build). The `env_sh` path in the registry is for human
+   reading and auditing only — the environment is always rebuilt by
+   `entity_generate.py env` from the current checkpoint's packages. A
+   registry hit does not exempt any gate: compatibility must still be `pass`
+   before compiling.
+2. **`entity-site.yaml` marker**: on machines without a workspace, look for
+   `<site_root>/entity-site.yaml` (once the agent finds it, it knows the
+   roots manifest), then read `deps/<stack_id>/stack.yaml` for existing
+   stacks; a matching stack can be organized into registry JSON and fed via
+   `--from-registry`.
+3. **On-the-spot discovery fill-in**: dependencies not covered by the
+   registry are still searched through the original flow — modules, system
+   packages, existing prefixes, and user-managed installs — and the gaps are
+   filled with `--from-discovery` or `record-install`.
+
+Then check the exact `artifacts_root/entity-deps.local.json` (if it exists).
 Reuse it only when its embedded requirements and all resolved site paths
 match.
 
@@ -106,11 +137,10 @@ python3 scripts/entity_checkpoint.py create /artifacts/requirements.json \
   --output /artifacts/entity-deps.local.json
 ```
 
-Before proposing a source build, search modules, system packages, existing
-prefixes, and user-managed installs. Record the selected compiler/dependency
-paths, versions, providers, signatures, verification results, and any required
-site preamble commands. Machine-specific fixes belong in the site
-notes/checkpoint data, not in this skill.
+Record the selected compiler/dependency paths, versions, providers,
+signatures, verification results, and any required site preamble commands.
+Machine-specific fixes belong in the site notes/checkpoint data, not in this
+skill.
 
 If a source build is approved:
 
@@ -124,6 +154,20 @@ Prefixes and source downloads stay under `deps_root`; temporary dependency
 builds and logs stay under `artifacts_root`. Determine build order from the
 selected dependency graph; ADIOS2 waits for the Kokkos/HDF5 prefixes it
 consumes.
+
+**New-stack write-back (verify first, then record)**: after a new dependency
+stack completes confirm and compatibility is `pass`, register it in the site
+registry so the next resolution hits it directly:
+
+```bash
+# Run on the controller; env.sh must already exist at <site_root>/deps/<stack_id>/env.sh
+entityctl site deps-add <site_id> --from-checkpoint /artifacts/entity-deps.local.json
+```
+
+deps-add writes the stack entry (stack_id, signature, packages, recipe,
+status=verified) into the deps registry of `sites/<site>.yaml` and generates
+`deps/<stack_id>/stack.yaml` on the site; when the evidence does not match
+(unverified checkpoint, missing env.sh) it writes nothing.
 
 ### 3. Compatibility and environment
 

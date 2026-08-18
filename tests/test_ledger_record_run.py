@@ -161,10 +161,15 @@ fmt=''
 for a in args:
     if a.startswith('--format='):
         fmt=a.split('=',1)[1]
+# honest emulation: real sacct only pipe-separates with -P; without it the
+# output is a whitespace-padded table
+pipe='-P' in args
+def emit(fields):
+    print('|'.join(fields) if pipe else '  '.join(fields))
 if fmt == 'State,ExitCode':
-    print('%s|%s' % (r.get('state','COMPLETED'), r.get('exit_code','0:0')))
+    emit([r.get('state','COMPLETED'), r.get('exit_code','0:0')])
 elif fmt == 'JobID,State,WorkDir':
-    print('%s|%s|%s' % (r['job_id'], r.get('state','COMPLETED'), r['run_root']))
+    emit([r['job_id'], r.get('state','COMPLETED'), r['run_root']])
 else:
     print(r.get('state','COMPLETED'))
 """)
@@ -285,6 +290,150 @@ else:
         self.assertEqual(code, 0, payload)
         self.assertEqual(payload["compute"]["walltime"], "")
         self.assertNotIn("#SBATCH --time", payload["script"])
+
+    def _register_typed_gres_site(self):
+        self.store.upsert_site({
+            "schema_version": 1, "site_id": "local-slurm-typed",
+            "display_name": "local slurm typed",
+            "transport": {"kind": "local", "ssh_alias": ""},
+            "scheduler": {"kind": "slurm"},
+            "roots": {"source_root": self.temp, "build_root": self.build_root,
+                      "run_root": self.run_root,
+                      "staging_root": self.staging_root},
+            "policy": {"default_cpus_per_gpu": 2,
+                       "default_partition": "test",
+                       "default_submit_user": "tester",
+                       "default_gres": "gpu:V100:1"},
+            "shared_mappings": [],
+        })
+
+    def test_render_run_typed_gres_from_policy(self):
+        self._register_typed_gres_site()
+        code, payload = self.cli(
+            "render-run", "--project-root", self.project,
+            "--toml", "input.toml", "--site", "local-slurm-typed",
+            "--executable", self.executable)
+        self.assertEqual(code, 0, payload)
+        self.assertIn("#SBATCH --gres=gpu:V100:1", payload["script"])
+        self.assertEqual(payload["compute"]["gres"], "gpu:V100:1")
+
+    def test_render_run_explicit_gres_overrides_policy(self):
+        self._register_typed_gres_site()
+        code, payload = self.cli(
+            "render-run", "--project-root", self.project,
+            "--toml", "input.toml", "--site", "local-slurm-typed",
+            "--executable", self.executable, "--gres", "gpu:A100:1")
+        self.assertEqual(code, 0, payload)
+        self.assertIn("#SBATCH --gres=gpu:A100:1", payload["script"])
+        self.assertEqual(payload["compute"]["gres"], "gpu:A100:1")
+
+    def test_render_run_gres_falls_back_to_generic(self):
+        code, payload = self.cli(
+            "render-run", "--project-root", self.project,
+            "--toml", "input.toml", "--site", "local-slurm",
+            "--executable", self.executable)
+        self.assertEqual(code, 0, payload)
+        self.assertEqual(payload["compute"]["gres"], "gpu:1")
+        self.assertIn("#SBATCH --gres=gpu:1", payload["script"])
+
+    def test_render_run_rejects_an_invalid_gres(self):
+        code, payload = self.cli(
+            "render-run", "--project-root", self.project,
+            "--toml", "input.toml", "--site", "local-slurm",
+            "--executable", self.executable, "--gres", "v100")
+        self.assertEqual(code, 2, payload)
+        self.assertFalse(payload["ok"])
+        self.assertFalse(payload["state_mutated"])
+        self.assertIn("gres", payload["error"])
+
+    def test_run_identity_records_resolved_gres(self):
+        self._register_typed_gres_site()
+        prepared = self._prepare("local-slurm-typed", self.executable)
+        self.assertEqual(prepared["kind"], "entity-ledger.record.run-prepare")
+        identity = self._run_identity()
+        self.assertIsNotNone(identity)
+        self.assertEqual(identity["compute"]["gres"], "gpu:V100:1")
+        submit = os.path.join(prepared["run_root"], "run.sbatch")
+        with open(submit) as handle:
+            self.assertIn("#SBATCH --gres=gpu:V100:1", handle.read())
+
+    def test_direct_backend_ignores_gres(self):
+        code, payload = self.cli(
+            "render-run", "--project-root", self.project,
+            "--toml", "input.toml", "--site", "local-direct",
+            "--executable", self.executable, "--gres", "gpu:V100:1")
+        self.assertEqual(code, 0, payload)
+        self.assertEqual(payload["compute"]["gres"], "")
+        self.assertNotIn("gres", payload["script"])
+
+    def test_run_prepare_run_id_reuses_rendered_run(self):
+        code, rendered = self.cli(
+            "render-run", "--project-root", self.project,
+            "--toml", "input.toml", "--site", "local-slurm",
+            "--executable", self.executable)
+        self.assertEqual(code, 0, rendered)
+        code, prepared = self.cli(
+            "record", "run-prepare", "--project-root", self.project,
+            "--toml", "input.toml", "--site", "local-slurm",
+            "--executable", self.executable,
+            "--run-id", rendered["run_id"])
+        self.assertEqual(code, 0, prepared)
+        self.assertEqual(prepared["run_id"], rendered["run_id"])
+        self.assertEqual(prepared["run_root"], rendered["run_root"])
+        # the render previewed exactly what prepare materialized
+        with open(os.path.join(prepared["run_root"], "run.sbatch")) as handle:
+            self.assertEqual(handle.read(), rendered["script"])
+
+    def test_run_prepare_run_id_mismatch_fails_closed(self):
+        code, rendered = self.cli(
+            "render-run", "--project-root", self.project,
+            "--toml", "input.toml", "--site", "local-slurm",
+            "--executable", self.executable)
+        self.assertEqual(code, 0, rendered)
+        code, payload = self.cli(
+            "record", "run-prepare", "--project-root", self.project,
+            "--toml", "input.toml", "--site", "local-slurm",
+            "--executable", self.executable, "--gpus", "2",
+            "--run-id", rendered["run_id"])
+        self.assertEqual(code, 2)
+        self.assertFalse(payload["ok"])
+        self.assertFalse(payload["state_mutated"])
+        self.assertIn("drifted", payload["error"])
+        self.assertIn(rendered["run_id"], payload["error"])
+        # zero writes: no run root materialized anywhere
+        self.assertEqual(os.listdir(self.run_root), [])
+
+    def test_site_tree_launch_uses_derived_staging_root(self):
+        # regression: record run-launch must resolve execution roots from
+        # site_root (site-tree layout), not only from explicit legacy roots
+        site_root = os.path.join(self.temp, "compute")
+        self.store.upsert_site({
+            "schema_version": 1, "site_id": "local-tree",
+            "display_name": "local site-tree",
+            "transport": {"kind": "local", "ssh_alias": ""},
+            "scheduler": {"kind": "slurm"},
+            "site_root": site_root, "roots": {},
+            "policy": {"default_cpus_per_gpu": 2,
+                       "default_partition": "test",
+                       "default_submit_user": "tester"},
+            "shared_mappings": [],
+        })
+        # the executable must sit under the derived site-tree build root
+        # (project entity unregistered here -> slug falls back to the
+        # project directory basename)
+        tree_executable = os.path.join(
+            site_root, "projects", os.path.basename(self.project), "builds",
+            "entity.xc")
+        os.makedirs(os.path.dirname(tree_executable))
+        shutil.copy2(self.executable, tree_executable)
+        prepared = self._prepare("local-tree", tree_executable)
+        self.assertIn(site_root, prepared["run_root"])
+        code, launched = self._launch()
+        self.assertEqual(code, 0, launched)
+        self.assertEqual(launched["status"], "submitted")
+        self.assertEqual(launched["scheduler"]["job_id"], "42")
+        submit = os.path.join(prepared["run_root"], "run.sbatch")
+        self.assertTrue(os.path.isfile(submit))
 
     def test_render_run_rejects_an_invalid_walltime(self):
         code, payload = self.cli(
@@ -495,6 +644,9 @@ else:
         self.assertEqual(code, 0, probed)
         self.assertEqual(probed["state"], "running")
         self.assertFalse(probed["state_mutated"])
+        # I4: a still-running probe says in plain words that nothing was written
+        self.assertEqual(probed["detail"],
+                         "run is still running; no state written")
         self.assertEqual(self._run_identity()["status"], "submitted")
         exit_file = os.path.join(prepared["run_root"], ".entity-exit-code")
         self.assertFalse(os.path.isfile(exit_file))
@@ -589,6 +741,118 @@ else:
         self.assertEqual(identity["exit_code"], 1)
         self.assertEqual(identity["scheduler"]["state"], "FAILED")
 
+    def test_run_exit_slurm_cancelled_zero_exit_books_failed(self):
+        # B2: a scancel'ed job reports CANCELLED 0:0 — the scheduler word
+        # outranks the clean exit code (the polar_cap OOM incident booked
+        # this as completed and could not be corrected)
+        self._prepare("local-slurm", self.executable)
+        code, payload = self._launch()
+        self.assertEqual(code, 0, payload)
+        self._sacct_terminal("CANCELLED", "0:0")
+        code, probed = self.cli("record", "run-exit",
+                                "--project-root", self.project)
+        self.assertEqual(code, 0, probed)
+        self.assertEqual(probed["state"], "failed")
+        self.assertEqual(probed["exit_code"], 0)
+        identity = self._run_identity()
+        self.assertEqual(identity["status"], "failed")
+        self.assertEqual(identity["scheduler"]["state"], "CANCELLED")
+        events = self.store.export()["events"]
+        self.assertEqual(events[-1]["event_type"], "record.run-exit")
+        self.assertEqual(events[-1]["payload"]["scheduler_state"], "CANCELLED")
+        self.assertEqual(events[-1]["payload"]["status"], "failed")
+
+    def test_run_exit_slurm_timeout_books_failed(self):
+        self._prepare("local-slurm", self.executable)
+        code, payload = self._launch()
+        self.assertEqual(code, 0, payload)
+        self._sacct_terminal("TIMEOUT", "1:0")
+        code, probed = self.cli("record", "run-exit",
+                                "--project-root", self.project)
+        self.assertEqual(code, 0, probed)
+        self.assertEqual(probed["state"], "failed")
+        identity = self._run_identity()
+        self.assertEqual(identity["status"], "failed")
+        self.assertEqual(identity["scheduler"]["state"], "TIMEOUT")
+
+    def test_run_exit_slurm_completed_event_carries_scheduler_state(self):
+        # no regression: COMPLETED 0:0 still books completed, and the event
+        # records the scheduler word
+        self._prepare("local-slurm", self.executable)
+        code, payload = self._launch()
+        self.assertEqual(code, 0, payload)
+        self._sacct_terminal("COMPLETED", "0:0")
+        code, probed = self.cli("record", "run-exit",
+                                "--project-root", self.project)
+        self.assertEqual(code, 0, probed)
+        self.assertEqual(probed["state"], "completed")
+        events = self.store.export()["events"]
+        self.assertEqual(events[-1]["payload"]["status"], "completed")
+        self.assertEqual(events[-1]["payload"]["scheduler_state"], "COMPLETED")
+
+    def test_run_launch_resubmit_after_job_died(self):
+        # I3, the incident shape: the ledger-submitted job died instantly
+        # (missing executable), run-exit was never called — resubmit
+        # replaces the dead job with a fresh submission
+        self._prepare("local-slurm", self.executable)
+        code, payload = self._launch()
+        self.assertEqual(code, 0, payload)
+        self.assertEqual(self.submit_count(), 1)
+        first_scheduler = self._run_identity()["scheduler"]
+        self._sacct_terminal("FAILED", "1:0")
+        code, resubmitted = self._launch(extra=["--resubmit"])
+        self.assertEqual(code, 0, resubmitted)
+        self.assertTrue(resubmitted["resubmit"])
+        self.assertTrue(resubmitted["state_mutated"])
+        self.assertEqual(resubmitted["previous_scheduler"], first_scheduler)
+        self.assertEqual(self.submit_count(), 2)
+        identity = self._run_identity()
+        self.assertEqual(identity["status"], "submitted")
+        self.assertEqual(identity["prior_submissions"], [first_scheduler])
+        events = self.store.export()["events"]
+        self.assertEqual(events[-1]["event_type"], "record.run-launch")
+        self.assertTrue(events[-1]["payload"]["resubmit"])
+        self.assertEqual(events[-1]["payload"]["previous_scheduler"],
+                         first_scheduler)
+        # a plain launch afterwards claims the new scheduler identity
+        code, again = self._launch()
+        self.assertEqual(code, 0, again)
+        self.assertFalse(again["state_mutated"])
+        self.assertEqual(self.submit_count(), 2)
+
+    def test_run_launch_resubmit_after_booked_failure(self):
+        # the other eligible shape: run-exit already booked the failure
+        self._prepare("local-slurm", self.executable)
+        code, payload = self._launch()
+        self.assertEqual(code, 0, payload)
+        self._sacct_terminal("FAILED", "1:0")
+        code, probed = self.cli("record", "run-exit",
+                                "--project-root", self.project)
+        self.assertEqual(probed["state"], "failed")
+        code, resubmitted = self._launch(extra=["--resubmit"])
+        self.assertEqual(code, 0, resubmitted)
+        self.assertTrue(resubmitted["resubmit"])
+        self.assertEqual(self._run_identity()["status"], "submitted")
+        self.assertEqual(self.submit_count(), 2)
+
+    def test_run_launch_resubmit_refused_while_job_running(self):
+        self._prepare("local-slurm", self.executable)
+        code, payload = self._launch()
+        self.assertEqual(code, 0, payload)
+        code, refused = self._launch(extra=["--resubmit"])
+        self.assertEqual(code, 2)
+        self.assertIn("not terminal", refused["error"])
+        self.assertIn("run-exit", refused["error"])
+        self.assertEqual(self.submit_count(), 1)
+
+    def test_run_launch_resubmit_refused_without_submission(self):
+        self._prepare("local-slurm", self.executable)
+        code, refused = self._launch(extra=["--resubmit"])
+        self.assertEqual(code, 2)
+        self.assertIn("--resubmit applies to a submitted or failed run",
+                      refused["error"])
+        self.assertEqual(self.submit_count(), 0)
+
     _TEARDOWN_ERR = (
         "Entity runtime shutdown\n"
         "malloc_consolidate(): invalid chunk size\n"
@@ -635,6 +899,25 @@ else:
         board = build_dashboard(self.store, self.project)["board"]
         self.assertEqual(board["run"]["state"], "completed")
         self.assertIn("known benign teardown abort", board["run"]["detail"])
+
+    def test_run_exit_teardown_evidence_from_merged_slurm_out(self):
+        # regression: slurm merges stderr into the out file by default, and
+        # Entity names its logs after simulation.name inside the output
+        # subdirectory — both must count as teardown evidence
+        prepared = self._prepare("local-slurm", self.executable)
+        code, payload = self._launch()
+        self.assertEqual(code, 0, payload)
+        self._sacct_terminal("FAILED", "6:0")
+        self._write_log(prepared["run_root"], "slurm-42.out",
+                        self._COMPLETE_OUT_ANSI + self._TEARDOWN_ERR)
+        subdir = os.path.join(prepared["run_root"], "twostream-gold")
+        os.makedirs(subdir)
+        self._write_log(subdir, "twostream-gold.err", self._TEARDOWN_ERR)
+        code, probed = self.cli("record", "run-exit",
+                                "--project-root", self.project)
+        self.assertEqual(code, 0, probed)
+        self.assertEqual(probed["state"], "completed")
+        self.assertEqual(probed["exit_anomaly"]["kind"], "exit-teardown-abort")
 
     def test_run_exit_slurm_teardown_signature_without_completion_stays_failed(self):
         prepared = self._prepare("local-slurm", self.executable)

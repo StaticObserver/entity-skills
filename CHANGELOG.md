@@ -8,6 +8,282 @@ version considered production-satisfactory will be released as 1.0.0. Schema
 versions (store, checkpoint, compat checker) are independent integer
 compatibility contracts and are not the product version.
 
+## [Unreleased]
+
+## [0.7.0] - 2026-08-03
+
+The Workspace and Computation Site top-level model lands (design:
+`design/workspace-and-computation-site-2026-08-03.md`, development plan:
+`design/workspace-development-plan-2026-08-03.md`). The public model becomes
+`Workspace → Project → Case → Identity → Evidence`: the Workspace is the
+single working directory (the projects/ project tree, sites/ site records,
+.ledger/ controller state — self-contained; after a wholesale move,
+`workspace adopt` resumes); a Project is the container holding the source
+authority; a Case is now one research thread with a clear intent inside a
+project (Project 1:N Case); a Computation Site is a conventional file tree
+on a compute machine (`<site_root>/{deps,checkouts,projects}`) plus the
+authoritative record in the workspace. The store schema upgrades to v3
+(projects become project entities, cases carry a `project_uid` foreign key;
+`store migrate` chains v1→v2→v3, and the old root→case 1:1 binding upgrades
+to one default case per project).
+
+### Added
+
+- Workspace container: `workspace init/adopt/where`; controller home
+  resolution order: `--ledger-home` > `ENTITY_WORKSPACE` >
+  `~/.entity-ledger/active-workspace` pointer > legacy `~/.entity-ledger`
+  (compatibility fallback, one deprecation warning); snapshots resolve with
+  the db. workspace.yaml/project.yaml/sites/*.yaml all use a flat+flow YAML
+  subset implemented on the standard library (no PyYAML dependency).
+- Project/Case split: `project init`, `case init` (intent.md and
+  decisions.json skeletons); `--case <slug>` addressing threads through
+  status/show/render-run/snapshot-source/record/submission — single-case
+  projects resolve automatically, omitting it on a multi-case project fails
+  and lists the available cases.
+- `record intent` syncs the case directory's intent.md from the db as
+  authoritative; manual edits are flagged as drift in the dashboard pending
+  items.
+- Site records and file trees: `sites/<site>.yaml` becomes the authority
+  for site information (transport/scheduler/machine/site_root/projects/
+  deps/notes); `site sync` (record → db; db-only entries are reported, not
+  deleted), `site list/show` merged views, `site init` (builds the
+  `<site_root>` skeleton plus an `entity-site.yaml` marker on the target
+  machine, idempotent), `site discover` extended (the machine section lands
+  in the record, existing markers are adopted).
+- New-tree path derivation: when a profile carries `site_root`, new
+  build/run/staging land at
+  `<site_root>/projects/<project>/{builds,runs,staging}/<case>/<id>`
+  (layout `site-tree`); legacy profiles without `site_root` keep
+  independent-roots derivation and are tagged `legacy-roots`; legacy
+  Locators remain referenceable.
+- Deps registry: `site deps <site>` (human-readable + `--json`) and
+  `site deps-add --from-checkpoint` (booked only when confirm +
+  compatibility pass + env.sh evidence are all present, zero writes
+  otherwise); env-build `entity_checkpoint.py create --from-registry`
+  pre-fills `selected` with the verified stack matched by signature
+  (probing on the spot for anything missing, the compatibility gate
+  unchanged); the `record build` payload and identity carry `stack_id` and
+  hint at deps-add when the stack is not registered.
+- Migration primitives (agent-driven migration): `workspace import`
+  (adopts local projects/ledger.db+snapshots/site-notes/legacy bindings;
+  dry-run by default; conflicts are reported, never overwritten),
+  `site plan-migration` (read-only inventory of the old tree producing a
+  new-tree plan; in-flight runs are marked skip), `record relocate`
+  (re-probes evidence after the move and updates the Locator; in-flight
+  runs are refused; zero writes on evidence mismatch; writes a
+  record.relocate audit event).
+- `record run-abort`: an explicit escape hatch for in-flight runs whose
+  site is permanently unreachable or confirmed dead — `--reason` is
+  required and recorded in the identity and the audit event (actor
+  attribution follows the existing mechanism); only usable on in-flight
+  runs, terminal runs fail with zero writes. `aborted` joins the
+  terminal-state vocabulary: eligible for relocate, no longer skipped by
+  plan-migration, no longer probed by status --live; `--reclassify` does
+  not apply to aborted (once the site recovers, outputs can still be
+  inventoried with `record data`).
+- Analysis management (the sixth dimension of the identity chain,
+  `design/analysis-management-2026-08-05.md`):
+  `record analysis --script/--data/--params/--output-root
+  [--env-stack] [--hardcoded-paths]` — execution is free, registration is
+  strict: the script must come from the project-wide script library
+  `projects/<p>/analysis/scripts/` (content-hashed), and the output
+  directory's `analysis-manifest.json` must exist with a data_id matching
+  the claimed one; `analysis_id = hash(data_id, script_hash, params)` is
+  derived deterministically and idempotently; when the parent data is not
+  current, the dashboard analysis cell shows stale (derived at read time,
+  historical identities preserved). The dashboard analysis cell upgrades to
+  none/established/stale plus a hardcoded_paths warning; `show` gains an
+  analyses list. The deps registry gains a `kind` field (`build` default /
+  `analysis`); `site deps-add --kind analysis` registers a Python analysis
+  environment gated on interpreter existence.
+- `references/migration-guide.md` migration guide.
+- Typed gres support: site policy gains `default_gres` (format
+  `gpu[:type]:count`, e.g. `gpu:V100:1`; profile validation rejects bad
+  values); `render-run` / `record run-prepare` gain a `--gres` explicit
+  override; resolution order is explicit `--gres` > policy `default_gres` >
+  generic `gpu:<N>`; the resolved value is recorded in the run identity's
+  compute and rendered verbatim into the sbatch; `site discover` suggests
+  `default_gres` when the recommended partition has a single GPU type
+  (warning that an explicit choice is needed when there are several). The
+  direct backend ignores gres (normalized to "").
+
+### Fixed
+
+- Exposed and fixed by the astro gold run (pilot) live exercise:
+  - `record run-launch` reported "execution Site has no staging_root" for
+    site-tree profiles (only `site_root`, no explicit roots) — the launch
+    path now derives roots via `merged_execution_profile` (prepare/data
+    already did);
+  - the sacct call in Slurm terminal-state probing missed `-P`; real sacct
+    defaults to table output, so exit_code always parsed as None (the test
+    fake sacct always emitted pipe-separated output, masking the bug; the
+    fake now simulates honestly);
+  - teardown-abort log probing only recognized fixed file names
+    (simulation.err/out): Entity names logs after simulation.name and
+    places them in the output subdirectory, and Slurm merges stderr into
+    out by default — probing now covers slurm-<job>.out (evidence in both
+    directions) and `<run_root>[/*]/*.err|*.out`;
+  - the dashboard pgen cell only scanned the project root and falsely
+    reported "no TOML input" under the 0.7.0 source/ authority layout — it
+    now also scans the source directory registered in project.yaml.
+
+### Added (rc increment)
+
+- `entityctl install --provider {codex,claude,kimi}` (repeatable): projects
+  the bundle only to the specified clients; the default still installs to
+  all three. The return payload gains `providers`, recording the clients
+  actually installed to.
+- env-build build-script build_dir guard: when `compile.build_dir` points
+  at an existing non-empty directory, generation is refused (the error
+  explains the relink/evidence-distortion risk); an explicit
+  `--reuse-build-dir` or `--clean-build` is required — this prevents
+  silently relinking an already-registered build after copying requirements
+  from a previous round and inheriting its old build_dir.
+- `record run-prepare --run-id`: requires the newly derived run to equal
+  the id previewed by render-run — run_id is content-addressed on (source,
+  TOML, compute, build), so a mismatch proves the inputs drifted after
+  render; fails with zero writes instead of silently preparing a second
+  run.
+- Error-message improvements (postmortem of aborted round S1): `case
+  init`'s "no local Site source_root covers the project" now gives
+  actionable advice (register a local site record, set source_root to the
+  workspace root rather than the whole home, run `site sync`); `workspace
+  init` on a Site tree root containing `entity-site.yaml` fails with a
+  targeted error (a Site is an ssh execution target; the workspace belongs
+  on the development machine).
+- Docs: SKILL.md gains an "architecture red lines" section (the controller
+  runs only on the development machine, never scp tools to a site, confirm
+  the workspace location with the user first);
+  `references/workspace-layout.md` gains a site-record format section
+  (flat-YAML + JSON flow rules + a fully annotated astro-streaming
+  example).
+- Production invocation logging (passive invocation logging, a different
+  layer from eval traces): the CLI entry points of the four skills
+  (entityctl, the ledger executor/remote standalone CLIs, the four
+  env-build CLIs, pgen_preflight, inspect_nt2_data) append one JSONL line
+  per actual invocation (time/duration/exit_code/redacted argv/cwd/host
+  etc.), defaulting to
+  `~/.entity-skills/observability/invocations/<yyyy-mm>.jsonl` rotated
+  monthly, overridable via `ENTITY_SKILL_INVOCATION_LOG`; all exceptions on
+  the logging path are swallowed and host semantics are unchanged; the four
+  scripts/ hold byte-identical `_invocation_log.py` copies, with a test
+  guarding byte equality against drift; invisible to agents (SKILL.md
+  untouched).
+- Invocation-logging fix batch (same evaluation report):
+  `ENTITY_SKILL_INVOCATION_LOG=off` (case-insensitive exact match) is fully
+  silent, and the repo's tests/conftest.py disables it by default via an
+  autouse fixture — test traffic (once 90% of invocations) no longer
+  pollutes production stats; when logging, agent client environment
+  variables (common KIMI_/CLAUDE/CODEX names) are sniffed best-effort to
+  add an `agent_hint` field — only variable names are recorded, never
+  values (leak-proof), and the field is omitted on no match. All four
+  copies updated.
+- The error payload gains a machine-readable `"retryable"` boolean
+  (`status=="anomaly"` → true, false otherwise); the SKILL.md error-contract
+  section states that only anomaly (transient/external failure) is worth
+  retrying as-is, while invalid_request/needs_decision require changing the
+  input or escalating to a human.
+- `record run-correct` (manual correction primitive, companion to B2):
+  manual correction between the two booked terminal states
+  completed↔failed; `--reason` is required and recorded in the identity
+  (the `correction` section) and the audit event (from/to/reason);
+  in-flight runs are refused (run-exit to a terminal state first);
+  same-state correction is a no-op. Coexists with `--reclassify` (re-judge
+  from log evidence); neither replaces the other.
+- `record run-launch --resubmit` (I3): resubmits the same run when the
+  Ledger-submitted job reached a terminal failed state — first probes that
+  the old job is really dead (still running, gone, or no probed terminal
+  state all refuse, advising run-exit first), then runs the normal
+  preflight+submit; the new submission uses its own exactly-once receipt
+  (`run-relaunch-<n>.json`, exactly-once counted per submission), the old
+  scheduler record moves into the identity's `prior_submissions`, and the
+  event and the return annotate `resubmit: true` and `previous_scheduler`.
+  Behavior without the flag is unchanged.
+
+### Fixed (rc increment)
+
+- A v3 bundle reading a pre-workspace (v2/v1) store no longer crashes with
+  an `IndexError: project_uid` traceback: `OperationStore` validates meta
+  schema_version when opening an existing db and raises a StoreError with
+  migration guidance (`entityctl store migrate`) on mismatch; doctor
+  reports an unmigrated store as a diagnostic warning and skips export
+  (previously export crashed before the warning logic ran). A single check
+  covers all OperationStore read paths: export/dashboard/facts/site etc.
+- `entity_checkpoint.py create --merge` dropped the old checkpoint's
+  `paths.pre_commands`/`modules`/`extra_env` — the regenerated env.sh
+  missed module loads; merge now preserves these keys (`modules` takes the
+  union of the modules collected from each entry in `selected`), and
+  `derive_paths` folds the `modules` carried by dependency entries into
+  paths.
+- Production-evaluation fix batch
+  (`design/skill-production-evaluation-2026-08-17.md`):
+  - A non-zero exit from the remote executor is no longer swallowed into
+    "Site executor returned invalid JSON": the exit code is checked first
+    and the error message carries the stderr tail (last ~500 chars);
+    invalid JSON is reported only on zero exit with no JSON on stdout, with
+    the stdout head (~200 chars) attached.
+  - `_require_case` misleading messages split: an unregistered project path
+    (no_project) now states plainly "no project is registered at <path>"
+    and advises using the new path or `workspace import`, matching
+    registered projects by basename and listing candidates in the message
+    (the old-path-after-migration scenario); the create-Case guidance in
+    the "project registered but no Case" branch now names the real command
+    `entityctl case init <project> <name>` (run-prepare does not create
+    Cases); store `get_site` lists registered site candidates for an
+    unknown site_id.
+  - `record run-exit`'s return for a still-running run gains
+    `detail: "run is still running; no state written"`.
+  - `doctor --project-root` no longer hits a bare argparse error: doctor is
+    a workspace-level diagnostic; it accepts the flag and immediately fails
+    with a guidance error (invalid_request, pointing at `status
+    --project-root <path>`).
+- Slurm terminal-state classification fix (B2: the sacct terminal word
+  takes precedence over the exit code): non-COMPLETED terminal words such
+  as CANCELLED/TIMEOUT/OUT_OF_MEMORY are always booked failed, even when
+  the exit code is 0:0 (jobs killed by scancel/OOM can still report a clean
+  exit code — the polar_cap OOM run was therefore misbooked completed by
+  the old logic); COMPLETED or no scheduler word (direct) keeps exit-code
+  classification and the teardown-abort rescue unchanged; the terminal word
+  is also written into the run-exit event payload (`scheduler_state`). No
+  new terminal states are added.
+
+### Changed
+
+- **export JSON projects shape change** (breaking): the v2 binding rows
+  `{project_root, case_uid, updated_at}` become v3 project entities
+  `{project_uid, slug, project_root, created_at, updated_at}`; cases gain a
+  `project_uid` field. Scripts consuming `entityctl export` must be
+  updated.
+- `references/workspace-layout.md` rewritten as the Workspace + Computation
+  Site layout contract; the four SKILL.md files and the README are synced
+  to the new model; the env-build docs are synced with the deps-registry
+  lookup order and write-back flow.
+- `pgen_preflight.py`'s controller location now goes through the unified
+  `resolve_ledger_home` (workspace-aware; the explicit `--ledger-home`
+  entry is unchanged).
+- site-notes prose is migrated by `site import-notes` into the notes
+  section of the record; `references/site-notes-template.md` is marked
+  deprecated.
+
+## [0.6.1] - 2026-07-29
+
+### Fixed
+
+- `entity-pgen` write gate no longer routes managed writes into a dead end:
+  the preflight refused every write inside a Ledger-registered Case source
+  ("managed writes require a v5 pgen Goal") and bounced the request to a
+  Ledger record primitive that does not exist — that Goal kind was retired
+  with the plan/apply protocol. Writes inside the Case source authority are
+  now allowed (`managed-write`) — the Ledger does not intervene in the PGen
+  process; once the change settles, `entityctl snapshot-source` re-probes the
+  tree and books the new source identity (re-`confirm` the input TOML before
+  `record run-prepare`). Recorded artifact roots (build/run/data identities,
+  the active run) stay fail-closed (`router-required`).
+- Observability `validate_pgen_preflight` no longer fails real
+  `managed-write` outcomes: it required an Action id, controller root, and
+  Action-request envelope from the retired plan/apply protocol; it now
+  requires only a Case identity.
+
 ## [0.6.0] - 2026-07-28
 
 Skill rename: `entity-router` is now `entity-ledger` — the plan/apply
