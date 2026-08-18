@@ -21,9 +21,26 @@ compatibility contracts and are not the product version.
 
 ### Fixed
 
+全新机器 + 全部依赖源码构建 + CUDA 后端路径的实测缺陷批
+（lambda H100 首装，缺陷报告 2026-08-18）：
+
 - env-build 生成的 `build-hdf5.sh` 克隆 HDF5 时把版本号的点替换成下划线，
   拼成不存在的 tag `hdf5-1_14_6`；HDF5 自 1.12 起 tag 使用点号格式，
   现直接使用 `hdf5-$VERSION`（如 `hdf5-1.14.6`）。
+- 依赖构建脚本（kokkos/adios2）假设 `nvcc` 已在 PATH，但 `env.sh` 在
+  下一阶段才生成——CUDA toolkit 不在默认 PATH 时 configure 直接失败。
+  cuda/hip 后端下生成的脚本现在从 checkpoint 的
+  `selected.gpu_toolkit.bin`（缺省 `prefix/bin`）导出 PATH。
+- `host_cxx` 缺省时的两处错误回退：`selected_compiler()` 回退到 C
+  编译器（`NVCC_WRAPPER_DEFAULT_COMPILER=gcc`，链接缺 libstdc++）；
+  `compiler_env()` 回退到 `CXX` 本身（nvcc_wrapper 自指递归）。现统一
+  从 `cc` 推导（gcc→g++、clang→clang++），缺省 `c++`，与
+  build-kokkos.sh 的默认一致。
+- `build` 的 build_dir 守卫把"目录非空"当作已有构建树：文档默认布局
+  （`artifacts_root = <build_root>/_artifacts`）下 requirements/
+  checkpoint JSON 就使 build_root 非空，首次构建必然误报，迫使调用方
+  例行传 `--reuse-build-dir` 削弱守卫。现改为检测 CMake 实际产物
+  （`CMakeCache.txt`/`CMakeFiles/`）才拒绝。
 
 ## [0.7.0] - 2026-08-03
 
