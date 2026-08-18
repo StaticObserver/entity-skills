@@ -210,6 +210,7 @@ def cmd_validate(args: argparse.Namespace) -> None:
 # without a workspace.  tests/vectors/stack-signature.json pins both sides.
 REGISTRY_PACKAGE_KEYS = (
     "version", "prefix", "bin", "include", "lib", "cmake_config", "modules",
+    "cc", "cxx", "host_cxx",
 )
 
 
@@ -425,11 +426,24 @@ def cmd_create(args: argparse.Namespace) -> None:
         registry_stack = select_registry_stack(
             load_json(args.from_registry), req)
         if registry_stack:
-            # Registry entries win per dependency; probed candidates only
-            # fill the gaps (on-the-spot discovery fill-in).
+            # Registry entries win per dependency; probed candidates fill
+            # the gaps — whole dependencies the stack does not cover, and
+            # individual fields the stack does not record (e.g. compiler
+            # cc/cxx/host_cxx in archives written before those keys were
+            # persisted). Field-level filling keeps the origin
+            # (validation.source == site-registry) intact.
             combined = discovery_from_stack(registry_stack)
             for dep, entry in (discovery or {}).items():
-                combined.setdefault(dep, entry)
+                if dep not in combined or not isinstance(entry, dict):
+                    combined.setdefault(dep, entry)
+                    continue
+                target = combined[dep]
+                if not isinstance(target, dict):
+                    continue
+                for key, value in entry.items():
+                    if key == "validation" or value in (None, "", []):
+                        continue
+                    target.setdefault(key, value)
             discovery = combined
 
     merge_from = None

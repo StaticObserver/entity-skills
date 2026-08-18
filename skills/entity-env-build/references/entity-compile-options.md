@@ -27,8 +27,8 @@ Boolean CMake options use `ON` or `OFF`.
 | `pgen` | Problem generator | Built-in name, `pgens/...`, or a path containing `pgen.hpp` | Required | Changing `pgen` requires a fresh configure/build. |
 | `pgens` | Multiple problem generators | Comma-separated generator names/paths | Optional | New in Entity 1.4.0. Use only when the request explicitly needs multiple generators. |
 | `precision` | Floating-point precision | `single`, `double` | `single` | Build-time numeric type. |
-| `deposit` | Current deposition scheme | `zigzag`, `esirkepov` | `zigzag` | |
-| `shape_order` | Interpolation order for deposit and pusher | `1` to `11` | `1` | |
+| `deposit` | Current deposition scheme | `zigzag`, `esirkepov` | `zigzag` | Determines whether `shape_order` takes effect. |
+| `shape_order` | Interpolation order for deposit and pusher | `1` to `11` | `1` | **Only takes effect with `deposit=esirkepov`**: upstream emits `-DSHAPE_ORDER` only for that combination; with `zigzag` (the default) the parameter silently has no effect and the binary falls back to the built-in first-order scheme. The compatibility check fails `shape_order != 1` combined with a non-esirkepov deposit. |
 | `output` | Enable output | `ON`, `OFF` | `ON` | Default means the dependency environment usually needs ADIOS2/HDF5 support. |
 | `mpi` | Enable multi-node support | `ON`, `OFF` | `OFF` | Enable only when the current requirements need MPI. |
 | `gpu_aware_mpi` | Enable GPU-aware MPI communication | `ON`, `OFF` | `ON` | Unless confirmed, keep the conservative environment default `OFF`. |

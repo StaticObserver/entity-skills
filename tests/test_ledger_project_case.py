@@ -90,6 +90,8 @@ class ProjectInitTest(ProjectCaseTestBase):
         self.assertEqual(record["project_uid"], project["project_uid"])
         self.assertEqual(record["schema_version"], 1)
         self.assertTrue(os.path.isdir(os.path.join(self.project_dir(), "cases")))
+        self.assertTrue(os.path.isdir(os.path.join(
+            self.project_dir(), "analysis", "scripts")))
         # the Project entity is booked in the store
         stored = self.store.get_project(project["project_uid"])
         self.assertEqual(stored["slug"], "demo")

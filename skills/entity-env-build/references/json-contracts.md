@@ -56,13 +56,16 @@ Required before validation/build:
 - a supported Entity version/dependency profile.
 
 `compile.build_dir` defaults to `entity.build_root` and is written back before
-script generation. Guard: if that directory already exists and is non-empty
-(the typical accident is inheriting a stale `build_dir` from requirements
-copied from a previous round), generation is refused — re-linking on top of
-it would distort the evidence of the already-registered build; to confirm an
-in-place rebuild you must explicitly pass `--reuse-build-dir` (or
-`--clean-build`, which empties the tree first). All paths are absolute paths
-on `entity.site_id`; they do not imply a common parent directory.
+script generation. Guard: if that directory is already a CMake build tree
+(`CMakeCache.txt` or `CMakeFiles/` detected — the typical accident is
+inheriting a stale `build_dir` from requirements copied from a previous
+round), generation is refused — re-linking on top of it would distort the
+evidence of the already-registered build; to confirm an in-place rebuild you
+must explicitly pass `--reuse-build-dir` (or `--clean-build`, which empties
+the tree first). A directory holding only metadata (requirements/checkpoint
+JSONs, `_artifacts/`) counts as a first build and does not trip the guard.
+All paths are absolute paths on `entity.site_id`; they do not imply a common
+parent directory.
 New workflows must use v2. Schema v1 `checkout_root/workdir` exists only for
 explicit legacy compatibility.
 
@@ -103,7 +106,8 @@ packages of a registry stack; after `--from-discovery` fill-in or
 `status.reuse_notes` record.
 
 Each selected dependency records the provider, prefix/bin/include/lib/config
-paths, version, compiler/MPI signature, environment additions, compile
+paths, version, compiler paths (`cc`/`cxx`/`host_cxx`, on the compiler
+entry), compiler/MPI signature, environment additions, compile
 configuration, and verification. The checkpoint is reusable only when the
 embedded requirements, execution site, all five resolved paths, version
 profile, and toolchain choices match the current request.
@@ -177,7 +181,11 @@ registry may mix in `kind=analysis` Python environment stacks, which build
 consumption does not match) prefills `selected` (each package keeps its
 original provider; provenance is recorded in `validation.source`) and writes
 the `stack_id` into the checkpoint; uncovered dependencies are filled in by
-`--from-discovery`/on-the-spot probing. Registry entries then undergo the
+`--from-discovery`/on-the-spot probing — the fill-in is also field-level:
+fields missing from a registry entry (e.g. compiler `cc`/`cxx`/`host_cxx`
+not persisted by older archives) are filled from the probed entry, while
+`validation` keeps the registry provenance and is never overwritten.
+Registry entries then undergo the
 same compatibility checks as probed entries. After confirm + compatibility
 `pass`, a new stack is written back to the registry with
 `entityctl site deps-add <site> --from-checkpoint <entity-deps.local.json>`

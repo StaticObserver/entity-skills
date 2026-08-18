@@ -278,9 +278,11 @@ class BuildScriptQuotingTests(unittest.TestCase):
 
 
 class BuildDirGuardTests(unittest.TestCase):
-    """compile.build_dir pointing at an existing non-empty tree (e.g.
-    inherited when copying a previous round's requirements.json) must be
-    refused unless explicitly confirmed."""
+    """compile.build_dir pointing at an existing CMake build tree
+    (CMakeCache.txt/CMakeFiles, e.g. inherited when copying a previous
+    round's requirements.json) must be refused unless explicitly confirmed.
+    Metadata-only directories (requirements.json, checkpoint, _artifacts/)
+    are expected on a first build and must pass."""
 
     def write_json(self, path: Path, data: dict) -> None:
         path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
@@ -353,6 +355,20 @@ class BuildDirGuardTests(unittest.TestCase):
             self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
             self.assertTrue((tmp / "entity-build.sh").exists())
 
+    def test_metadata_only_build_dir_allowed(self):
+        # Default artifacts layout (<build_root>/_artifacts) plus the
+        # requirements/checkpoint JSONs makes build_dir non-empty before any
+        # build tree exists — this must not trip the guard.
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            build_dir = tmp / "build"
+            (build_dir / "_artifacts").mkdir(parents=True)
+            (build_dir / "requirements.json").write_text("{}\n")
+            (build_dir / "entity-deps.local.json").write_text("{}\n")
+            proc = self._run_build(tmp, self._req(tmp, build_dir))
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertTrue((tmp / "entity-build.sh").exists())
+
 
 class UnknownGpuArchTests(unittest.TestCase):
     def write_json(self, path: Path, data: dict) -> None:
@@ -420,6 +436,112 @@ class UnknownGpuArchTests(unittest.TestCase):
             self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
             script = (tmp / "scripts" / "build-adios2.sh").read_text(encoding="utf-8")
             self.assertIn("CMAKE_CUDA_ARCHITECTURES=80", script)
+
+
+class FreshMachineCudaTests(unittest.TestCase):
+    """Regressions from the 2026-08-18 fresh-machine defect report:
+
+    - dep build scripts must put the checkpointed GPU toolkit bin on PATH
+      (env.sh does not exist yet when they run);
+    - a missing host_cxx must be derived from the C compiler (gcc→g++),
+      never fall back to the C compiler or the nvcc_wrapper itself.
+    """
+
+    def write_json(self, path: Path, data: dict) -> None:
+        path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+
+    def _cuda_req(self, tmp: Path) -> dict:
+        checkout = tmp / "entity"
+        checkout.mkdir(exist_ok=True)
+        return {
+            "schema_version": 1,
+            "entity": {
+                "checkout_root": str(checkout),
+                "workdir": str(tmp),
+                "version_bucket": "1.4.3",
+                "dependency_profile": "modern",
+            },
+            "environment": {
+                "backend": "cuda",
+                "gpu_arch": "HOPPER90",
+                "output": False,
+                "mpi": False,
+            },
+            "compile": {"pgen": "smoke", "cxx_standard": "20"},
+        }
+
+    def _run_deps(self, tmp: Path, req: dict, checkpoint: dict, dep: str):
+        req_path = tmp / "requirements.json"
+        checkpoint_path = tmp / "entity-deps.local.json"
+        self.write_json(req_path, req)
+        self.write_json(checkpoint_path, checkpoint)
+        return run_cmd(
+            "scripts/entity_generate.py", "deps", str(req_path),
+            "--checkpoint", str(checkpoint_path),
+            "--deps", dep,
+            "--output-dir", str(tmp / "scripts"),
+            "--no-update-json",
+        )
+
+    def test_kokkos_script_has_toolkit_bin_on_path_and_derived_host_cxx(self):
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            checkpoint = {
+                "schema_version": 1,
+                "selected": {
+                    "gpu_toolkit": {"prefix": "/usr/local/cuda-13.0",
+                                    "bin": "/usr/local/cuda-13.0/bin"},
+                    "compiler": {"cc": "/usr/bin/gcc",
+                                 "cxx": "/deps/kokkos/5.0.1/bin/nvcc_wrapper"},
+                },
+            }
+
+            proc = self._run_deps(tmp, self._cuda_req(tmp), checkpoint, "kokkos")
+
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            script = (tmp / "scripts" / "build-kokkos.sh").read_text(encoding="utf-8")
+            self.assertIn("export PATH=/usr/local/cuda-13.0/bin:$PATH", script)
+            self.assertIn("export NVCC_WRAPPER_DEFAULT_COMPILER=/usr/bin/g++", script)
+            self.assertNotIn("NVCC_WRAPPER_DEFAULT_COMPILER=/usr/bin/gcc\n", script)
+
+    def test_toolkit_bin_derived_from_prefix_when_bin_missing(self):
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            checkpoint = {
+                "schema_version": 1,
+                "selected": {"gpu_toolkit": {"prefix": "/opt/cuda"}},
+            }
+
+            proc = self._run_deps(tmp, self._cuda_req(tmp), checkpoint, "kokkos")
+
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            script = (tmp / "scripts" / "build-kokkos.sh").read_text(encoding="utf-8")
+            self.assertIn("export PATH=/opt/cuda/bin:$PATH", script)
+
+    def test_env_sh_host_cxx_derived_from_cc_not_self_referential(self):
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            checkpoint = {
+                "schema_version": 2,
+                "compatibility": {"status": "pass"},
+                "selected": {
+                    "compiler": {"cc": "/usr/bin/gcc",
+                                 "cxx": "/deps/kokkos/5.0.1/bin/nvcc_wrapper"},
+                },
+            }
+            checkpoint_path = tmp / "entity-deps.local.json"
+            self.write_json(checkpoint_path, checkpoint)
+
+            proc = run_cmd(
+                "scripts/entity_generate.py", "env", str(checkpoint_path),
+                "--output", str(tmp / "env.sh"), "--no-update-json",
+            )
+
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            env_sh = (tmp / "env.sh").read_text(encoding="utf-8")
+            self.assertIn("export NVCC_WRAPPER_DEFAULT_COMPILER=/usr/bin/g++", env_sh)
+            self.assertNotIn("nvcc_wrapper\n", env_sh.split(
+                "NVCC_WRAPPER_DEFAULT_COMPILER=", 1)[1])
 
 
 if __name__ == "__main__":

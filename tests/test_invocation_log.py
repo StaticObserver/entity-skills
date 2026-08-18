@@ -95,7 +95,8 @@ class RecordTest(unittest.TestCase):
                     "entity-ledger", "entityctl.py", [], 0, time.time(),
                     script_file=str(LEDGER_SCRIPTS / "entityctl.py"))
             (record,) = self._read_records(log)
-        self.assertEqual(record.get("skill_version"), "0.7.0")
+        expected = (LEDGER_SCRIPTS.parent / "VERSION").read_text().strip()
+        self.assertEqual(record.get("skill_version"), expected)
 
     def test_unwritable_destination_never_raises(self):
         with mock.patch.dict(os.environ,

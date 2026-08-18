@@ -1,6 +1,6 @@
 # Analysis Management Design: Code, Execution, and Environment
 
-Date: 2026-08-05. Status: finalized, pending implementation. Companion document: workspace-and-computation-site-2026-08-03.md.
+Date: 2026-08-05. Status: implemented (57e55c1, 695a69c). Companion document: workspace-and-computation-site-2026-08-03.md.
 
 ## 1. Problem
 
@@ -42,7 +42,9 @@ in entity-nt2py; the Ledger only does registration and provenance.
 - Evidence = the `analysis-manifest.json` in the artifact directory: input
   data_id, script relative path, parameters, interpreter/environment,
   generation time. At record time it is re-probed: the manifest exists and its
-  data_id matches the claim, and the script hash matches the registration.
+  data_id matches the claim (mandatory); when the manifest carries
+  script/script_sha256/params, they are cross-checked against the registration
+  (optional fields, checked only when carried).
 - `analysis_id = hash(data_id, script_hash, params)`; the parent hangs off the
   exact data ID; when the data's current pointer moves, old analyses go stale.
   "Misuse" becomes queryable from this: which analyses have been registered
@@ -115,22 +117,22 @@ new analyses start from `record analysis`. Existing analysis environments
 (such as bh-reconnection's venv) are registered by the agent with
 `site deps-add --kind analysis`.
 
-## 8. Development Plan (single phase)
+## 8. Development Plan (single phase, all completed)
 
-1. store: wire up the write path for the `analysis` dimension (the whitelist
+1. ✅ store: wire up the write path for the `analysis` dimension (the whitelist
    already has it), maintain the analysis_id in the current projection, and
-   propagate staleness (data changes → analysis stale).
-2. `record analysis` primitive: manifest evidence probing (local + ssh
+   propagate staleness (data changes → analysis stale, derived at read time).
+2. ✅ `record analysis` primitive: manifest evidence probing (local + ssh
    channel), analysis_id derivation, zero-write gate, audit event.
-3. site tree: path derivation for
+3. ✅ site tree: path derivation for
    `projects/<p>/analysis/<case>/<analysis_id>/` (execution_roots extension).
-4. deps registry: `kind` field + `site deps-add --kind analysis`
+4. ✅ deps registry: `kind` field + `site deps-add --kind analysis`
    (interpreter-existence gate).
-5. dashboard: analysis cell readiness + evidence + hardcoded warning; the
+5. ✅ dashboard: analysis cell readiness + evidence + hardcoded warning; the
    analysis list in `show`.
-6. Documentation: ledger SKILL.md (primitives + semantics),
+6. ✅ Documentation: ledger SKILL.md (primitives + semantics),
    workspace-layout.md (enable the analysis slots), nt2py SKILL.md (one
    sentence: for registration see the ledger), migration-guide.md (script
    onboarding section), CHANGELOG.
-7. Tests: all `record analysis` gates, staleness propagation, kind=analysis
+7. ✅ Tests: all `record analysis` gates, staleness propagation, kind=analysis
    registration, dashboard presentation; full pytest suite green.

@@ -126,6 +126,24 @@ def shell_path_export(name: str, values: List[str]) -> str:
 # ===========================================================================
 
 
+_CC_TO_HOST_CXX = (("gcc", "g++"), ("clang", "clang++"), ("cc", "c++"))
+
+
+def _derive_host_cxx(cc: str) -> str:
+    """Derive the host C++ compiler from the C compiler (gcc→g++, clang→clang++).
+
+    Falls back to "c++" — matching the build-kokkos.sh default — instead of
+    returning the C compiler itself or a CUDA wrapper.
+    """
+    name = Path(cc).name
+    for c_name, cxx_name in _CC_TO_HOST_CXX:
+        if name == c_name or name.startswith(c_name + "-"):
+            derived = cxx_name + name[len(c_name):]
+            parent = str(Path(cc).parent)
+            return derived if parent in ("", ".") else str(Path(parent) / derived)
+    return "c++"
+
+
 def selected_compiler(selected: Dict[str, Any]) -> Tuple[str, str, str, str]:
     compiler = selected.get("compiler", {})
     kokkos = selected.get("kokkos", {})
@@ -142,7 +160,7 @@ def selected_compiler(selected: Dict[str, Any]) -> Tuple[str, str, str, str]:
     mpicxx = ""
     if isinstance(mpi, dict):
         mpicxx = str(mpi.get("mpicxx") or "")
-    return cc, cxx, host_cxx or cc, mpicxx
+    return cc, cxx, host_cxx or _derive_host_cxx(cc), mpicxx
 
 
 def compiler_env(checkpoint: Dict[str, Any]) -> Dict[str, str]:
@@ -156,7 +174,7 @@ def compiler_env(checkpoint: Dict[str, Any]) -> Dict[str, str]:
         "MPICXX": str(mpi.get("mpicxx") or os.environ.get("MPICXX", "")),
     }
     if not out["HOST_CXX"]:
-        out["HOST_CXX"] = out["CXX"]
+        out["HOST_CXX"] = _derive_host_cxx(out["CC"])
     return out
 
 
@@ -215,8 +233,26 @@ def _git_clone_fallback(dep: str, repo_url: str, branch_ref: str) -> str:
     return fallback
 
 
+def _toolkit_bin(checkpoint: Dict[str, Any]) -> str:
+    """GPU toolkit bin directory recorded in the checkpoint.
+
+    Dependency build scripts run before env.sh exists, so nvcc/hipcc must be
+    put on PATH explicitly from selected.gpu_toolkit (bin, else prefix/bin).
+    """
+    selected = checkpoint.get("selected", {}) if isinstance(checkpoint, dict) else {}
+    toolkit = selected.get("gpu_toolkit", {}) if isinstance(selected, dict) else {}
+    if not isinstance(toolkit, dict):
+        return ""
+    bin_dir = str(toolkit.get("bin") or "")
+    if bin_dir:
+        return bin_dir
+    prefix = str(toolkit.get("prefix") or "")
+    return str(Path(prefix) / "bin") if prefix else ""
+
+
 def script_header(name: str, deps_root: Path, artifacts_root: Path, prefix: Path,
-                  compilers: Dict[str, str], tarball_dir: str = "") -> str:
+                  compilers: Dict[str, str], tarball_dir: str = "",
+                  toolkit_bin: str = "") -> str:
     lines = [
         "#!/usr/bin/env bash",
         f"# Generated dependency build script for {name}. Review before execution.",
@@ -240,6 +276,9 @@ def script_header(name: str, deps_root: Path, artifacts_root: Path, prefix: Path
             lines.append(f"export {key}={q(compilers[key])}")
     if compilers.get("HOST_CXX") and "nvcc_wrapper" in Path(compilers.get("CXX", "")).name:
         lines.append(f"export NVCC_WRAPPER_DEFAULT_COMPILER={q(compilers['HOST_CXX'])}")
+    if toolkit_bin:
+        lines.append("# nvcc/hipcc from the checkpointed GPU toolkit (env.sh does not exist yet)")
+        lines.append(f"export PATH={q(toolkit_bin)}:$PATH")
     if tarball_dir:
         lines.append(f"export ENTITY_SOURCE_TARBALL_DIR={q(tarball_dir)}")
         lines.append('if [ ! -d "${ENTITY_SOURCE_TARBALL_DIR}" ]; then')
@@ -286,7 +325,8 @@ fi
 export CXX="$SRC/bin/nvcc_wrapper"
 """
     return (
-        script_header("kokkos", deps_root, artifacts_root, prefix, compilers, tarball_dir)
+        script_header("kokkos", deps_root, artifacts_root, prefix, compilers, tarball_dir,
+                      toolkit_bin=_toolkit_bin(checkpoint) if backend in ("cuda", "hip") else "")
         + f"""
 VERSION="${{KOKKOS_VERSION:-{version}}}"
 SRC="$SRC_ROOT/kokkos-$VERSION"
@@ -318,7 +358,7 @@ VERSION="${{HDF5_VERSION:-{version}}}"
 SRC="$SRC_ROOT/hdf5-$VERSION"
 BUILD="$BUILD_ROOT/hdf5-$VERSION"
 if [ ! -d "$SRC/.git" ]; then
-{_git_clone_fallback("hdf5", "https://github.com/HDFGroup/hdf5.git", '"hdf5-${VERSION//./_}"')}
+{_git_clone_fallback("hdf5", "https://github.com/HDFGroup/hdf5.git", '"hdf5-$VERSION"')}
 fi
 cmake -S "$SRC" -B "$BUILD" \\
   -DCMAKE_INSTALL_PREFIX="$PREFIX" \\
@@ -394,7 +434,8 @@ export CMAKE_SHARED_LINKER_FLAGS={link_flags}"${{CMAKE_SHARED_LINKER_FLAGS:+ $CM
     ]
     opts = [opt for opt in opts if opt]
     return (
-        script_header("adios2", deps_root, artifacts_root, prefix, compilers, tarball_dir)
+        script_header("adios2", deps_root, artifacts_root, prefix, compilers, tarball_dir,
+                      toolkit_bin=_toolkit_bin(checkpoint) if backend in ("cuda", "hip") else "")
         + f"""
 VERSION="${{ADIOS2_VERSION:-v{version}}}"
 SRC="$SRC_ROOT/ADIOS2-$VERSION"
@@ -910,11 +951,19 @@ def cmd_build(args: argparse.Namespace) -> None:
     if not isinstance(compile_cfg, dict):
         compile_cfg = {}
     build_dir = str(compile_cfg.get("build_dir") or default_build_dir(req))
-    if (not args.reuse_build_dir and not args.clean_build
-            and os.path.isdir(build_dir) and os.listdir(build_dir)):
+    # Only an actual CMake build tree is dangerous to reconfigure — metadata
+    # under build_dir (requirements.json, checkpoint, _artifacts/) is expected
+    # on a first build when artifacts_root defaults to <build_root>/_artifacts.
+    build_dir_path = Path(build_dir)
+    has_cmake_tree = (
+        (build_dir_path / "CMakeCache.txt").is_file()
+        or (build_dir_path / "CMakeFiles").is_dir()
+    )
+    if not args.reuse_build_dir and not args.clean_build and has_cmake_tree:
         msg = (
             f"refusing to generate the build script: compile.build_dir points at "
-            f"the existing non-empty directory {build_dir}. "
+            f"an existing CMake build tree {build_dir} "
+            "(CMakeCache.txt/CMakeFiles detected). "
             "Re-configuring on top of it would re-link/overwrite the existing "
             "build tree — if that tree is already registered in the Ledger, the "
             "registered evidence (executable sha256) would diverge from the disk "

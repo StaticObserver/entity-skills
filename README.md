@@ -1,5 +1,7 @@
 # Entity Skills Package
 
+> For the Chinese version of this README, see [README.zh-CN.md](README.zh-CN.md).
+
 A skills package that helps agents run astrophysical simulations with
 [Entity](https://github.com/entity-toolkit/entity).
 

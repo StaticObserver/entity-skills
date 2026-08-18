@@ -223,10 +223,11 @@ def load_project_yaml(project_dir):
 
 
 def init_project(workspace, slug, source=None):
-    """Create ``projects/<slug>/`` (project.yaml + cases/) inside a
-    workspace.  The source authority is only registered in project.yaml
-    (relative path, default ``source``); its directory is not created —
-    snapshot-source semantics stay with the Case source record.
+    """Create ``projects/<slug>/`` (project.yaml + cases/ +
+    analysis/scripts/) inside a workspace.  The source authority is only
+    registered in project.yaml (relative path, default ``source``); its
+    directory is not created — snapshot-source semantics stay with the
+    Case source record.
 
     Idempotent: an existing valid project.yaml is kept untouched; a
     non-empty directory without project.yaml is refused."""
@@ -261,6 +262,9 @@ def init_project(workspace, slug, source=None):
     cases_dir = os.path.join(project_dir, "cases")
     if not os.path.isdir(cases_dir):
         os.makedirs(cases_dir)
+    scripts_dir = os.path.join(project_dir, "analysis", "scripts")
+    if not os.path.isdir(scripts_dir):
+        os.makedirs(scripts_dir)
     return {
         "project_dir": project_dir,
         "record": record,
@@ -486,9 +490,12 @@ STACK_SIGNATURE_FIELDS = (
 # Package keys preserved between a checkpoint's selected entries and the
 # registry; discovery_from_stack (env-build) copies exactly these back so a
 # deps-add -> export -> --from-registry round trip keeps the same stack_id.
+# The compiler fields cc/cxx/host_cxx must survive the round trip: the
+# compatibility gate requires selected.compiler.cxx (and a wrapper-aware
+# host_cxx), so dropping them makes registry-resolved checkpoints unbuildable.
 STACK_PACKAGE_KEYS = (
     "version", "prefix", "provider", "bin", "include", "lib",
-    "cmake_config", "modules",
+    "cmake_config", "modules", "cc", "cxx", "host_cxx",
 )
 # Mirror of entity_schema.PROFILES[*]["cxx_standard"] (env-build is the
 # single source; only "modern" exists today).  Used to normalize the

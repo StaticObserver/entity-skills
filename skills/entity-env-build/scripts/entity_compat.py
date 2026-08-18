@@ -1138,6 +1138,45 @@ def run_checks(
         )
         issues.append("C++ standard does not match Entity profile")
 
+    # Upstream only emits -DSHAPE_ORDER for deposit=esirkepov (cmake
+    # set_shape_order); with zigzag the binary silently falls back to the
+    # built-in first-order scheme and every other link in the chain
+    # (CMakeCache, parameter card, build script) looks like the order took
+    # effect. That silent no-op is exactly what this gate exists to catch.
+    deposit = (
+        str(compile_cfg.get("deposit") or "zigzag").lower()
+        if isinstance(compile_cfg, dict) else "zigzag"
+    )
+    shape_order = (
+        str(compile_cfg.get("shape_order") or "1")
+        if isinstance(compile_cfg, dict) else "1"
+    )
+    if deposit != "esirkepov" and shape_order != "1":
+        msg = (
+            f"compile.shape_order={shape_order} has no effect with "
+            f"compile.deposit={deposit}: upstream only emits -DSHAPE_ORDER "
+            "for deposit=esirkepov, so the binary silently uses the built-in "
+            "first-order zigzag scheme"
+        )
+        add(
+            checks,
+            "compile.shape_order_requires_esirkepov",
+            "fail",
+            msg,
+            {"deposit": deposit, "shape_order": shape_order},
+            remediation="Set compile.deposit=esirkepov to make shape_order take "
+            "effect, or drop compile.shape_order.",
+        )
+        issues.append(msg)
+    else:
+        add(
+            checks,
+            "compile.shape_order_requires_esirkepov",
+            "pass",
+            "shape_order is consistent with the deposit scheme",
+            {"deposit": deposit, "shape_order": shape_order},
+        )
+
     for dep, prefix in (("kokkos", profile["kokkos"]), ("adios2", profile["adios2"])):
         version = selected_version(checkpoint, dep)
         if version and version_matches_family(version, prefix):

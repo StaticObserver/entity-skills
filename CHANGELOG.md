@@ -10,6 +10,67 @@ compatibility contracts and are not the product version.
 
 ## [Unreleased]
 
+## [0.7.1] - 2026-08-18
+
+### Added
+
+- `project init` now also creates the `analysis/scripts/` general-purpose
+  script-library skeleton (idempotent — re-initializing an existing project
+  backfills it).
+- `record analysis` gains test coverage for the ssh-channel manifest
+  evidence probe (fake `run_on_site` channel: happy path books the record;
+  a failed probe writes nothing).
+
+### Fixed
+
+Field-verified defect batch from the fresh-machine + all-deps-source-built +
+CUDA-backend path (lambda H100 first install, defect report 2026-08-18):
+
+- The env-build generated `build-hdf5.sh` substituted dots with underscores
+  when cloning HDF5, composing the nonexistent tag `hdf5-1_14_6`; HDF5 tags
+  have used the dotted form since 1.12, so the version is now used verbatim
+  (`hdf5-$VERSION`, e.g. `hdf5-1.14.6`).
+- The dependency build scripts (kokkos/adios2) assumed `nvcc` was already on
+  PATH, but `env.sh` is only generated in the next stage — configure failed
+  immediately when the CUDA toolkit was not on the default PATH. For
+  cuda/hip backends the generated scripts now export PATH from the
+  checkpoint's `selected.gpu_toolkit.bin` (falling back to `prefix/bin`).
+- Two wrong fallbacks when `host_cxx` is absent: `selected_compiler()` fell
+  back to the C compiler (`NVCC_WRAPPER_DEFAULT_COMPILER=gcc`, missing
+  libstdc++ at link time); `compiler_env()` fell back to `CXX` itself
+  (self-referential when CXX is nvcc_wrapper). The host compiler is now
+  derived from `cc` (gcc→g++, clang→clang++), defaulting to `c++`, matching
+  the build-kokkos.sh default.
+- The `build` command's build_dir guard treated any non-empty directory as
+  an existing build tree: with the documented default layout
+  (`artifacts_root = <build_root>/_artifacts`) the requirements/checkpoint
+  JSONs alone make build_root non-empty, so every first build was refused
+  and callers were trained to pass `--reuse-build-dir` routinely, weakening
+  the guard. It now refuses only when actual CMake products
+  (`CMakeCache.txt`/`CMakeFiles/`) are detected.
+- The site deps registry round trip dropped the compiler's
+  `cc`/`cxx`/`host_cxx` (report defect 5): the registry persistence
+  whitelists (Ledger `STACK_PACKAGE_KEYS` and env-build
+  `REGISTRY_PACKAGE_KEYS`) did not include these keys, while the
+  compatibility gate requires `selected.compiler.cxx` — so any checkpoint
+  resolved purely `--from-registry` was bound to fail; and `create` merged
+  per-entry with `setdefault`, so a probed compiler entry carrying the full
+  fields was silently ignored and the gap was unfillable. The three keys are
+  now in both whitelists (`DEPENDENCY_ENTRY_KEYS` updated to match), and the
+  merge is field-level: discovery only fills fields the registry entry
+  lacks, `validation` keeps the registry provenance, and existing fields
+  still prefer the registry. Old archives (stacks without compiler fields)
+  self-heal via field-level filling; re-running `deps-add` registers an
+  enriched stack.
+- `compile.shape_order` was silently ineffective with `deposit=zigzag` (the
+  default) — report defect 6, which wasted a 741 GB production run: upstream
+  only emits `-DSHAPE_ORDER` for `deposit=esirkepov`; otherwise the binary
+  falls back to the built-in first-order scheme with no signal anywhere in
+  the chain. The compatibility check gains
+  `compile.shape_order_requires_esirkepov`: `shape_order != 1` with a
+  non-esirkepov deposit fails; the options table in
+  `references/entity-compile-options.md` now documents the dependency.
+
 ## [0.7.0] - 2026-08-03
 
 The Workspace and Computation Site top-level model lands (design:
