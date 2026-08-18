@@ -318,7 +318,7 @@ VERSION="${{HDF5_VERSION:-{version}}}"
 SRC="$SRC_ROOT/hdf5-$VERSION"
 BUILD="$BUILD_ROOT/hdf5-$VERSION"
 if [ ! -d "$SRC/.git" ]; then
-{_git_clone_fallback("hdf5", "https://github.com/HDFGroup/hdf5.git", '"hdf5-${VERSION//./_}"')}
+{_git_clone_fallback("hdf5", "https://github.com/HDFGroup/hdf5.git", '"hdf5-$VERSION"')}
 fi
 cmake -S "$SRC" -B "$BUILD" \\
   -DCMAKE_INSTALL_PREFIX="$PREFIX" \\
