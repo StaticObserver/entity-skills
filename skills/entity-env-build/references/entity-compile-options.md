@@ -27,8 +27,8 @@ Problem generator 规则：
 | `pgen` | Problem generator | 内置名称、`pgens/...` 或包含 `pgen.hpp` 的路径 | 必填 | 更改 `pgen` 需要重新 configure/build。 |
 | `pgens` | 多个 problem generator | 逗号分隔的 generator 名称/路径 | 可选 | Entity 1.4.0 新增。仅当请求明确需要多个 generator 时使用。 |
 | `precision` | 浮点精度 | `single`、`double` | `single` | 构建期数值类型。 |
-| `deposit` | 电流沉积方案 | `zigzag`、`esirkepov` | `zigzag` | |
-| `shape_order` | deposit 与 pusher 的插值阶数 | `1` 到 `11` | `1` | |
+| `deposit` | 电流沉积方案 | `zigzag`、`esirkepov` | `zigzag` | 决定 `shape_order` 是否生效。 |
+| `shape_order` | deposit 与 pusher 的插值阶数 | `1` 到 `11` | `1` | **仅在 `deposit=esirkepov` 时生效**：上游只在该组合下发出 `-DSHAPE_ORDER`；`zigzag`（默认）下该参数静默失效，二进制回落到内建一阶方案。兼容性检查对 `shape_order != 1` 且非 esirkepov 的组合判 fail。 |
 | `output` | 启用输出 | `ON`、`OFF` | `ON` | 默认意味着依赖环境通常需要 ADIOS2/HDF5 支持。 |
 | `mpi` | 启用多节点支持 | `ON`、`OFF` | `OFF` | 仅当当前需求需要 MPI 时启用。 |
 | `gpu_aware_mpi` | 启用 GPU-aware MPI 通信 | `ON`、`OFF` | `ON` | 除非确认，否则保持保守的环境默认值 `OFF`。 |

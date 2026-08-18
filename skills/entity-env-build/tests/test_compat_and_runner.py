@@ -134,6 +134,41 @@ class OverridePreciseRemovalTests(unittest.TestCase):
             )
 
 
+class ShapeOrderDepositGateTests(unittest.TestCase):
+    """Defect report 2026-08-18, defect 6: shape_order only takes effect
+    with deposit=esirkepov; with zigzag (the default) upstream never emits
+    -DSHAPE_ORDER and the binary silently falls back to the built-in
+    first-order scheme. The compat gate must fail the combination instead
+    of letting it through silently."""
+
+    def _compat_by_id(self, tmp: Path, compile_overrides: dict):
+        req = base_requirements(tmp)
+        req["compile"].update(compile_overrides)
+        checkpoint_path = create_confirmed_checkpoint(tmp, req)
+        proc = run_compat(tmp, checkpoint_path)
+        compat = json.loads(proc.stdout)
+        return {check["id"]: check["status"] for check in compat["checks"]}
+
+    def test_shape_order_with_default_zigzag_fails(self):
+        with tempfile.TemporaryDirectory() as td:
+            by_id = self._compat_by_id(Path(td), {"shape_order": 3})
+            self.assertEqual(
+                by_id.get("compile.shape_order_requires_esirkepov"), "fail")
+
+    def test_shape_order_with_esirkepov_passes(self):
+        with tempfile.TemporaryDirectory() as td:
+            by_id = self._compat_by_id(
+                Path(td), {"shape_order": 3, "deposit": "esirkepov"})
+            self.assertEqual(
+                by_id.get("compile.shape_order_requires_esirkepov"), "pass")
+
+    def test_default_shape_order_with_zigzag_passes(self):
+        with tempfile.TemporaryDirectory() as td:
+            by_id = self._compat_by_id(Path(td), {})
+            self.assertEqual(
+                by_id.get("compile.shape_order_requires_esirkepov"), "pass")
+
+
 class SnapshotManifestTests(unittest.TestCase):
     def test_corrupt_snapshot_manifest_yields_structured_fail(self):
         sys.path.insert(0, str(ROOT / "scripts"))

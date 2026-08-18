@@ -51,6 +51,13 @@ compatibility contracts and are not the product version.
   注册表条目缺失的字段，`validation` 保持注册表来源，已有字段仍以
   注册表为准。旧档案（缺 compiler 字段的栈）由字段级补缺自动修复；
   重新 `deps-add` 会登记带完整字段的新栈。
+- `compile.shape_order` 在 `deposit=zigzag`（默认）下静默失效（缺陷报告
+  缺陷 6，一次 741 GB 生产 run 因此作废）：上游只在
+  `deposit=esirkepov` 时发出 `-DSHAPE_ORDER`，否则二进制回落内建一阶
+  方案而全链无信号。兼容性检查新增
+  `compile.shape_order_requires_esirkepov`：`shape_order != 1` 且非
+  esirkepov 判 fail；`references/entity-compile-options.md` 的选项表
+  同步标注该依赖关系。
 
 ## [0.7.0] - 2026-08-03
 
