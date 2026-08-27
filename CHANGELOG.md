@@ -10,6 +10,31 @@ compatibility contracts and are not the product version.
 
 ## [Unreleased]
 
+## [0.7.2] - 2026-08-27
+
+### Fixed
+
+- Run submit scripts now adapt to the build's MPI stack instead of
+  unconditionally wrapping the executable in `srun`: the planner derives a
+  `compute.launcher` from the deps stack signature (`mpi=false` → bare
+  invocation, `mpi=true` → the Site policy's new `mpi_launcher`, default
+  `mpirun -np <tasks>`), and both the slurm and direct renderers honor it.
+  The old behavior started N duplicate independent processes for non-MPI
+  builds (`srun` + `--ntasks=N`) and could not launch MPI stacks that lack
+  srun/PMI interop at all. Runs prepared before this change keep their
+  historical rendering at launch time (slurm: srun, direct: bare).
+
+### Changed
+
+- Behavior change: slurm scripts for non-MPI builds and explicit
+  `--executable` runs (no recorded build stack) no longer use `srun`; the
+  executable runs bare inside the allocation. Sites where srun is the right
+  launcher for MPI builds can set `policy.mpi_launcher: srun`.
+- The direct backend now rejects `launcher: srun` (no allocation) and
+  defaults `tasks` to `gpus` instead of 1 for MPI builds.
+- The entity-ledger `SKILL.md` frontmatter description is now quoted — the
+  unquoted value contained a colon and failed strict YAML parsing.
+
 ## [0.7.1] - 2026-08-18
 
 ### Added
