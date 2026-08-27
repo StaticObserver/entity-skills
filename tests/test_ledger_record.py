@@ -218,6 +218,12 @@ class RecordTest(unittest.TestCase):
         self.assertEqual(payload["status"], "needs_decision")
 
     def test_record_data_inventories_run_outputs(self):
+        # Legacy v1 path (rollback flag): the v1 data_id derives from
+        # (case_uid, run_id) only and the v1 manifest carries per-file
+        # sha256.
+        os.environ["ENTITY_LEDGER_DATA_IDENTITY"] = "v1"
+        self.addCleanup(
+            lambda: os.environ.pop("ENTITY_LEDGER_DATA_IDENTITY", None))
         run_root = self._register_run()
         code, payload = self.cli(
             "--actor-run-id", "record-test", "record", "data",
@@ -249,6 +255,11 @@ class RecordTest(unittest.TestCase):
         self.assertEqual([item["event_type"] for item in events], ["record.data"])
 
     def test_record_data_is_idempotent_and_refreshes(self):
+        # Legacy v1 path: growth keeps the same (case, run)-derived data_id
+        # and only refreshes the file count — the semantics v2 replaces.
+        os.environ["ENTITY_LEDGER_DATA_IDENTITY"] = "v1"
+        self.addCleanup(
+            lambda: os.environ.pop("ENTITY_LEDGER_DATA_IDENTITY", None))
         run_root = self._register_run()
         argv = ["--actor-run-id", "record-test", "record", "data",
                 "--project-root", self.project]
@@ -312,7 +323,7 @@ class RecordTest(unittest.TestCase):
         self.assertEqual(board["build"]["state"], "verified")
         self.assertIn("entity.xc @ local", board["build"]["detail"])
         self.assertEqual(board["data"]["state"], "inventoried")
-        self.assertEqual(board["data"]["detail"], "3 files")
+        self.assertEqual(board["data"]["detail"], "3 files, integrity metadata")
 
     # B2: record run-correct rewrites a booked terminal state by human
     # declaration (the counterpart of --reclassify's evidence re-judgment)

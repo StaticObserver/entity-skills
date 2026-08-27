@@ -136,7 +136,9 @@ python3 scripts/entityctl.py record run-correct --project-root <project> [--run-
   --status <completed|failed> --reason "<reason>"
 python3 scripts/entityctl.py record build --project-root <project> --site <site> \
   --checkpoint <deps-checkpoint.json> --executable <path>
-python3 scripts/entityctl.py record data --project-root <project> [--run-id <id>]
+python3 scripts/entityctl.py record data --project-root <project> [--run-id <id>] [--integrity metadata|strong]
+python3 scripts/entityctl.py data seal --project-root <project> --data-id <revision>
+python3 scripts/entityctl.py data verify --project-root <project> --data-id <revision|release>
 python3 scripts/entityctl.py record intent --project-root <project> --text "<current research goal>"
 python3 scripts/entityctl.py record analysis --project-root <project> \
   --script <path relative to scripts/> --data <run_id|data_id> --params '<json>' \
@@ -220,6 +222,26 @@ Key semantics:
   relocated and migrated, and status --live no longer probes it.
   `--reclassify` does not apply to aborted; if the site recovers, the
   output can still be inventoried with `record data`.
+- `record data` books a **data revision** whose id derives from the
+  inventory itself: re-recording unchanged data reproduces the same id
+  (idempotent refresh); any change in the file set or file sizes books a
+  NEW revision and advances current.data_id, so analyses bound to the old
+  revision automatically show stale. The default `--integrity metadata`
+  inventory records only relative paths, types and sizes and reads no file
+  content — it is **not** a content checksum: a same-size content change
+  does not produce a new revision. For byte-level evidence use
+  `--integrity strong` (its planned read volume is reported as
+  bytes_planned_read), or seal a metadata revision afterwards with
+  `data seal`: the seal runs a strong inventory, requires the file set to
+  still match the revision, and books a strong **data release** identity
+  that certifies the same bytes — current.data_id stays on the revision,
+  so analyses do not go stale; a changed tree fails the seal with zero
+  writes. `data verify` re-checks any recorded data identity against the
+  live tree (read-only, ok=false with exit 2 on drift). Pre-0.7.3 v1
+  identities display as integrity "legacy-unknown", cannot be sealed
+  (re-record them first), and are verified by re-hashing the recorded
+  manifest's files; `ENTITY_LEDGER_DATA_IDENTITY=v1` forces the legacy
+  code path entirely (rollback switch).
 - `record analysis` is the sixth identity dimension: **free execution,
   strict recording** — where and how you run it is none of the Ledger's
   business; recording does after-the-fact evidence probing: the script

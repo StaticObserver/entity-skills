@@ -25,7 +25,7 @@ import time
 
 SCHEMA_VERSION = 1
 KINDS = {"run.preflight.v1", "run.prepare.v2", "run.launch.v2",
-         "data.inventory.v1"}
+         "data.inventory.v1", "data.inventory.v2"}
 
 # Mirror of entity_ledger_common.GRES_RE (this file is standalone by design):
 # "gpu:<count>" or "gpu:<type>:<count>".  An empty compute.gres is only legal
@@ -51,6 +51,23 @@ def now_utc():
 
 def canonical_json(value):
     return json.dumps(value, sort_keys=True, separators=(",", ":"))
+
+
+# Mirror of entity_ledger_common.DOMAIN_DIGEST_PURPOSES / domain_digest (this
+# file is standalone by design): digest purposes from the hash-verification
+# plan (WP0).  The purpose/schema pair domain-separates digests of identical
+# payloads used in different roles.
+_DOMAIN_PURPOSES = {"identity", "evidence", "transfer", "observation"}
+
+
+def domain_digest(purpose, schema, payload):
+    if purpose not in _DOMAIN_PURPOSES:
+        raise ExecutorError(
+            "digest purpose must be one of %s (got %s)"
+            % (sorted(_DOMAIN_PURPOSES), purpose))
+    canonical = canonical_json(
+        {"purpose": purpose, "schema": schema, "payload": payload})
+    return "sha256:" + hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
 def sha256_file(path):
@@ -782,6 +799,67 @@ def _data_inventory(envelope):
                         outputs, previous=intent)
 
 
+def _data_inventory_v2(envelope):
+    """Schema-2 inventory with an explicit integrity level.  "metadata"
+    records only directory-entry facts (path, type, size) and reads no file
+    content; "strong" additionally hashes every file (the honest cost is
+    reported as bytes_planned_read in the receipt effect).  The inventory
+    digest is domain-separated (purpose "evidence") and covers the integrity
+    level plus the file entries, so the controller can derive the data
+    revision id from the receipt without re-reading the manifest."""
+    request = envelope["request"]
+    if set(request) != {"run_root", "manifest", "integrity"}:
+        raise ExecutorError("data.inventory.v2 request keys differ from schema")
+    integrity = request["integrity"]
+    if integrity not in {"metadata", "strong"}:
+        raise ExecutorError("data.inventory.v2 integrity must be metadata or strong")
+    run_root = require_path(request["run_root"], envelope["allowed_roots"], "run_root")
+    manifest = require_path(request["manifest"], envelope["allowed_roots"], "manifest")
+    if not os.path.isdir(run_root):
+        raise ExecutorError("run root is missing")
+    previous = matching_receipt(envelope)
+    intent = receipt_base(envelope, "intent_written", previous=previous)
+    entries = []
+    bytes_total = 0
+    for current, directories, names in os.walk(run_root):
+        directories[:] = sorted(directories)
+        for name in sorted(names):
+            path = os.path.join(current, name)
+            relative = os.path.relpath(path, run_root)
+            # The inventory manifest is evidence ABOUT the tree, not part of
+            # the data: skip the well-known manifest file no matter where
+            # this request writes its own manifest (verify writes to
+            # staging, record/seal to the run root) so all three actions
+            # observe the identical file set.
+            if (os.path.realpath(path) == os.path.realpath(manifest)
+                    or relative == "data-inventory.json"):
+                continue
+            entry = {"path": relative, "bytes": os.path.getsize(path),
+                     "type": "file"}
+            if integrity == "strong":
+                entry["sha256"] = sha256_file(path)
+            entries.append(entry)
+            bytes_total += entry["bytes"]
+    inventory_digest = domain_digest(
+        "evidence", "entity.data-inventory.v2",
+        {"integrity": integrity, "files": entries})
+    payload = {
+        "schema_version": 2, "kind": "entity-ledger.data-inventory",
+        "run_root": run_root, "integrity": integrity,
+        "probe": {"tool": "entity_ledger_executor", "schema": "data.inventory.v2"},
+        "files": entries, "bytes_total": bytes_total,
+        "inventory_digest": inventory_digest, "created_at": now_utc(),
+    }
+    atomic_json(manifest, payload)
+    outputs = [file_evidence(manifest), directory_evidence(run_root)]
+    effect = {"files": len(entries), "integrity": integrity,
+              "inventory_digest": inventory_digest}
+    if integrity == "strong":
+        effect["bytes_planned_read"] = bytes_total
+    return receipt_base(envelope, "outputs_verified", effect,
+                        outputs, previous=intent)
+
+
 def execute(envelope):
     kind = envelope["kind"]
     if kind == "run.preflight.v1":
@@ -792,6 +870,8 @@ def execute(envelope):
         receipt = _launch(envelope)
     elif kind == "data.inventory.v1":
         receipt = _data_inventory(envelope)
+    elif kind == "data.inventory.v2":
+        receipt = _data_inventory_v2(envelope)
     else:
         raise ExecutorError("unsupported Step kind")
     if receipt.get("state") != "outputs_verified":

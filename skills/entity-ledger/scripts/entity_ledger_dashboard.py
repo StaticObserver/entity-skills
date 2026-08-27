@@ -157,8 +157,15 @@ def _data_cell(case, current):
         case.get("identities", {}).get("data", {}).get("items", []), data_id)
     if not data_id or payload is None:
         return {"state": "missing", "detail": "—"}
+    # v2 identities carry their integrity level; v1 identities predate
+    # integrity levels and must never be presented as content-verified.
+    if payload.get("identity_schema") == 2:
+        integrity = payload.get("integrity", "metadata")
+    else:
+        integrity = "legacy-unknown"
     return {"state": payload.get("status", "inventoried"),
-            "detail": "%s files" % payload.get("files", "?")}
+            "detail": "%s files, integrity %s"
+                      % (payload.get("files", "?"), integrity)}
 
 
 def _analysis_cell(case, current):

@@ -56,8 +56,10 @@ from entity_ledger_record import (
     record_run_launch,
     record_run_prepare,
     render_run,
+    seal_data,
     show_case,
     snapshot_source,
+    verify_data,
 )
 from entity_ledger_store import (
     OperationStore,
@@ -1406,6 +1408,19 @@ def record_data_command(args):
     actor = require_attributed_actor(actor_identity(args))
     store = OperationStore(args.ledger_home, create=False)
     return record_data(store, args.project_root, args.run_id, actor,
+                       case_slug=args.case_slug, integrity=args.integrity)
+
+
+def data_seal_command(args):
+    actor = require_attributed_actor(actor_identity(args))
+    store = OperationStore(args.ledger_home, create=False)
+    return seal_data(store, args.project_root, args.data_id, actor,
+                     case_slug=args.case_slug)
+
+
+def data_verify_command(args):
+    store = OperationStore(args.ledger_home, create=False)
+    return verify_data(store, args.project_root, args.data_id,
                        case_slug=args.case_slug)
 
 
@@ -2265,7 +2280,7 @@ def build_parser():
     add_actor_arguments(parser)
     sub = parser.add_subparsers(
         dest="command",
-        metavar="{doctor,status,show,render-run,snapshot-source,record,site,store,workspace,project,case,submission,export,install}"
+        metavar="{doctor,status,show,render-run,snapshot-source,record,data,site,store,workspace,project,case,submission,export,install}"
     )
     doctor_parser = sub.add_parser("doctor")
     doctor_parser.add_argument(
@@ -2314,6 +2329,12 @@ def build_parser():
     record_data_parser = record_sub.add_parser("data")
     record_data_parser.add_argument("--project-root", required=True)
     record_data_parser.add_argument("--run-id", default="")
+    record_data_parser.add_argument(
+        "--integrity", default="metadata", choices=["metadata", "strong"],
+        help="inventory strength: metadata (default) records paths/types/"
+             "sizes only and reads no file content — it is NOT a content "
+             "checksum; strong hashes every file (explicit opt-in, cost "
+             "reported as bytes_planned_read)")
     add_case_argument(record_data_parser)
     record_data_parser.set_defaults(func=record_data_command)
     record_run_prepare_parser = record_sub.add_parser("run-prepare")
@@ -2414,6 +2435,19 @@ def build_parser():
         help="mark a legacy script whose data paths are not CLI-parameterized")
     add_case_argument(record_analysis_parser)
     record_analysis_parser.set_defaults(func=record_analysis_command)
+
+    data_cmd = sub.add_parser("data")
+    data_sub = data_cmd.add_subparsers(dest="data_command")
+    data_seal_parser = data_sub.add_parser("seal")
+    data_seal_parser.add_argument("--project-root", required=True)
+    data_seal_parser.add_argument("--data-id", required=True)
+    add_case_argument(data_seal_parser)
+    data_seal_parser.set_defaults(func=data_seal_command)
+    data_verify_parser = data_sub.add_parser("verify")
+    data_verify_parser.add_argument("--project-root", required=True)
+    data_verify_parser.add_argument("--data-id", required=True)
+    add_case_argument(data_verify_parser)
+    data_verify_parser.set_defaults(func=data_verify_command)
 
     site = sub.add_parser("site")
     site_sub = site.add_subparsers(dest="site_command")

@@ -25,6 +25,7 @@ import re
 
 from entity_ledger_common import (
     absolute,
+    domain_digest,
     find_identity,
     now_utc,
     run_on_site,
@@ -556,10 +557,123 @@ def _inventory_envelope(case_uid, run_id, site_id, staging_root, run_root,
     return "data-" + digest, manifest, envelope
 
 
-def record_data(store, project_root, run_id, actor, case_slug=None):
-    """Inventory a run's outputs and book the data identity.  The data_id is
-    content-addressed from (case, run), so re-inventorying the same run is
-    idempotent and refreshes the recorded file count."""
+# Per-action (step_id, receipt name): the verify/seal receipts must never
+# clobber the record-data receipt, so each action gets its own operation
+# digest over {case_uid, run_id, action}.
+_DATA_ACTION_STEPS = {
+    "record": ("record-data", "data-inventory-v2.json"),
+    "seal": ("data-seal", "data-seal.json"),
+    "verify": ("data-verify", "data-verify.json"),
+}
+
+
+def _inventory_envelope_v2(case_uid, run_id, site_id, staging_root, run_root,
+                           integrity, action, case_segment=None):
+    """Schema-2 inventory envelope.  Record and seal write the well-known
+    run-root manifest (regenerable evidence, latest inventory wins); verify
+    stages its manifest next to its own receipt so it never writes to the
+    run root.  The executor skips the well-known manifest name during the
+    walk, so all three actions observe the identical file set."""
+    step_id, receipt_name = _DATA_ACTION_STEPS[action]
+    digest = canonical_hash({"case_uid": case_uid, "run_id": run_id,
+                             "action": action}).split(":", 1)[1][:16]
+    staging = os.path.join(staging_root, case_segment or case_uid, "op-" + digest)
+    if action == "verify":
+        manifest = os.path.join(staging, "data-verify-manifest.json")
+    else:
+        manifest = os.path.join(run_root, "data-inventory.json")
+    envelope = {
+        "schema_version": 1,
+        "operation_id": "op-" + digest,
+        "plan_hash": canonical_hash({"kind": "entity-ledger.data.inventory",
+                                     "case_uid": case_uid, "run_id": run_id,
+                                     "action": action, "integrity": integrity}),
+        "step_index": 0,
+        "step_id": step_id,
+        "kind": "data.inventory.v2",
+        "site_id": site_id,
+        "receipt": os.path.join(staging, "receipts", receipt_name),
+        "allowed_roots": [staging, run_root],
+        "request": {"run_root": run_root, "manifest": manifest,
+                    "integrity": integrity},
+    }
+    return manifest, envelope
+
+
+def _data_identity_version():
+    """ENTITY_LEDGER_DATA_IDENTITY=v1 forces the legacy v1 data identity path
+    (the rollback switch); every other value selects v2.  Each call writes
+    exactly one identity version — never both."""
+    if os.environ.get("ENTITY_LEDGER_DATA_IDENTITY", "") == "v1":
+        return "v1"
+    return "v2"
+
+
+def _run_site_context(store, case, run_id):
+    """Resolve the run identity's Site, run root and staging root."""
+    run_identity = _run_identity(case, run_id)
+    if run_identity is None:
+        raise PlanError(
+            "unknown run identity: %s" % run_id,
+            "needs_decision",
+            [{"field": "run", "question": "select a known run id"}],
+        )
+    root = run_identity.get("root", {})
+    site_id = root.get("site_id") or run_identity.get("site_id", "")
+    run_root = root.get("path", "") or run_identity.get("scheduler", {}).get("run_root", "")
+    if not site_id or not run_root:
+        raise PlanError("run identity has no usable root locator")
+    profile, layout = merged_execution_profile(
+        store, store.get_site(site_id), case)
+    staging_root = profile.get("roots", {}).get("staging_root")
+    if not staging_root:
+        raise PlanError("execution Site is missing staging_root")
+    return profile, layout, staging_root, site_id, run_root
+
+
+def _read_site_manifest(profile, path):
+    """Read a JSON inventory manifest from its Site (locally or over SSH)."""
+    if profile.get("transport", {}).get("kind") == "local":
+        if not os.path.isfile(path):
+            raise PlanError(
+                "data inventory manifest is missing: %s" % path, "anomaly")
+        try:
+            with open(path, "r") as handle:
+                return json.load(handle)
+        except (IOError, OSError, ValueError) as exc:
+            raise PlanError(
+                "cannot read data inventory manifest %s: %s" % (path, exc),
+                "anomaly")
+    code, stdout, unused = run_on_site(profile, ["cat", path])
+    if code != 0:
+        raise PlanError(
+            "data inventory manifest is missing on the Site: %s" % path,
+            "anomaly")
+    try:
+        return json.loads(stdout)
+    except ValueError as exc:
+        raise PlanError(
+            "cannot parse data inventory manifest %s: %s" % (path, exc),
+            "anomaly")
+
+
+def _inventory_entries(manifest_payload):
+    """Identity-payload copy of an inventory's file entries: path/bytes
+    always, sha256 when the inventory is strong."""
+    entries = []
+    for item in manifest_payload.get("files", []):
+        entry = {"path": item.get("path", ""), "bytes": item.get("bytes", 0)}
+        if item.get("sha256"):
+            entry["sha256"] = item["sha256"]
+        entries.append(entry)
+    return entries
+
+
+def _record_data_v1(store, project_root, run_id, actor, case_slug=None):
+    """Legacy v1 path (ENTITY_LEDGER_DATA_IDENTITY=v1 rollback): the data_id
+    is content-addressed from (case, run) only, so re-inventorying the same
+    run is idempotent and refreshes the recorded file count — the inventory
+    content does NOT feed the identity (the pre-0.7.3 semantics)."""
     case = _require_case(store, project_root, case_slug)
     current = case.get("current", {})
     run_id = run_id or current.get("run_id", "")
@@ -638,6 +752,357 @@ def record_data(store, project_root, run_id, actor, case_slug=None):
         "manifest": manifest,
         "refreshed": refreshed,
     }
+
+
+def record_data(store, project_root, run_id, actor, case_slug=None,
+                integrity="metadata"):
+    """Inventory a run's outputs and book the data revision identity (v2).
+
+    The data_id is derived from the inventory itself::
+
+        data_id = "data-" + domain_digest("identity",
+            "entity.data-revision.v2",
+            {"run_id", "integrity", "inventory_digest"}).hex[:16]
+
+    so re-recording unchanged data reproduces the same id (refreshed=True),
+    while any change in the file set or file sizes books a NEW revision and
+    advances current.data_id — analyses bound to the old revision go stale
+    via the existing parent-mismatch rule.  ``integrity="metadata"`` (the
+    default) reads no file content; it is NOT a content checksum — content
+    changes that keep (path, size) pairs unchanged do not produce a new
+    revision.  Use ``integrity="strong"`` or ``seal_data`` for byte-level
+    evidence.  ENTITY_LEDGER_DATA_IDENTITY=v1 selects the legacy path."""
+    if integrity not in {"metadata", "strong"}:
+        raise PlanError("integrity must be metadata or strong")
+    if _data_identity_version() == "v1":
+        return _record_data_v1(
+            store, project_root, run_id, actor, case_slug=case_slug)
+    case = _require_case(store, project_root, case_slug)
+    current = case.get("current", {})
+    run_id = run_id or current.get("run_id", "")
+    if not run_id:
+        raise PlanError(
+            "Case has no current run",
+            "needs_decision",
+            [{"field": "run", "question": "select the run to inventory"}],
+        )
+    profile, layout, staging_root, site_id, run_root = _run_site_context(
+        store, case, run_id)
+    manifest, envelope = _inventory_envelope_v2(
+        case["case_uid"], run_id, site_id, staging_root, run_root, integrity,
+        "record", case_segment=case_path_segment(layout, case))
+    client = ExecutorClient(profile)
+    client.invoke("execute", envelope)
+    verified = client.invoke("verify", envelope)
+    _check_receipt_identity(envelope, verified)
+    effect = verified.get("effect", {})
+    inventory_digest = effect.get("inventory_digest", "")
+    files = int(effect.get("files", 0))
+    inventory = _read_site_manifest(profile, manifest)
+    if inventory.get("inventory_digest") != inventory_digest:
+        raise PlanError(
+            "inventory manifest digest differs from the executor receipt",
+            "anomaly")
+    entries = _inventory_entries(inventory)
+    data_id = "data-" + domain_digest(
+        "identity", "entity.data-revision.v2",
+        {"run_id": run_id, "integrity": integrity,
+         "inventory_digest": inventory_digest}).split(":", 1)[1][:16]
+    refreshed = any(
+        item.get("id") == data_id or item.get("identity_id") == data_id
+        for item in case.get("identities", {}).get("data", {}).get("items", []))
+    identity = {
+        "id": data_id, "kind": "data", "identity_schema": 2,
+        "site_id": site_id,
+        "root": {"site_id": site_id, "path": run_root},
+        "parents": {"run_id": run_id},
+        "integrity": integrity,
+        "inventory_digest": inventory_digest,
+        "manifest": manifest,
+        "status": "inventoried",
+        "files": files,
+        "entries": entries,
+    }
+    new_current = dict(current)
+    readiness = dict(new_current.get("readiness", {}))
+    new_current["data_id"] = data_id
+    readiness["data"] = "inventoried"
+    new_current["readiness"] = readiness
+    with store.transaction() as connection:
+        store.add_identity(
+            case["case_uid"], "data", data_id, identity, True, connection)
+        connection.execute(
+            "UPDATE cases SET current_json=?,updated_at=? WHERE case_uid=?",
+            (canonical_json(new_current), now_utc(), case["case_uid"]),
+        )
+        store.record_event(
+            case["case_uid"], None, "record.data",
+            {"data_id": data_id, "run_id": run_id, "files": files,
+             "integrity": integrity, "inventory_digest": inventory_digest,
+             "refreshed": refreshed},
+            actor, connection)
+    result = {
+        "schema_version": 1,
+        "kind": "entity-ledger.record.data",
+        "ok": True,
+        "state_mutated": True,
+        "case_uid": case["case_uid"],
+        "data_id": data_id,
+        "run_id": run_id,
+        "files": files,
+        "integrity": integrity,
+        "inventory_digest": inventory_digest,
+        "manifest": manifest,
+        "refreshed": refreshed,
+    }
+    if "bytes_planned_read" in effect:
+        result["bytes_planned_read"] = effect["bytes_planned_read"]
+    return result
+
+
+def _data_identity_context(store, case, data_id):
+    """Resolve a recorded data identity plus its Site/run-root context."""
+    identity = find_identity(
+        case.get("identities", {}).get("data", {}).get("items", []), data_id)
+    if identity is None:
+        raise PlanError(
+            "unknown data identity: %s" % data_id,
+            "needs_decision",
+            [{"field": "data", "question": "select a recorded data identity"}],
+        )
+    run_id = identity.get("parents", {}).get("run_id", "")
+    root = identity.get("root", {})
+    site_id = root.get("site_id") or identity.get("site_id", "")
+    run_root = root.get("path", "")
+    if not run_id or not site_id or not run_root:
+        raise PlanError("data identity has no usable root locator")
+    profile, layout = merged_execution_profile(
+        store, store.get_site(site_id), case)
+    staging_root = profile.get("roots", {}).get("staging_root")
+    if not staging_root:
+        raise PlanError("execution Site is missing staging_root")
+    return identity, profile, layout, staging_root, site_id, run_id, run_root
+
+
+def _run_inventory(client, envelope):
+    """Execute + verify an inventory envelope; returns the verified effect."""
+    client.invoke("execute", envelope)
+    verified = client.invoke("verify", envelope)
+    _check_receipt_identity(envelope, verified)
+    return verified.get("effect", {})
+
+
+def seal_data(store, project_root, data_id, actor, case_slug=None):
+    """Seal a v2 data revision into a strong data release identity.
+
+    A strong inventory runs site-side and must prove the tree still matches
+    the revision (identical (path, size) file set) before anything is
+    booked.  The release id is::
+
+        release_id = "data-" + domain_digest("identity",
+            "entity.data-release.v2",
+            {"data_revision_id", "strong_inventory_digest"}).hex[:16]
+
+    The release certifies the same bytes as the revision, so
+    current.data_id is NOT advanced and analyses bound to the revision do
+    not go stale.  Re-sealing an unchanged tree is idempotent; sealing a
+    changed tree fails with zero writes."""
+    case = _require_case(store, project_root, case_slug)
+    (identity, profile, layout, staging_root, site_id, run_id,
+     run_root) = _data_identity_context(store, case, data_id)
+    if identity.get("identity_schema") != 2:
+        raise PlanError(
+            "data identity %s predates identity_schema 2 and cannot be "
+            "sealed; record the data again with entityctl record data, then "
+            "seal the new revision" % data_id,
+            "needs_decision",
+            [{"field": "data",
+              "question": "re-record with entityctl record data, then seal "
+                          "the new revision"}],
+        )
+    manifest, envelope = _inventory_envelope_v2(
+        case["case_uid"], run_id, site_id, staging_root, run_root, "strong",
+        "seal", case_segment=case_path_segment(layout, case))
+    effect = _run_inventory(ExecutorClient(profile), envelope)
+    strong_digest = effect.get("inventory_digest", "")
+    if identity.get("integrity") == "strong":
+        # Already strong (a sealed release or a strong revision): re-sealing
+        # an unchanged tree is an idempotent ok; a digest drift means the
+        # data changed after the strong inventory — fail with zero writes.
+        if strong_digest == identity.get("inventory_digest", ""):
+            return {
+                "schema_version": 1,
+                "kind": "entity-ledger.data.seal",
+                "ok": True,
+                "state_mutated": False,
+                "case_uid": case["case_uid"],
+                "data_id": data_id,
+                "integrity": "strong",
+                "inventory_digest": strong_digest,
+                "message": "data identity is already strong and unchanged",
+            }
+        raise PlanError(
+            "data changed since the strong inventory of %s was recorded "
+            "(digest %s, now %s); nothing was written — record data again "
+            "to book a new revision" % (
+                data_id, identity.get("inventory_digest", ""), strong_digest))
+    inventory = _read_site_manifest(profile, manifest)
+    fresh = {(entry.get("path", ""), entry.get("bytes", 0))
+             for entry in inventory.get("files", [])}
+    recorded = {(entry.get("path", ""), entry.get("bytes", 0))
+                for entry in identity.get("entries", [])}
+    if fresh != recorded:
+        raise PlanError(
+            "the run root changed since data revision %s was recorded "
+            "(file set or sizes differ); nothing was written — record data "
+            "again to book a new revision, then seal it" % data_id)
+    files = int(effect.get("files", 0))
+    release_id = "data-" + domain_digest(
+        "identity", "entity.data-release.v2",
+        {"data_revision_id": data_id,
+         "strong_inventory_digest": strong_digest}).split(":", 1)[1][:16]
+    refreshed = any(
+        item.get("id") == release_id or item.get("identity_id") == release_id
+        for item in case.get("identities", {}).get("data", {}).get("items", []))
+    release = {
+        "id": release_id, "kind": "data", "identity_schema": 2,
+        "site_id": site_id,
+        "root": {"site_id": site_id, "path": run_root},
+        "parents": {"run_id": run_id, "data_revision_id": data_id},
+        "integrity": "strong",
+        "sealed": True,
+        "inventory_digest": strong_digest,
+        "manifest": manifest,
+        "status": "sealed",
+        "files": files,
+        "entries": _inventory_entries(inventory),
+    }
+    with store.transaction() as connection:
+        store.add_identity(
+            case["case_uid"], "data", release_id, release, True, connection)
+        store.record_event(
+            case["case_uid"], None, "record.data-seal",
+            {"data_revision_id": data_id, "release_id": release_id,
+             "run_id": run_id, "files": files,
+             "inventory_digest": strong_digest, "refreshed": refreshed},
+            actor, connection)
+    result = {
+        "schema_version": 1,
+        "kind": "entity-ledger.data.seal",
+        "ok": True,
+        "state_mutated": True,
+        "case_uid": case["case_uid"],
+        "data_id": data_id,
+        "release_id": release_id,
+        "run_id": run_id,
+        "files": files,
+        "integrity": "strong",
+        "inventory_digest": strong_digest,
+        "manifest": manifest,
+        "refreshed": refreshed,
+    }
+    if "bytes_planned_read" in effect:
+        result["bytes_planned_read"] = effect["bytes_planned_read"]
+    return result
+
+
+def verify_data(store, project_root, data_id, case_slug=None):
+    """Read-only re-verification of a data identity against the live tree;
+    writes nothing to the store.  v2 identities re-run the inventory at the
+    identity's integrity level and compare the domain-separated digest; v1
+    legacy identities re-run the v1 full-content inventory (manifest staged
+    outside the run root) and compare per-file (sha256, size)."""
+    case = _require_case(store, project_root, case_slug)
+    (identity, profile, layout, staging_root, site_id, run_id,
+     run_root) = _data_identity_context(store, case, data_id)
+    result = {
+        "schema_version": 1,
+        "kind": "entity-ledger.data.verify",
+        "state_mutated": False,
+        "case_uid": case["case_uid"],
+        "data_id": data_id,
+        "run_id": run_id,
+    }
+    client = ExecutorClient(profile)
+    if identity.get("identity_schema") == 2:
+        integrity = identity.get("integrity", "metadata")
+        unused_manifest, envelope = _inventory_envelope_v2(
+            case["case_uid"], run_id, site_id, staging_root, run_root,
+            integrity, "verify",
+            case_segment=case_path_segment(layout, case))
+        effect = _run_inventory(client, envelope)
+        observed = effect.get("inventory_digest", "")
+        expected = identity.get("inventory_digest", "")
+        ok = bool(expected) and observed == expected
+        result.update({
+            "ok": ok,
+            "integrity": integrity,
+            "files": int(effect.get("files", 0)),
+            "expected_digest": expected,
+            "observed_digest": observed,
+            "detail": ("live tree matches the recorded %s inventory"
+                       % integrity) if ok else
+                      ("live tree differs from the recorded %s inventory "
+                       "(expected %s, observed %s)"
+                       % (integrity, expected, observed)),
+        })
+        return result
+    # v1 legacy identity: no recorded digest, so re-hash every listed file
+    # through a fresh v1 inventory and compare the entries one by one.
+    manifest_path = identity.get("manifest") or os.path.join(
+        run_root, "data-inventory.json")
+    recorded = _read_site_manifest(profile, manifest_path)
+    if not isinstance(recorded.get("files"), list):
+        raise PlanError(
+            "data inventory manifest has no file list: %s" % manifest_path,
+            "anomaly")
+    digest = canonical_hash({"case_uid": case["case_uid"], "run_id": run_id,
+                             "action": "verify"}).split(":", 1)[1][:16]
+    staging = os.path.join(
+        staging_root, case_path_segment(layout, case) or case["case_uid"],
+        "op-" + digest)
+    fresh_manifest = os.path.join(staging, "data-verify-manifest.json")
+    envelope = {
+        "schema_version": 1,
+        "operation_id": "op-" + digest,
+        "plan_hash": canonical_hash({"kind": "entity-ledger.data.verify",
+                                     "case_uid": case["case_uid"],
+                                     "run_id": run_id}),
+        "step_index": 0,
+        "step_id": "data-verify",
+        "kind": "data.inventory.v1",
+        "site_id": site_id,
+        "receipt": os.path.join(staging, "receipts", "data-verify.json"),
+        "allowed_roots": [staging, run_root],
+        "request": {"run_root": run_root, "manifest": fresh_manifest},
+    }
+    _run_inventory(client, envelope)
+    fresh = _read_site_manifest(profile, fresh_manifest)
+    expected_entries = {item.get("path", ""): (item.get("sha256", ""),
+                                               item.get("bytes", 0))
+                        for item in recorded["files"]}
+    observed_entries = {item.get("path", ""): (item.get("sha256", ""),
+                                               item.get("bytes", 0))
+                        for item in fresh.get("files", [])}
+    # The recorded v1 inventory skipped its own manifest file; the fresh
+    # walk's manifest lives in staging, so the old run-root manifest shows
+    # up as a regular file — exclude it before comparing.
+    observed_entries.pop("data-inventory.json", None)
+    mismatches = []
+    for path in sorted(set(expected_entries) | set(observed_entries)):
+        if expected_entries.get(path) != observed_entries.get(path):
+            mismatches.append(path)
+    ok = not mismatches
+    result.update({
+        "ok": ok,
+        "integrity": "legacy-unknown",
+        "files": len(observed_entries),
+        "mismatches": mismatches[:20],
+        "detail": ("live tree matches the recorded v1 inventory" if ok else
+                   "%d file(s) differ from the recorded v1 inventory"
+                   % len(mismatches)),
+    })
+    return result
 
 
 def _compute_request(gpus, walltime, precision, gres=""):

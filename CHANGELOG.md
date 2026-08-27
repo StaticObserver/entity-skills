@@ -10,6 +10,62 @@ compatibility contracts and are not the product version.
 
 ## [Unreleased]
 
+## [0.7.3] - 2026-08-27
+
+Hash and verification optimization, work packages WP0/WP1 of
+`design/hash-verification-optimization-plan-2026-08-27.md`: the default data
+inventory no longer reads full file content, and the data identity now binds
+the inventory it was recorded from. WP2–WP5 (run/submission/build identity
+v2, TOML semantic digest, bundle manifest) remain planned for 0.8.0.
+
+### Added
+
+- Hash registry (`hash-registry.json`, repo root): every digest call site in
+  the production scripts is registered with purpose
+  (identity/evidence/transfer/observation), schema, scope, cost class, gate
+  and remediation; `tests/test_hash_registry.py` validates the registry and
+  gates new unregistered recursive content hashing.
+- Domain-separated digest helper `domain_digest(purpose, schema, payload)`
+  in `entity_ledger_common.py`, mirrored standalone in
+  `entity_ledger_executor.py`; the purpose/schema pair keeps identical
+  payloads in different roles from colliding.
+- `record data --integrity {metadata,strong}` (default `metadata`) and the
+  executor step kind `data.inventory.v2`: `metadata` records only relative
+  paths, types and sizes and reads no file content (it is NOT a content
+  checksum — a same-size content change does not produce a new revision);
+  `strong` hashes every file as an explicit opt-in and reports the planned
+  read volume as `bytes_planned_read`. The v2 manifest carries
+  schema/probe/integrity and a domain-separated `inventory_digest`.
+- Data revision identity v2: `data_id` derives from
+  `{run_id, integrity, inventory_digest}`, so re-recording unchanged data
+  reproduces the same id (idempotent refresh) while any change in the file
+  set or sizes books a NEW revision and advances `current.data_id` —
+  analyses bound to the old revision automatically show stale via the
+  existing parent-mismatch rule. This fixes the pre-0.7.3 defect where the
+  data_id was content-addressed from (case, run) only and kept its identity
+  across arbitrary data changes.
+- `entityctl data seal --data-id <revision>`: runs a strong inventory
+  site-side, requires the file set to still match the revision, and books a
+  strong data release identity that certifies the same bytes
+  (`current.data_id` stays on the revision, so analyses do not go stale);
+  a changed tree fails with zero writes, re-sealing an unchanged tree is
+  idempotent. `entityctl data verify --data-id <id>` re-checks any recorded
+  data identity against the live tree (read-only; `ok: false` and exit 2 on
+  drift; v1 identities are verified by re-hashing the recorded manifest's
+  files).
+- Performance baseline `design/hash-inventory-baseline-2026-08-27.md`: on a
+  synthetic 10 GiB run root the metadata inventory reads 0 content bytes and
+  runs ~580× faster than the old full-content walk (cost now scales with
+  file count, not total bytes).
+
+### Changed
+
+- Pre-0.7.3 (v1) data identities are never recomputed or rewritten; the
+  dashboard data cell shows their integrity as `legacy-unknown` and they
+  cannot be sealed (re-record them first). `ENTITY_LEDGER_DATA_IDENTITY=v1`
+  forces the legacy data-identity code path entirely (rollback switch; each
+  call writes exactly one identity version).
+
 ## [0.7.2] - 2026-08-27
 
 ### Fixed

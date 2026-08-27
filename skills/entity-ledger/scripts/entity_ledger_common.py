@@ -179,6 +179,27 @@ def sha256_file(path):
     return digest.hexdigest()
 
 
+# Digest purposes from the hash-verification plan (WP0): every new digest
+# declares exactly one.  Kept in sync with the standalone executor's copy
+# (entity_ledger_executor._DOMAIN_PURPOSES).
+DOMAIN_DIGEST_PURPOSES = {"identity", "evidence", "transfer", "observation"}
+
+
+def domain_digest(purpose, schema, payload):
+    """Domain-separated digest: "sha256:" + sha256 of the canonical JSON of
+    {"purpose", "schema", "payload"}.  The purpose/schema pair keeps digests
+    of identical payloads in different roles (identity vs evidence vs ...)
+    from ever colliding."""
+    if purpose not in DOMAIN_DIGEST_PURPOSES:
+        raise LedgerError(
+            "digest purpose must be one of %s (got %s)"
+            % (sorted(DOMAIN_DIGEST_PURPOSES), purpose))
+    canonical = json.dumps(
+        {"purpose": purpose, "schema": schema, "payload": payload},
+        sort_keys=True, separators=(",", ":"))
+    return "sha256:" + hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
 def site_file_sha256(profile, path):
     """Fingerprint a file on its Site, locally or over SSH.  Returns "" when
     the file is absent; raises LedgerError when the Site cannot be queried."""
