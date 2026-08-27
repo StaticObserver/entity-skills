@@ -1,6 +1,6 @@
 ---
 name: entity-ledger
-description: Maintain a deterministic record for the Entity plasma simulation project: environment, source versions, builds, the run ledger, and data status are all documented, so any session (a different machine, a different agent, a mid-run crash) can pick up where the last one left off. Use for cross-session or cross-machine simulation work, run submission and tracking, and results inventory. Bounded read-only questions and standalone PGen/build/analysis edits can go directly to the corresponding owner skill.
+description: "Maintain a deterministic record for the Entity plasma simulation project: environment, source versions, builds, the run ledger, and data status are all documented, so any session (a different machine, a different agent, a mid-run crash) can pick up where the last one left off. Use for cross-session or cross-machine simulation work, run submission and tracking, and results inventory. Bounded read-only questions and standalone PGen/build/analysis edits can go directly to the corresponding owner skill."
 ---
 
 # Entity Ledger
@@ -121,6 +121,8 @@ python3 scripts/entityctl.py render-run \
   # --walltime left empty (default) sets no time limit; the partition/QoS default applies
   # --gres left empty (default) uses the site policy's default_gres, else falls back to gpu:<N>;
   # a scheduler-less (direct) Site ignores gres
+  # the launch line follows the build's deps stack: non-MPI builds run bare, MPI builds
+  # use the site policy's mpi_launcher (default: mpirun -np <tasks>)
 python3 scripts/entityctl.py snapshot-source --project-root <project>
 
 # Record (probe evidence first, then write to the ledger)

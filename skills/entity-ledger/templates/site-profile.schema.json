@@ -100,7 +100,11 @@
           "description": "Slurm gres spec gpu[:type]:count (e.g. gpu:V100:1); used when render-run/record run-prepare pass no explicit --gres. Slurm backend only."
         },
         "default_cpus_per_gpu": {"type": "integer", "minimum": 1},
-        "max_cpu_per_gpu": {"type": "integer", "minimum": 1}
+        "max_cpu_per_gpu": {"type": "integer", "minimum": 1},
+        "mpi_launcher": {
+          "enum": ["srun", "mpirun", "mpiexec"],
+          "description": "Launcher for MPI builds (deps stack signature.mpi=true); defaults to mpirun. Non-MPI builds always render a bare invocation. srun is only valid on Slurm Sites."
+        }
       },
       "additionalProperties": true
     },

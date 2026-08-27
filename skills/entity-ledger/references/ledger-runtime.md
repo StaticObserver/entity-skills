@@ -97,6 +97,18 @@ corresponds to an sbatch script, `direct` to a self-contained `run.sh`.
 Caller-provided shell, commands, pre-commands, or script text are all
 rejected.
 
+The executable invocation inside the script is prefixed by
+`compute.launcher`, resolved by the planner from the build's deps stack:
+a stack whose signature has `mpi=false` (or no recorded stack, e.g. an
+explicit `--executable`) renders a bare invocation; `mpi=true` renders
+the Site policy's `mpi_launcher` (default `mpirun -np <tasks>`). `srun`
+is only ever rendered when the policy explicitly selects it — several
+MPI stacks (OpenMPI without PMIx) cannot be launched by srun, and
+wrapping a non-MPI binary in srun would spawn `--ntasks` independent
+duplicate processes. Run identities recorded before the launcher field
+existed keep their historical rendering at launch time (slurm: srun,
+direct: bare) so in-flight runs are unaffected.
+
 The launch effect identity varies by backend. Slurm records
 `{"scheduler": "slurm", "job_id": ..., "comment": ...}`; the direct
 backend (Sites without a scheduler) records a detached process:
@@ -138,7 +150,9 @@ without a scheduler). A policy may provide `default_cpus_per_gpu`,
 `default_partition`, `default_qos`, `default_submit_user`,
 `default_gres` (a Slurm gres spec `gpu[:type]:count`, e.g.
 `gpu:V100:1`, used to pin the GPU type when a partition has several), and
-`max_cpu_per_gpu`. gres resolution order for a run: explicit `--gres` >
+`max_cpu_per_gpu`, and `mpi_launcher` (`srun`/`mpirun`/`mpiexec`, MPI
+builds only; default `mpirun`, see the launcher rule above). gres
+resolution order for a run: explicit `--gres` >
 policy `default_gres` > generic `gpu:<N>`; the resolved value is recorded
 in the run identity's compute. The direct backend ignores
 `default_partition` and `default_qos` (they normalize to empty strings),

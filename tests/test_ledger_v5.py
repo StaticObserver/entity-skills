@@ -297,6 +297,99 @@ else:
         self.assertIn("srun %s -input input.toml" % self.executable, script)
         self.assertNotIn("srun %s input.toml" % self.executable, script)
 
+    def _env_run_spec(self, walltime="00:10:00", env_sh=None):
+        spec = {
+            "executable": self.executable, "input_name": "input.toml",
+            "compute": {"nodes": 1, "tasks": 1, "gpus": 1, "cpus_per_task": 2,
+                        "walltime": walltime, "partition": "test", "qos": "",
+                        "submit_user": "tester", "precision": "double",
+                        "gres": "gpu:1"},
+        }
+        if env_sh is not None:
+            spec["env_sh"] = env_sh
+        return spec
+
+    def test_sbatch_sources_env_sh_before_srun(self):
+        from entity_ledger_executor import render_sbatch
+        script = render_sbatch(self._env_run_spec(env_sh="/deps/stack/env.sh"))
+        lines = script.splitlines()
+        self.assertIn("source /deps/stack/env.sh", lines)
+        self.assertLess(lines.index("set -eu"),
+                        lines.index("source /deps/stack/env.sh"))
+        self.assertLess(
+            lines.index("source /deps/stack/env.sh"),
+            lines.index("srun %s -input input.toml" % self.executable))
+
+    def test_sbatch_without_env_sh_has_no_source_line(self):
+        from entity_ledger_executor import render_sbatch
+        for spec in (self._env_run_spec(), self._env_run_spec(env_sh="")):
+            self.assertNotIn("source", render_sbatch(spec))
+
+    def test_run_spec_rejects_a_relative_env_sh(self):
+        from entity_ledger_executor import ExecutorError, render_sbatch
+        with self.assertRaises(ExecutorError) as caught:
+            render_sbatch(self._env_run_spec(env_sh="deps/env.sh"))
+        self.assertIn("env_sh", str(caught.exception))
+
+    def test_sbatch_mpirun_launcher_carries_rank_count(self):
+        from entity_ledger_executor import render_sbatch
+        spec = self._env_run_spec()
+        spec["compute"]["launcher"] = "mpirun"
+        spec["compute"]["tasks"] = 4
+        script = render_sbatch(spec)
+        self.assertNotIn("srun", script)
+        self.assertIn("mpirun -np 4 %s -input input.toml" % self.executable,
+                      script)
+
+    def test_sbatch_empty_launcher_runs_bare(self):
+        from entity_ledger_executor import render_sbatch
+        spec = self._env_run_spec()
+        spec["compute"]["launcher"] = ""
+        script = render_sbatch(spec)
+        self.assertNotIn("srun", script)
+        self.assertIn("\n%s -input input.toml" % self.executable, script)
+
+    def test_run_spec_rejects_an_unknown_launcher(self):
+        from entity_ledger_executor import ExecutorError, render_sbatch
+        spec = self._env_run_spec()
+        spec["compute"]["launcher"] = "ibrun"
+        with self.assertRaises(ExecutorError) as caught:
+            render_sbatch(spec)
+        self.assertIn("launcher", str(caught.exception))
+
+    def test_direct_run_spec_rejects_srun_launcher(self):
+        from entity_ledger_executor import ExecutorError, RENDER_BACKENDS
+        spec = self._env_run_spec()
+        spec["compute"]["gres"] = ""
+        spec["compute"]["launcher"] = "srun"
+        with self.assertRaises(ExecutorError) as caught:
+            RENDER_BACKENDS["direct"](spec)
+        self.assertIn("srun", str(caught.exception))
+
+    def test_direct_run_script_mpirun_launcher(self):
+        from entity_ledger_executor import RENDER_BACKENDS
+        spec = self._env_run_spec()
+        spec["compute"]["gres"] = ""
+        spec["compute"]["launcher"] = "mpiexec"
+        spec["compute"]["tasks"] = 2
+        script = RENDER_BACKENDS["direct"](spec)
+        self.assertIn("mpiexec -np 2 %s -input input.toml" % self.executable,
+                      script)
+
+    def test_direct_run_script_sources_env_sh(self):
+        from entity_ledger_executor import RENDER_BACKENDS
+        for walltime in ("", "00:10:00"):
+            spec = self._env_run_spec(walltime=walltime,
+                                      env_sh="/deps/stack/env.sh")
+            spec["compute"]["partition"] = ""
+            spec["compute"]["gres"] = ""
+            lines = RENDER_BACKENDS["direct"](spec).splitlines()
+            self.assertIn("source /deps/stack/env.sh", lines)
+            self.assertLess(lines.index("set -eu"),
+                            lines.index("source /deps/stack/env.sh"))
+            self.assertLess(lines.index("source /deps/stack/env.sh"),
+                            lines.index("status=0"))
+
     def _launch_intent(self, comment_hash="0" * 16):
         """Fabricate a launch intent receipt as if the controller crashed
         after sbatch accepted the job but before the effect receipt landed."""

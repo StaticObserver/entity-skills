@@ -158,6 +158,9 @@ def _current_build_executable(case, profile, explicit):
     return candidates[0], current_id
 
 
+LAUNCHERS = {"", "srun", "mpirun", "mpiexec"}
+
+
 def _slurm_site_policy(profile, compute):
     policy = profile.get("policy", {})
     normalized = dict(compute)
@@ -166,6 +169,15 @@ def _slurm_site_policy(profile, compute):
     normalized.setdefault("cpus_per_task", int(policy.get("default_cpus_per_gpu", 1)))
     normalized.setdefault("partition", policy.get("default_partition", ""))
     normalized.setdefault("qos", policy.get("default_qos", ""))
+    if normalized.get("launcher", "") not in LAUNCHERS:
+        raise PlanError(
+            "compute.launcher must be one of %s (got %r)"
+            % (", ".join(sorted(LAUNCHERS)), normalized.get("launcher")),
+            "needs_decision",
+            [{"field": "policy.mpi_launcher",
+              "question": "configure a valid mpi_launcher (srun, mpirun or "
+                          "mpiexec) in the Site policy"}],
+        )
     if "submit_user" not in normalized:
         if policy.get("default_submit_user"):
             normalized["submit_user"] = policy["default_submit_user"]
@@ -224,8 +236,20 @@ def _direct_site_policy(profile, compute):
     is Slurm-only: the direct backend ignores it and normalizes it to ""."""
     policy = profile.get("policy", {})
     normalized = dict(compute)
+    if normalized.get("launcher", "") not in LAUNCHERS - {"srun"}:
+        raise PlanError(
+            "compute.launcher on a scheduler-less Site must be mpirun, "
+            "mpiexec or empty (got %r)" % normalized.get("launcher"),
+            "needs_decision",
+            [{"field": "policy.mpi_launcher",
+              "question": "srun needs a Slurm allocation — configure mpirun "
+                          "or mpiexec as the Site mpi_launcher"}],
+        )
     normalized.setdefault("nodes", 1)
-    normalized.setdefault("tasks", 1)
+    # MPI runs need one rank per GPU; a bare (non-MPI) run is a single
+    # process no matter how many GPUs were requested.
+    mpi = normalized.get("launcher") in {"mpirun", "mpiexec"}
+    normalized.setdefault("tasks", int(normalized["gpus"]) if mpi else 1)
     normalized.setdefault("cpus_per_task", int(policy.get("default_cpus_per_gpu", 1)))
     normalized.setdefault("partition", "")
     normalized.setdefault("qos", "")

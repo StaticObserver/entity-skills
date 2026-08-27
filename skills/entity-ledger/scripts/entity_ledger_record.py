@@ -689,6 +689,9 @@ def _derive_run(store, project_root, input_value, site_id, compute, executable,
     source_fingerprint, unused_ignored = _source_identity(authority["path"])
     source_id = "source-" + source_fingerprint["snapshot_id"][:16]
     executable, build_id = _current_build_executable(case, profile, executable)
+    stack = _build_deps_stack(case, profile, build_id)
+    env_sh = stack.get("env_sh", "") or ""
+    compute["launcher"] = _mpi_launcher(profile, stack)
     normalized = _site_policy(profile, compute)
     input_sha256 = sha256_file(input_path)
     paths = derive_run_paths(
@@ -703,14 +706,47 @@ def _derive_run(store, project_root, input_value, site_id, compute, executable,
         "scheduler_kind": scheduler_kind, "input_path": input_path,
         "input_sha256": input_sha256, "source_id": source_id,
         "source_fingerprint": source_fingerprint,
-        "executable": executable, "build_id": build_id,
+        "executable": executable, "build_id": build_id, "env_sh": env_sh,
         "compute": normalized, "paths": paths, "plan_hash": plan_hash,
     }
 
 
+def _build_deps_stack(case, profile, build_id):
+    """Deps stack record the current build was verified against, or {} when
+    the run uses an explicit executable (no build identity), the build
+    predates stack records, or the stack is not in the Site deps registry.
+    The rendered submit script sources the stack's env.sh so the binary
+    finds its shared libraries (libcudart, libstdc++), and resolves its MPI
+    launcher from the stack signature's mpi flag — without it an MPI build
+    would render a bare single-rank invocation (or the pre-fix unconditional
+    srun, which also launched duplicate processes for non-MPI builds)."""
+    if not build_id:
+        return {}
+    stack_id = ""
+    for item in case.get("identities", {}).get("build", {}).get("items", []):
+        if item.get("id") == build_id or item.get("identity_id") == build_id:
+            stack_id = item.get("stack_id", "")
+            break
+    if not stack_id:
+        return {}
+    for stack in profile.get("deps") or []:
+        if stack.get("stack_id") == stack_id:
+            return stack
+    return {}
+
+
+def _mpi_launcher(profile, stack):
+    """Launch prefix for the submit script: "" (bare) for non-MPI builds;
+    for MPI builds the Site policy's mpi_launcher wins, otherwise mpirun —
+    srun cannot interop with MPI stacks built without PMIx support."""
+    if not stack or not stack.get("signature", {}).get("mpi", False):
+        return ""
+    return str(profile.get("policy", {}).get("mpi_launcher") or "mpirun")
+
+
 def _run_spec(derived):
     return {"executable": derived["executable"], "compute": derived["compute"],
-            "input_name": "input.toml"}
+            "input_name": "input.toml", "env_sh": derived["env_sh"]}
 
 
 def render_run(store, project_root, input_value, site_id, gpus, walltime,
@@ -741,6 +777,7 @@ def render_run(store, project_root, input_value, site_id, gpus, walltime,
         "script": script,
         "compute": derived["compute"],
         "executable": derived["executable"],
+        "env_sh": derived["env_sh"],
         "build_id": derived["build_id"],
         "input": derived["input_path"],
     }
@@ -884,6 +921,7 @@ def record_run_prepare(store, project_root, input_value, site_id, gpus,
         "input_sha256": derived["input_sha256"],
         "compute": derived["compute"],
         "executable": derived["executable"],
+        "env_sh": derived["env_sh"],
         "operation_id": paths["operation_id"],
         "plan_hash": derived["plan_hash"],
         "staging_root": paths["staging_root"],
@@ -1158,7 +1196,8 @@ def record_run_launch(store, project_root, run_id, adopt_job, adopt_pid, actor,
                     "scheduler": scheduler_kind,
                     "run_spec": {"executable": executable,
                                  "compute": identity.get("compute", {}),
-                                 "input_name": "input.toml"},
+                                 "input_name": "input.toml",
+                                 "env_sh": identity.get("env_sh", "")},
                     "job_name": "entity-%s" % identity["operation_id"],
                     "staging_root": identity["staging_root"],
                 },

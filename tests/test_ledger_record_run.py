@@ -255,7 +255,9 @@ else:
         self.assertIn("#SBATCH --gres=gpu:1", script)
         self.assertIn("#SBATCH --cpus-per-task=2", script)
         self.assertNotIn("#SBATCH --time", script)
-        self.assertIn("srun %s -input input.toml" % self.executable, script)
+        # explicit executable, no recorded build stack → non-MPI bare run
+        self.assertNotIn("srun", script)
+        self.assertIn("%s -input input.toml" % self.executable, script)
         self.assertEqual(first["compute"]["partition"], "test")
         self.assertEqual(first["compute"]["submit_user"], "tester")
         self.assertTrue(first["submit_script"].endswith("run.sbatch"))
@@ -468,8 +470,168 @@ else:
         self.assertEqual(code, 0, rendered)
         self.assertEqual(rendered["executable"], self.executable)
         self.assertEqual(rendered["build_id"], payload["build_id"])
+        # checkpoint without selected deps → no stack → non-MPI bare run
+        self.assertNotIn("srun", rendered["script"])
+        self.assertIn("%s -input input.toml" % self.executable,
+                      rendered["script"])
+
+    def _stacked_checkpoint(self, mpi=False, site="local-slurm"):
+        """A checkpoint with selected deps so record build derives the same
+        stack_id that site deps-add would register."""
+        from entity_ledger_workspace import derive_stack_id, stack_signature
+        selected = {"compiler": {"name": "gcc", "version": "12.3.0",
+                                 "prefix": "/opt/gcc", "provider": "system"},
+                    "kokkos": {"name": "kokkos", "version": "5.1.0",
+                               "prefix": "/deps/kokkos", "provider": "module"}}
+        if mpi:
+            selected["mpi"] = {"name": "openmpi", "version": "5.0.5",
+                               "prefix": "/deps/openmpi", "provider": "module"}
+        embedded = {
+            "entity": {"site_id": site, "dependency_profile": "modern"},
+            "environment": {"backend": "cpu", "mpi": mpi,
+                            "gpu_aware_mpi": False, "output": True},
+            "compile": {"cxx_standard": "20"},
+        }
+        signature = stack_signature(
+            embedded["environment"], embedded["entity"], embedded["compile"])
+        checkpoint = os.path.join(self.temp, "entity-deps-stacked.local.json")
+        with open(checkpoint, "w") as handle:
+            json.dump({"schema_version": 2,
+                       "requirements": {"path": "", "embedded": embedded},
+                       "selected": selected,
+                       "compatibility": {"status": "pass"},
+                       "decisions": {"parameters": {
+                           "digest": "sha256:" + "1" * 64,
+                           "confirmed_by": "tester"}}}, handle)
+        return checkpoint, derive_stack_id(selected, signature)
+
+    def test_render_run_sources_build_stack_env_sh(self):
+        # regression: a run whose build was verified against a registered
+        # deps stack must source that stack's env.sh, otherwise the binary
+        # dies at startup missing shared libraries (libcudart, libstdc++)
+        checkpoint, stack_id = self._stacked_checkpoint()
+        self._prepare("local-slurm", self.executable)
+        code, payload = self.cli(
+            "record", "build", "--project-root", self.project,
+            "--site", "local-slurm", "--checkpoint", checkpoint,
+            "--executable", self.executable)
+        self.assertEqual(code, 0, payload)
+        env_sh = "/deps/%s/env.sh" % stack_id
+        profile = self.store.get_site("local-slurm")
+        profile["deps"] = [{"stack_id": stack_id, "env_sh": env_sh}]
+        self.store.upsert_site(profile)
+        code, rendered = self.cli(
+            "render-run", "--project-root", self.project,
+            "--toml", "input.toml", "--site", "local-slurm")
+        self.assertEqual(code, 0, rendered)
+        self.assertEqual(rendered["env_sh"], env_sh)
+        lines = rendered["script"].splitlines()
+        # the stack entry carries no mpi signature → non-MPI bare run
+        self.assertLess(lines.index("source %s" % env_sh),
+                        lines.index("%s -input input.toml"
+                                    % self.executable))
+        # prepare persists env_sh into the run identity so the launch-time
+        # preflight re-render produces the same script
+        code, prepared = self.cli(
+            "record", "run-prepare", "--project-root", self.project,
+            "--toml", "input.toml", "--site", "local-slurm")
+        self.assertEqual(code, 0, prepared)
+        with open(os.path.join(prepared["run_root"], "run.sbatch")) as handle:
+            self.assertEqual(handle.read(), rendered["script"])
+        identity = self._run_identity()
+        self.assertEqual(identity["env_sh"], env_sh)
+        code, launched = self._launch()
+        self.assertEqual(code, 0, launched)
+        self.assertEqual(launched["status"], "submitted")
+
+    def test_render_run_without_registered_stack_has_no_source_line(self):
+        # a build whose stack is not in the site deps registry keeps the
+        # pre-fix rendering (no source line) instead of failing
+        checkpoint, unused_stack_id = self._stacked_checkpoint()
+        self._prepare("local-slurm", self.executable)
+        code, payload = self.cli(
+            "record", "build", "--project-root", self.project,
+            "--site", "local-slurm", "--checkpoint", checkpoint,
+            "--executable", self.executable)
+        self.assertEqual(code, 0, payload)
+        code, rendered = self.cli(
+            "render-run", "--project-root", self.project,
+            "--toml", "input.toml", "--site", "local-slurm")
+        self.assertEqual(code, 0, rendered)
+        self.assertEqual(rendered["env_sh"], "")
+        self.assertNotIn("source", rendered["script"])
+
+    def _record_mpi_build(self, site="local-slurm", launcher_policy=""):
+        """Prepare a case, record an MPI build against it, and register the
+        deps stack with signature.mpi=True so run rendering sees the MPI
+        toolchain.  Returns after the deps registry is in place."""
+        checkpoint, stack_id = self._stacked_checkpoint(mpi=True, site=site)
+        self._prepare(site, self.executable)
+        code, payload = self.cli(
+            "record", "build", "--project-root", self.project,
+            "--site", site, "--checkpoint", checkpoint,
+            "--executable", self.executable)
+        self.assertEqual(code, 0, payload)
+        profile = self.store.get_site(site)
+        profile["deps"] = [{"stack_id": stack_id, "env_sh": "",
+                            "signature": {"mpi": True}}]
+        if launcher_policy:
+            profile.setdefault("policy", {})["mpi_launcher"] = launcher_policy
+        self.store.upsert_site(profile)
+
+    def test_render_run_mpi_build_defaults_to_mpirun(self):
+        # an MPI build must not render srun: stacks without PMI/PMIx interop
+        # cannot be launched by it; the default launcher is mpirun -np tasks
+        self._record_mpi_build()
+        code, rendered = self.cli(
+            "render-run", "--project-root", self.project,
+            "--toml", "input.toml", "--site", "local-slurm")
+        self.assertEqual(code, 0, rendered)
+        self.assertEqual(rendered["compute"]["launcher"], "mpirun")
+        self.assertNotIn("srun", rendered["script"])
+        self.assertIn("mpirun -np 1 %s -input input.toml" % self.executable,
+                      rendered["script"])
+        # the launcher flows into the prepared script and the run identity
+        code, prepared = self.cli(
+            "record", "run-prepare", "--project-root", self.project,
+            "--toml", "input.toml", "--site", "local-slurm")
+        self.assertEqual(code, 0, prepared)
+        with open(os.path.join(prepared["run_root"], "run.sbatch")) as handle:
+            self.assertEqual(handle.read(), rendered["script"])
+        self.assertEqual(self._run_identity()["compute"]["launcher"], "mpirun")
+
+    def test_render_run_mpi_launcher_policy_override(self):
+        # sites where srun interops with the MPI stack pin it via policy
+        self._record_mpi_build(launcher_policy="srun")
+        code, rendered = self.cli(
+            "render-run", "--project-root", self.project,
+            "--toml", "input.toml", "--site", "local-slurm")
+        self.assertEqual(code, 0, rendered)
+        self.assertEqual(rendered["compute"]["launcher"], "srun")
         self.assertIn("srun %s -input input.toml" % self.executable,
                       rendered["script"])
+
+    def test_render_run_mpi_launcher_policy_rejects_garbage(self):
+        self._record_mpi_build(launcher_policy="ibrun")
+        code, payload = self.cli(
+            "render-run", "--project-root", self.project,
+            "--toml", "input.toml", "--site", "local-slurm")
+        self.assertEqual(code, 2)
+        self.assertIn("launcher", payload["error"])
+
+    def test_direct_backend_mpi_build_uses_mpirun(self):
+        self._record_mpi_build(site="local-direct")
+        code, rendered = self.cli(
+            "render-run", "--project-root", self.project,
+            "--toml", "input.toml", "--site", "local-direct",
+            "--gpus", "2")
+        self.assertEqual(code, 0, rendered)
+        self.assertEqual(rendered["compute"]["launcher"], "mpirun")
+        # MPI runs on a scheduler-less Site get one rank per GPU
+        self.assertEqual(rendered["compute"]["tasks"], 2)
+        self.assertIn("mpirun -np 2 %s -input input.toml" % self.executable,
+                      rendered["script"])
+        self.assertNotIn("srun", rendered["script"])
 
     def test_run_prepare_requires_confirmation(self):
         raw = os.path.join(self.project, "raw.toml")
