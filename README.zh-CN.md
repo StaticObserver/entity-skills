@@ -12,6 +12,8 @@ Source + PGen → Build → Run
 
 它使用 JSON 和普通文件，不使用 SQLite 或内容 Hash。参见 `vnext/README.md` 和
 `design/minimal-entity-workspace-architecture-2026-08-28.md`。
+对应的 Agent 入口位于 `vnext/skills/`，以 `entity-workspace` 取代
+`entity-ledger`。下文旧 `skills/` 树仅用于本分支并行迁移。
 
 `skills/entity-ledger/SKILL.md` 是模拟项目的确定性记录入口。Ledger 把
 公共模型收敛为 `Workspace → Project → Case → Identity → Evidence`：Workspace

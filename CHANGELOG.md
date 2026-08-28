@@ -16,6 +16,9 @@ compatibility contracts and are not the product version.
   `Source + PGen → Build → Run`. It stores relationships in JSON, nests Data
   and Attempts under Run, supports direct and Slurm launch scripts with
   explicit MPI launchers, and includes a read-only legacy importer.
+- Matching vNext Agent skills: `entity-workspace`, simplified
+  `entity-env-build`, four-object-aware `entity-pgen`, and Run/Data-aware
+  `entity-nt2py`. The vNext package does not expose `entity-ledger`.
 
 ## [0.7.3] - 2026-08-27
 

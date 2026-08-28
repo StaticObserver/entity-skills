@@ -13,6 +13,9 @@ Source + PGen → Build → Run
 It uses JSON and ordinary files instead of SQLite or content hashes. See
 `vnext/README.md` and
 `design/minimal-entity-workspace-architecture-2026-08-28.md`.
+The matching Agent entry points are under `vnext/skills/`; they replace
+`entity-ledger` with `entity-workspace`. The older `skills/` tree below is
+retained only for side-by-side migration on this branch.
 
 A skills package that helps agents run astrophysical simulations with
 [Entity](https://github.com/entity-toolkit/entity).

@@ -58,3 +58,14 @@
 - 使用 fake compiler、fake Entity、fake Slurm；未在真实 HPC 提交作业。
 - SSH transport 已实现，但未连接真实远程站点。
 - 旧版自动迁移只转换能满足新四对象合同的 Source；PGen、Build、Run、Data 和 Case 的不足信息进入 `migration-report.json`，由人映射。
+
+## 技能层切换验收
+
+- Kimi Code `0.39.0` 仅加载 `vnext/skills/`，正确发现
+  `entity-workspace`、`entity-env-build`、`entity-pgen`、`entity-nt2py`，未发现
+  `entity-ledger`。
+- 第一轮把“同一 TOML 调整 Slurm 资源”误解为 TOML 改动；据此明确 Run 身份只由
+  Build 与 TOML 决定，资源和环境由 Attempt 记录。
+- 第二轮正确判断：修改 PGen 创建新 PGen、Build 和 Run；保持新 Run 的 Build/TOML
+  不变而调整节点数，只创建新 Attempt。
+- 技能测试只做只读判断，未连接站点、编译、提交或修改 Workspace。

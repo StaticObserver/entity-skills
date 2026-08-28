@@ -32,6 +32,19 @@ Case facts that cannot satisfy the four-object model are retained in
 
 Use `vnext/schemas/examples/` as the field contract. The complete architecture and development plan are under `design/`.
 
+## Skills
+
+`vnext/skills/` is the matching Agent interface:
+
+- `entity-workspace`: four-object facts, cross-session work, Site and Run operations;
+- `entity-env-build`: deps and Build work at one explicit Site;
+- `entity-pgen`: PGen implementation and TOML-facing physics contract;
+- `entity-nt2py`: read-only Data access and analysis artifacts.
+
+`entity-ledger` is intentionally absent. The workspace skill exposes the
+file-first runtime through `entity-workspace/scripts/entity`; specialist skills
+do not introduce separate state or mandatory workflows.
+
 ## Test
 
 ```bash

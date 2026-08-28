@@ -1,0 +1,1 @@
+../../../../skills/entity-nt2py/scripts/inspect_nt2_data.py
