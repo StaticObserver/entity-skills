@@ -10,6 +10,13 @@ compatibility contracts and are not the product version.
 
 ## [Unreleased]
 
+### Added
+
+- Experimental `vnext/` file-first implementation centered on four objects:
+  `Source + PGen → Build → Run`. It stores relationships in JSON, nests Data
+  and Attempts under Run, supports direct and Slurm launch scripts with
+  explicit MPI launchers, and includes a read-only legacy importer.
+
 ## [0.7.3] - 2026-08-27
 
 Hash and verification optimization, work packages WP0/WP1 of

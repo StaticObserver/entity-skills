@@ -2,6 +2,18 @@
 
 > For the Chinese version of this README, see [README.zh-CN.md](README.zh-CN.md).
 
+## vNext file-first implementation
+
+This branch also contains the new four-object architecture under `vnext/`:
+
+```text
+Source + PGen → Build → Run
+```
+
+It uses JSON and ordinary files instead of SQLite or content hashes. See
+`vnext/README.md` and
+`design/minimal-entity-workspace-architecture-2026-08-28.md`.
+
 A skills package that helps agents run astrophysical simulations with
 [Entity](https://github.com/entity-toolkit/entity).
 

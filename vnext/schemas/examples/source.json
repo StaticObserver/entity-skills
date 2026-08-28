@@ -1,0 +1,7 @@
+{
+  "checkout": "checkout",
+  "git_commit": "0123456789abcdef",
+  "id": "entity-main-20260828",
+  "repository": "https://github.com/entity-toolkit/entity.git",
+  "schema_version": 1
+}

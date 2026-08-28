@@ -1,0 +1,19 @@
+{
+  "build": "build-20260828-a100",
+  "environment": {
+    "OMP_NUM_THREADS": "8"
+  },
+  "id": "run-sigma01-001",
+  "resources": {
+    "account": "physics",
+    "cpus_per_task": 8,
+    "gpus_per_node": 4,
+    "nodes": 2,
+    "partition": "gpu",
+    "tasks": 8,
+    "tasks_per_node": 4,
+    "walltime": "12:00:00"
+  },
+  "schema_version": 1,
+  "toml": "input.toml"
+}

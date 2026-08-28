@@ -1,0 +1,17 @@
+{
+  "deps": "cuda12.4-gcc12-openmpi",
+  "id": "build-20260828-a100",
+  "options": {
+    "backend": "cuda",
+    "gpu_arch": "sm80",
+    "precision": "single"
+  },
+  "pgen": "decay-turb-v3",
+  "runtime": {
+    "gpu": true,
+    "mpi": true
+  },
+  "schema_version": 1,
+  "site": "astro",
+  "source": "entity-main-20260828"
+}

@@ -2,6 +2,17 @@
 
 一套帮助 Agent 使用 [Entity](https://github.com/entity-toolkit/entity) 完成天体物理模拟的 skills package。
 
+## vNext 文件式实现
+
+本分支在 `vnext/` 中实现新的四对象架构：
+
+```text
+Source + PGen → Build → Run
+```
+
+它使用 JSON 和普通文件，不使用 SQLite 或内容 Hash。参见 `vnext/README.md` 和
+`design/minimal-entity-workspace-architecture-2026-08-28.md`。
+
 `skills/entity-ledger/SKILL.md` 是模拟项目的确定性记录入口。Ledger 把
 公共模型收敛为 `Workspace → Project → Case → Identity → Evidence`：Workspace
 是唯一工作目录（projects/ 项目树、sites/ site 档案、.ledger/ 控制器状态，

@@ -1,0 +1,31 @@
+{
+  "environment": {
+    "script": "site-env.sh"
+  },
+  "id": "astro",
+  "mpi": {
+    "launcher": "mpirun",
+    "template": [
+      "mpirun",
+      "-np",
+      "{tasks}"
+    ]
+  },
+  "root": "/home/user/entity-compute",
+  "scheduler": {
+    "accounting": "sacct",
+    "defaults": {
+      "account": "physics",
+      "partition": "gpu",
+      "walltime": "24:00:00"
+    },
+    "kind": "slurm",
+    "query": "squeue",
+    "submit": "sbatch"
+  },
+  "schema_version": 1,
+  "transport": {
+    "alias": "astro",
+    "kind": "ssh"
+  }
+}

@@ -1,0 +1,22 @@
+{
+  "environment": {
+    "script": "site-env.sh"
+  },
+  "id": "local",
+  "mpi": {
+    "launcher": "mpirun",
+    "template": [
+      "mpirun",
+      "-np",
+      "{tasks}"
+    ]
+  },
+  "root": "/absolute/entity-compute",
+  "scheduler": {
+    "kind": "none"
+  },
+  "schema_version": 1,
+  "transport": {
+    "kind": "local"
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "backend": "cuda",
+  "compiler": {
+    "cxx": "/usr/bin/g++",
+    "version": "12.3"
+  },
+  "id": "cuda12.4-gcc12-openmpi",
+  "kind": "build",
+  "mpi": true,
+  "schema_version": 1,
+  "site": "astro",
+  "status": "ready"
+}
