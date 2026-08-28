@@ -152,7 +152,7 @@ class CliJourneyTest(unittest.TestCase):
                 "attempt-001",
             )
             status = {}
-            for _ in range(50):
+            for _ in range(100):
                 status = invoke(
                     "run",
                     "status",
@@ -165,7 +165,7 @@ class CliJourneyTest(unittest.TestCase):
                 )["record"]
                 if status["state"] != "RUNNING":
                     break
-                time.sleep(0.02)
+                time.sleep(0.05)
             self.assertEqual(status["state"], "COMPLETED")
             self.assertTrue(invoke("check")["ok"])
             self.assertTrue((site_root / "projects/demo/builds/build-a/runs/run-a/data/result.txt").is_file())

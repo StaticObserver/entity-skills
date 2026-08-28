@@ -11,7 +11,7 @@ from entity.errors import EntityError
 from entity.objects import add_build, add_pgen, add_run, add_source, load_build, load_pgen, load_source
 from entity.paths import Workspace, init_project
 from entity.records import load_json, require_id, write_json
-from entity.site import add_site, load_site
+from entity.site import add_site, init_site, load_site
 
 from .support import Fixture
 
@@ -154,6 +154,12 @@ class CoreTest(unittest.TestCase):
             self.assertNotIn("password", json.dumps(site).lower())
         finally:
             fixture.close()
+
+    def test_site_init_explains_registration_order(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            workspace = Workspace.init(Path(temp) / "workspace", "workspace-a")
+            with self.assertRaisesRegex(EntityError, "site add --config"):
+                init_site(workspace, "missing-site")
 
 
 if __name__ == "__main__":

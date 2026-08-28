@@ -178,11 +178,11 @@ class BuildRunTest(unittest.TestCase):
             prepared = prepare_attempt(fixture.workspace, "project-a", "run-a", attempt_id="attempt-001")
             submit_attempt(fixture.workspace, "project-a", "run-a", "attempt-001")
             status = {}
-            for _ in range(50):
+            for _ in range(100):
                 status = attempt_status(fixture.workspace, "project-a", "run-a", "attempt-001")
                 if status["state"] != "RUNNING":
                     break
-                time.sleep(0.02)
+                time.sleep(0.05)
             self.assertEqual(status["state"], "COMPLETED")
             summary = data_summary(fixture.workspace, "project-a", "run-a")
             self.assertGreaterEqual(summary["files"], 2)

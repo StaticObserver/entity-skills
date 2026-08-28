@@ -76,7 +76,8 @@ PGen ───┘
         │       └── runs/
         │           └── <run-id>/
         │               ├── run.json
-        │               └── input.toml
+        │               ├── input.toml
+        │               └── analysis/       # 单 Run analysis.json
         ├── scripts/
         └── analysis/
 ```
@@ -172,7 +173,7 @@ Workspace JSON 记录对象关系和用户选择。
         └── analysis/
 ```
 
-Site JSON 和实际文件记录执行现场。
+Site JSON 和实际文件记录执行现场。Analysis 的关系 JSON 在 Workspace；大型分析产物可以放在 Site 的 `analysis/`。
 
 ### Site 配置
 

@@ -122,6 +122,14 @@ def check_workspace(workspace: Workspace) -> dict[str, Any]:
                         result = site.read_json(result_file)
                         if result.get("build") != build_id:
                             _issue(issues, "build_result_conflict", result_file, "result references another Build")
+                        executable = str(result.get("executable") or "")
+                        if executable and not site.is_file(result_file.parent / executable):
+                            _issue(
+                                issues,
+                                "build_executable_missing",
+                                result_file.parent / executable,
+                                "Build result executable does not exist",
+                            )
                 except EntityError as exc:
                     _issue(issues, "site_unreachable", workspace.site_file(site_id), str(exc), "warning")
                     site = None

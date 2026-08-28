@@ -35,7 +35,12 @@ def add_source(
         raise EntityError("source requires repository and git commit", code="invalid_record")
     root = workspace.source_dir(project_id, source_id)
     if root.exists():
-        raise EntityError(f"source already exists: {source_id}", code="already_exists")
+        if (root / "source.json").is_file():
+            raise EntityError(f"source already exists: {source_id}", code="already_exists")
+        raise EntityError(
+            f"partial Source directory exists without source.json: {root}; restore the JSON or move the directory before retrying",
+            code="partial_record",
+        )
     root.mkdir(parents=True)
     checkout_name = "checkout"
     if checkout:

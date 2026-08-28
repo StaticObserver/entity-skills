@@ -1,0 +1,41 @@
+{
+  "cases": [
+    {
+      "case_id": "legacy-case",
+      "identities": {
+        "build": {
+          "items": [
+            {
+              "build_id": "legacy-build"
+            }
+          ]
+        },
+        "run": {
+          "items": [
+            {
+              "run_id": "legacy-run"
+            }
+          ]
+        },
+        "source": {
+          "items": [
+            {
+              "git_commit": "0123456789abcdef",
+              "repository": "https://github.com/entity-toolkit/entity.git",
+              "source_id": "legacy-source"
+            }
+          ]
+        }
+      },
+      "project_uid": "legacy-project-uid"
+    }
+  ],
+  "projects": [
+    {
+      "project_uid": "legacy-project-uid",
+      "slug": "legacy-project"
+    }
+  ],
+  "schema_version": 3,
+  "sites": []
+}

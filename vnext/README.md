@@ -17,6 +17,19 @@ export ENTITY_WORKSPACE=/absolute/workspace
 vnext/bin/entity project init --project demo
 ```
 
+Register a Site before initializing its directory tree:
+
+```bash
+vnext/bin/entity site add --config /absolute/site.json
+vnext/bin/entity site init --site <site-id>
+```
+
+Legacy migration accepts the old Ledger export shape shown in
+`vnext/schemas/examples/legacy-export.json`. Source records with a repository
+and Git commit are imported automatically. Old PGen, Build, Run, Data, and
+Case facts that cannot satisfy the four-object model are retained in
+`migration-report.json` for manual mapping.
+
 Use `vnext/schemas/examples/` as the field contract. The complete architecture and development plan are under `design/`.
 
 ## Test

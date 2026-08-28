@@ -185,6 +185,11 @@ class SiteOps:
 
 
 def init_site(workspace: Workspace, site_id: str) -> dict[str, Any]:
+    if not workspace.site_file(site_id).is_file():
+        raise EntityError(
+            f"site is not registered: {site_id}; run 'entity site add --config <site.json>' first",
+            code="site_not_registered",
+        )
     config = load_site(workspace, site_id)
     site = SiteOps(config)
     roots = [

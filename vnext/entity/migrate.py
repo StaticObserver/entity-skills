@@ -12,10 +12,20 @@ from .records import now_utc, require_id, write_json
 
 def _load_legacy(path: Path) -> dict[str, Any]:
     if path.suffix == ".json":
-        value = json.loads(path.read_text(encoding="utf-8"))
+        try:
+            value = json.loads(path.read_text(encoding="utf-8"))
+        except FileNotFoundError as exc:
+            raise EntityError(f"legacy input not found: {path}", code="not_found") from exc
+        except json.JSONDecodeError as exc:
+            raise EntityError(
+                f"invalid legacy JSON {path}: line {exc.lineno}, column {exc.colno}: {exc.msg}",
+                code="invalid_json",
+            ) from exc
         if not isinstance(value, dict):
             raise EntityError("legacy export root must be an object", code="invalid_json")
         return value
+    if not path.is_file():
+        raise EntityError(f"legacy input not found: {path}", code="not_found")
     connection = sqlite3.connect(path)
     connection.row_factory = sqlite3.Row
     try:
@@ -39,6 +49,8 @@ def _load_legacy(path: Path) -> dict[str, Any]:
             case["identities"] = identities
             cases.append(case)
         return {"schema_version": 3, "projects": projects, "cases": cases, "sites": []}
+    except sqlite3.Error as exc:
+        raise EntityError(f"invalid legacy SQLite database {path}: {exc}", code="invalid_legacy") from exc
     finally:
         connection.close()
 

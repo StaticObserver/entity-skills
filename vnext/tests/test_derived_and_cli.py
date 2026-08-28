@@ -9,6 +9,7 @@ from pathlib import Path
 
 from entity.analysis import record_analysis
 from entity.check import check_workspace
+from entity.errors import EntityError
 from entity.migrate import migrate_legacy
 from entity.objects import add_run
 from entity.records import load_json, write_json
@@ -124,6 +125,17 @@ class DerivedAndCliTest(unittest.TestCase):
         finally:
             fixture.close()
 
+    def test_check_reports_missing_recorded_executable(self) -> None:
+        fixture = Fixture()
+        try:
+            fixture.build()
+            executable = fixture.site_root / "projects/project-a/builds/build-a/bin/entity"
+            executable.unlink()
+            result = check_workspace(fixture.workspace)
+            self.assertIn("build_executable_missing", {item["code"] for item in result["issues"]})
+        finally:
+            fixture.close()
+
     def test_check_does_not_modify_workspace(self) -> None:
         fixture = Fixture()
         try:
@@ -178,6 +190,15 @@ class DerivedAndCliTest(unittest.TestCase):
             (destination / "keep").write_text("keep", encoding="utf-8")
             with self.assertRaises(Exception):
                 migrate_legacy(export, destination)
+
+    def test_migration_invalid_json_is_structured_error(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="entity-migrate-test-") as temp:
+            root = Path(temp)
+            source = root / "invalid.json"
+            source.write_text("not-json\n", encoding="utf-8")
+            with self.assertRaises(EntityError) as raised:
+                migrate_legacy(source, root / "destination")
+            self.assertEqual(raised.exception.code, "invalid_json")
 
     def test_cli_four_object_journey(self) -> None:
         fixture = Fixture()

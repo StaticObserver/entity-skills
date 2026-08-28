@@ -194,6 +194,19 @@ def _parse_job_id(output: str) -> str:
     return match.group(1)
 
 
+def _parse_scheduler_state(output: str) -> str:
+    known = {
+        "PENDING", "RUNNING", "COMPLETING", "COMPLETED", "FAILED", "CANCELLED",
+        "TIMEOUT", "OUT_OF_MEMORY", "NODE_FAIL", "PREEMPTED", "SUSPENDED",
+    }
+    tokens = re.split(r"[|\s]+", output.strip())
+    for token in tokens:
+        state = token.strip().upper().rstrip("+")
+        if state in known:
+            return state
+    return output.strip().splitlines()[0].strip() if output.strip() else "UNKNOWN"
+
+
 def submit_attempt(
     workspace: Workspace,
     project_id: str,
@@ -303,7 +316,7 @@ def attempt_status(
                 [*shlex.split(accounting), "-n", "-j", str(result["job_id"]), "--format=State"],
                 check=False,
             )
-            state = probe.stdout.strip().splitlines()[0].split()[0] if probe.stdout.strip() else "UNKNOWN"
+            state = _parse_scheduler_state(probe.stdout)
         return {**result, "state": state or "UNKNOWN"}
     exit_file = root / "exit-code"
     if site.is_file(exit_file):
