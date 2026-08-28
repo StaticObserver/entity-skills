@@ -68,4 +68,7 @@
   Build 与 TOML 决定，资源和环境由 Attempt 记录。
 - 第二轮正确判断：修改 PGen 创建新 PGen、Build 和 Run；保持新 Run 的 Build/TOML
   不变而调整节点数，只创建新 Attempt。
+- 安装 `vnext-0.1.0-d5aa018` 后，从 `/tmp` 启动 Kimi 且不传
+  `--skills-dir`，用户级自动发现仍只列出上述四个技能，并正确回答同一
+  Build/TOML 调整 Slurm 节点数只创建 Attempt；`entity-ledger` 不存在。
 - 技能测试只做只读判断，未连接站点、编译、提交或修改 Workspace。
