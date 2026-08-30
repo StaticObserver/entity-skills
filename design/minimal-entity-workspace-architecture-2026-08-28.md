@@ -1,5 +1,7 @@
 # Entity Workspace 简化架构
 
+状态：0.8.0 发布候选的架构合同；以 `vnext/ARCHITECTURE.md` 和实际示例 JSON 为英文维护入口。
+
 ## 1. 原则
 
 - 系统只有 Source、PGen、Build、Run 四个基本对象。
@@ -90,7 +92,7 @@ Workspace JSON 记录对象关系和用户选择。
 {
   "id": "entity-main-20260828",
   "repository": "https://github.com/entity-toolkit/entity.git",
-  "git_commit": "abc123",
+  "git_commit": "0123456789abcdef0123456789abcdef01234567",
   "checkout": "checkout"
 }
 ```
@@ -275,7 +277,7 @@ Data 直接位于 `<run-id>/data/`。`run.json` 可以记录文件数、时间�
 |---|---|
 | `entity-pgen` | PGen、TOML |
 | `entity-env-build` | deps、`env.sh`、`build.sh`、可执行文件、`build-result.json` |
-| `entity-ledger` | JSON 关系、Run、Attempt、`run.sh`、`job.slurm`、提交和状态查询 |
+| `entity-workspace` | JSON 关系、Run、Attempt、`run.sh`、`job.slurm`、提交和状态查询 |
 | `entity-nt2py` | Run/Data 读取与 Analysis |
 
 ## 11. 检查

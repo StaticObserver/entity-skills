@@ -10,15 +10,26 @@ compatibility contracts and are not the product version.
 
 ## [Unreleased]
 
-### Added
+Target release: 0.8.0. Development branch: `0.8.0rc`. The active file-first
+Entity Workspace implementation is under `vnext/`.
 
-- Experimental `vnext/` file-first implementation centered on four objects:
-  `Source + PGen → Build → Run`. It stores relationships in JSON, nests Data
-  and Attempts under Run, supports direct and Slurm launch scripts with
-  explicit MPI launchers, and includes a read-only legacy importer.
-- Matching vNext Agent skills: `entity-workspace`, simplified
-  `entity-env-build`, four-object-aware `entity-pgen`, and Run/Data-aware
-  `entity-nt2py`. The vNext package does not expose `entity-ledger`.
+### Changed
+
+- Replaced the public Ledger/Router model with the four first-class objects
+  `Source + PGen -> Build -> Run`.
+- Replaced `entity-ledger` with `entity-workspace`; the release candidate ships
+  `entity-workspace`, `entity-env-build`, `entity-pgen`, and `entity-nt2py`.
+- Moved persistent relations to JSON, TOML, Git commits, and ordinary Site
+  files. Case, SQLite, content hashing, seal/release, current pointers, and
+  mandatory workflow gates are not part of the 0.8 runtime.
+- Added direct and SSH Site operations, deps and Build preparation, direct and
+  Slurm Attempts, Data summaries, Analysis records, read-only checks, and
+  read-only legacy migration.
+- Kept submission recovery deliberately small: an unresolved submit intent
+  blocks automatic resubmission and requires Site inspection.
+- Marked the root 0.7.x implementation as migration/historical material on the
+  release-candidate branch; the active implementation is self-contained under
+  `vnext/`.
 
 ## [0.7.3] - 2026-08-27
 
@@ -26,7 +37,8 @@ Hash and verification optimization, work packages WP0/WP1 of
 `design/hash-verification-optimization-plan-2026-08-27.md`: the default data
 inventory no longer reads full file content, and the data identity now binds
 the inventory it was recorded from. WP2–WP5 (run/submission/build identity
-v2, TOML semantic digest, bundle manifest) remain planned for 0.8.0.
+v2, TOML semantic digest, bundle manifest) were the legacy 0.8 plan; that plan
+was superseded by the file-first 0.8.0 release candidate above.
 
 ### Added
 

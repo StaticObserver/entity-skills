@@ -32,6 +32,10 @@ lifecycle state machine. Source Git commit is the only required hash-like
 identity. Report contradictions with exact files and fields; leave repair to
 the user unless they explicitly request it.
 
+This is a cooperative scientific workspace, not a hostile-input security
+boundary. Prefer simple, visible records and proportionate checks over
+permission machinery or universal gates.
+
 ## Working boundary
 
 - For a read-only question, inspect JSON, TOML, scheduler state, logs, and
@@ -40,7 +44,7 @@ the user unless they explicitly request it.
   require unrelated checks, confirmations, or stage transitions.
 - Treat recorded paths and IDs as facts, but verify volatile execution state
   from the Site when it matters.
-- Never edit registered Build artifacts, Run input, or raw Data in place to
+- Do not edit registered Build artifacts, Run input, or raw Data in place to
   represent a different object. Create a new object when Source, PGen, Build,
   or TOML identity changes.
 - A scheduler/resource/environment change or resubmission creates a new

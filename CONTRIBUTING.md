@@ -1,71 +1,58 @@
 # Contributing
 
-## Git Boundaries
+## Active release line
 
-`entity-skills` is the single source repository for the four skills. Do not create a `.git` inside `skills/*`, and do not turn a skill into a submodule.
+`0.8.0rc` is the release-candidate branch. The maintained runtime, schemas,
+tests, and four Agent skills are under `vnext/`. The root legacy implementation
+is retained for 0.7.x migration and should not receive new 0.8 behavior.
 
-## Branch Maintenance Rules
+Do not create nested Git repositories or submodules inside a skill. Changes to
+the runtime, schemas, skills, and tests that express one contract should land
+together.
 
-- `main` mirrors the currently published release; it only accepts merges at release time, no direct development. Since 0.7.1, `main` carries the English content, accompanied by a full Chinese README (`README.zh-CN.md`).
-- The `X.Y.Zrc` branch (e.g. `0.6.0rc`) is the version under development; day-to-day development happens on the rc branch. Create short-lived branches from the rc branch and merge them back into it.
-- Development versions use Chinese throughout (docs, skill descriptions, comments, user-visible strings); they are translated into `main` at release time.
-- The `main_en` branch is retired (since 0.7.1, English content is published directly on `main`).
-
-Create short-lived branches from the current rc branch, named `<type>/<scope>-<summary>`, for example:
-
-```text
-feat/ledger-resume-flow
-fix/env-build-compatibility
-docs/pgen-boundary-contract
-```
-
-Commit messages use the skill scope:
+Short-lived branches may be created from `0.8.0rc` with names such as:
 
 ```text
-feat(ledger): add resume handoff
-fix(env-build): reject stale compatibility state
-docs(pgen): clarify TOML contract
-refactor(nt2py): simplify data inventory
+feat/workspace-summary
+fix/run-attempt-output
+docs/pgen-contract
 ```
 
-A behavioral change that affects the Ledger, sub-skills, and tests at the same time should be submitted as a single atomic pull request — do not split it across different repositories or long-lived branches.
+## Design rules
+
+- Keep `Source + PGen -> Build -> Run` as the complete first-class model.
+- Prefer standard-library code, ordinary files, and explicit JSON records.
+- Do not add a database, content hashing, hidden state, mandatory preflight, or
+  security machinery without a concrete product requirement.
+- Preserve the small recovery rule around uncertain submissions: inspect the
+  Site before creating another Attempt.
+- Update the relevant `SKILL.md`, README/architecture text, examples, and tests
+  when a public contract changes.
 
 ## Verification
 
 Run before committing:
 
 ```bash
-python3 -m unittest discover -s tests -v
-python3 -m unittest discover -s skills/entity-pgen/tests -v
-python3 -m unittest discover -s skills/entity-env-build/tests -v
-python3 -m py_compile \
-  tools/skill_observability/*.py \
-  tools/skill_observability/adapters/*.py \
-  skills/entity-ledger/scripts/*.py \
-  skills/entity-pgen/scripts/*.py \
-  skills/entity-env-build/scripts/*.py \
-  skills/entity-nt2py/scripts/*.py
-
-for schema in tools/skill_observability/schemas/*.json; do
-  python3 -m json.tool "$schema" >/dev/null
-done
+PYTHONPATH=vnext python3 -W error::ResourceWarning \
+  -m unittest discover -s vnext/tests -t vnext -v
+python3 -m compileall -q vnext
+git diff --check
 ```
 
-All four `SKILL.md` files must keep valid YAML frontmatter and pass skill structure validation.
+Validate all four `vnext/skills/*/SKILL.md` files with the Codex
+`skill-creator` `quick_validate.py` helper. Also verify that:
+
+- `vnext/entity/__init__.py` and `vnext/pyproject.toml` carry the same version;
+- `vnext/bin/entity --version` reports that version;
+- examples are valid JSON and referenced skill resources exist;
+- a copied `vnext/` tree runs without the legacy repository.
+
+Legacy 0.7.x tests may be run when migration compatibility is changed; they are
+not the primary 0.8.0rc release suite.
 
 ## Release
 
-Version numbers apply to the whole skills package. Before releasing, confirm the working tree is clean and verification passes. Since 0.7.1, only the English version is published (with a Chinese README attached); the Chinese release is no longer published. Release process (using `X.Y.Z` as the example):
-
-1. Merge the rc branch into `main`, translating all Chinese content to English as part of the merge (code identifiers, CLI commands, config keys, and technical terms stay as-is). `README.md` is translated to English with a link to the Chinese README at the top; at the same time, generate (or update) `README.zh-CN.md` from the rc branch's Chinese README. Confirm the repo has no CJK characters outside `README.zh-CN.md` and the test baseline is unchanged, then push.
-2. Create an annotated tag on `main` and publish the GitHub release (no language suffix on the tag):
-
-   ```bash
-   git tag -a X.Y.Z -m "Release X.Y.Z"
-   git push origin X.Y.Z
-   gh release create X.Y.Z --title "X.Y.Z" --target main
-   ```
-
-3. Rename the rc branch to the next development version (e.g. `0.7.1rc` → `0.7.2rc`), push the new branch and delete the old remote branch.
-
-New versions are no longer released from the old single-skill repositories.
+After the RC suite and the separately authorized real Site canary pass, merge
+`0.8.0rc` into `main`, create the final `0.8.0` tag, and publish the four skills
+together. Do not publish `entity-ledger` as a 0.8 skill.

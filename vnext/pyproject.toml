@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "entity-workspace"
-version = "0.2.0"
+version = "0.8.0"
 description = "File-first Source, PGen, Build, and Run tools for Entity simulations"
 requires-python = ">=3.10"
 dependencies = []

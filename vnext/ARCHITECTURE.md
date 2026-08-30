@@ -1,4 +1,4 @@
-# Entity Workspace Architecture
+# Entity Workspace 0.8.0 Release Candidate Architecture
 
 ## Core objects
 
@@ -21,6 +21,12 @@ Attempt and Data belong to Run. Analysis records one or more exact
 
 There is no Case, database, content hash, seal/release process, current pointer,
 or lifecycle state machine. Source Git commit is the only hash-like identity.
+
+The workspace assumes cooperative users and agents. Object directories are
+authoritative records, not protected storage: callers use new IDs instead of
+editing registered inputs in place. `entity check` detects structural conflicts
+that are cheap to observe; it does not add content hashing, locks, or a security
+policy layer.
 
 ## Stable relations
 

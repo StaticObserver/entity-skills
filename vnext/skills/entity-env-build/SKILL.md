@@ -23,13 +23,17 @@ with different Source commits, producing different Builds.
 - Build preparation copies the selected PGen into the Build directory and
   creates `scripts/build.sh`, `work/`, `bin/`, and `logs/`.
 - `build-result.json` records the actual command result and executable path.
-- Environment order is `site-env.sh`, then `deps/<deps-id>/env.sh`, then
-  Build-specific variables.
+- Environment order is `site-env.sh`, then `deps/<deps-id>/env.sh`, then the
+  generated Build script variables or Run Attempt environment.
 
 Do not reintroduce `requirements.json`, `entity-deps.local.json`, Case records,
 content hashes, mandatory compatibility gates, or a separate build state
 machine. Inspect and remediate the actual compiler/library failure. A check is
 useful when evidence calls for it, not as a universal prerequisite.
+
+Treat Site configuration and registered object directories as cooperative
+project inputs. Add a validation only when it prevents a concrete build error;
+do not turn ordinary compilation into a general security audit.
 
 ## Working method
 

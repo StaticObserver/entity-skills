@@ -1,4 +1,6 @@
-# Entity Workspace 简化架构开发计划
+# Entity Workspace 0.8.0 发布候选开发记录
+
+状态：实现完成并进入分支 `0.8.0rc`，目标发布版本为 0.8.0；本文保留原阶段与验收记录。
 
 ## 1. 目标
 
@@ -19,8 +21,8 @@ Source + PGen → Build → Run
 
 ## 2. 开发边界
 
-- 新实现位于独立 `vnext/`，旧 Ledger 保持可用。
-- 开发分支：`codex/vnext-minimal-ledger`。
+- 0.8.0 实现位于 `vnext/`，旧 Ledger 仅作迁移与历史参考。
+- 发布候选分支：`0.8.0rc`。
 - Python 标准库优先，不新增运行时依赖。
 - JSON 和目录是权威，不建立隐藏状态。
 - CLI 只提供确定的文件操作、脚本生成、提交和查询。

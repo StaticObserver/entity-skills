@@ -4,6 +4,8 @@ __pycache__/
 .pytest_cache/
 .coverage
 htmlcov/
+vnext/build/
+vnext/*.egg-info/
 
 # Local editor and agent state
 .claude/settings.local.json

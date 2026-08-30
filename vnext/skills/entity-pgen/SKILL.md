@@ -25,6 +25,10 @@ TOML contract, make the requested change, and verify it in proportion to its
 physics and API risk. A concise design note is useful when it preserves
 non-obvious intent, but it is not a gate.
 
+Use ordinary project trust boundaries. Validate paths and inputs enough to
+avoid wrong PGen or TOML selection, without adding a separate security or
+approval workflow.
+
 ## Working guidance
 
 - Keep PGen implementation and every TOML key it consumes consistent.

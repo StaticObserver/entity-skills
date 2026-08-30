@@ -1,4 +1,4 @@
-# Entity Workspace vNext
+# Entity Workspace 0.8.0 Release Candidate
 
 File-first tools built around four objects:
 
@@ -7,6 +7,11 @@ Source + PGen → Build → Run
 ```
 
 Project, Workspace, Site, deps, TOML, Data, Attempt, and Analysis are containers, attributes, or derived records. State is stored in JSON and ordinary files; there is no database and no content hashing.
+
+This is the active implementation on branch `0.8.0rc`, targeting release 0.8.0. It is intentionally a cooperative
+scientific workspace rather than a hostile-input security boundary: registered
+files are managed by convention, and checks report contradictions without
+adding permission layers, content seals, or mandatory gates.
 
 ## Run
 
@@ -43,7 +48,8 @@ python3 -m pip install .
 entity --help
 ```
 
-The direct `bin/entity` entry point remains available without installation.
+The direct `bin/entity` entry point remains available without installation and
+reports version `0.8.0`.
 
 ## Skills
 

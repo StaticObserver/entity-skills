@@ -1,8 +1,10 @@
-# vNext Kimi Code 黑盒验收
+# Entity Workspace 0.8.0 发布候选 Kimi Code 黑盒验收记录
+
+说明：本文件记录 0.1.0 阶段的历史黑盒验收；`0.8.0rc` 分支延续同一四对象合同并增加独立打包与回归修复。
 
 ## 环境
 
-- 开发分支：`codex/vnext-minimal-ledger`
+- 当前发布候选分支：`0.8.0rc`
 - 第一轮提交：`aa647ce`
 - 修复提交：`785cb24`
 - Kimi Code：`0.38.0`

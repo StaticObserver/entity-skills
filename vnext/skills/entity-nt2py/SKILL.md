@@ -9,6 +9,10 @@ Use nt2py as a flexible read-only interface to a Run's Data. Scientific
 analysis stays open-ended; only actual data discovery, bounded loading, and
 raw-data safety are fixed.
 
+Keep safeguards proportional to scientific and resource risk. This skill does
+not introduce content sealing, permission policy, or mandatory analysis
+registration.
+
 ## Run/Data boundary
 
 - Data is inseparable from its Run and lives under

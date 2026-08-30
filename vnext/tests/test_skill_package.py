@@ -6,6 +6,11 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from entity import __version__
+
+
+RELEASE_VERSION = "0.8.0"
+
 
 class SkillPackageTest(unittest.TestCase):
     @classmethod
@@ -38,7 +43,12 @@ class SkillPackageTest(unittest.TestCase):
             capture_output=True,
             text=True,
         )
-        self.assertEqual(completed.stdout.strip(), "0.2.0")
+        self.assertEqual(completed.stdout.strip(), RELEASE_VERSION)
+
+    def test_release_version_is_consistent(self) -> None:
+        self.assertEqual(__version__, RELEASE_VERSION)
+        pyproject = (self.vnext / "pyproject.toml").read_text(encoding="utf-8")
+        self.assertIn(f'version = "{RELEASE_VERSION}"', pyproject)
 
     def test_specialist_resources_are_packaged(self) -> None:
         self.assertTrue(
@@ -62,7 +72,7 @@ class SkillPackageTest(unittest.TestCase):
                 capture_output=True,
                 text=True,
             )
-            self.assertEqual(completed.stdout.strip(), "0.2.0")
+            self.assertEqual(completed.stdout.strip(), RELEASE_VERSION)
 
 if __name__ == "__main__":
     unittest.main()
