@@ -9,6 +9,21 @@ from .paths import Workspace
 from .records import now_utc, require_id, write_json
 
 
+def _resolve_run_reference(
+    workspace: Workspace,
+    project_id: str,
+    reference: str,
+) -> tuple[str, str, Path]:
+    if ":" in reference:
+        build_id, run_id = reference.split(":", 1)
+        require_id(build_id, "build id")
+        require_id(run_id, "run id")
+        resolved_build, run_root, _ = load_run(workspace, project_id, run_id, build_id)
+        return resolved_build, run_id, run_root
+    build_id, run_root, _ = load_run(workspace, project_id, reference)
+    return build_id, reference, run_root
+
+
 def record_analysis(
     workspace: Workspace,
     project_id: str,
@@ -35,8 +50,8 @@ def record_analysis(
     if not script_path.is_file():
         raise EntityError(f"analysis script not found: {script_path}", code="not_found")
     resolved: list[dict[str, str]] = []
-    for run_id in run_ids:
-        build_id, run_root, _ = load_run(workspace, project_id, run_id)
+    for reference in run_ids:
+        build_id, run_id, run_root = _resolve_run_reference(workspace, project_id, reference)
         resolved.append({"run": run_id, "build": build_id, "record": str(run_root / "run.json")})
     if len(resolved) == 1:
         root = Path(resolved[0]["record"]).parent / "analysis" / analysis_id
@@ -48,7 +63,7 @@ def record_analysis(
     record = {
         "schema_version": 1,
         "id": analysis_id,
-        "runs": [item["run"] for item in resolved],
+        "runs": [{"id": item["run"], "build": item["build"]} for item in resolved],
         "script": str(script_relative),
         "parameters": parameters or {},
         "output": output,

@@ -11,30 +11,43 @@ Project, Workspace, Site, deps, TOML, Data, Attempt, and Analysis are containers
 ## Run
 
 ```bash
-vnext/bin/entity --help
-vnext/bin/entity workspace init /absolute/workspace
+bin/entity --help
+bin/entity workspace init /absolute/workspace
 export ENTITY_WORKSPACE=/absolute/workspace
-vnext/bin/entity project init --project demo
+bin/entity project init --project demo
 ```
 
 Register a Site before initializing its directory tree:
 
 ```bash
-vnext/bin/entity site add --config /absolute/site.json
-vnext/bin/entity site init --site <site-id>
+bin/entity site add --config /absolute/site.json
+bin/entity site init --site <site-id>
 ```
 
 Legacy migration accepts the old Ledger export shape shown in
-`vnext/schemas/examples/legacy-export.json`. Source records with a repository
+`schemas/examples/legacy-export.json`. Source records with a repository
 and Git commit are imported automatically. Old PGen, Build, Run, Data, and
 Case facts that cannot satisfy the four-object model are retained in
 `migration-report.json` for manual mapping.
 
-Use `vnext/schemas/examples/` as the field contract. The complete architecture and development plan are under `design/`.
+Use `schemas/examples/` as the field contract and `ARCHITECTURE.md` as the
+complete architecture. This directory is self-contained and has no runtime,
+skill, reference, or test dependency on the legacy implementation outside it.
+
+## Install
+
+From this directory:
+
+```bash
+python3 -m pip install .
+entity --help
+```
+
+The direct `bin/entity` entry point remains available without installation.
 
 ## Skills
 
-`vnext/skills/` is the matching Agent interface:
+`skills/` is the matching Agent interface:
 
 - `entity-workspace`: four-object facts, cross-session work, Site and Run operations;
 - `entity-env-build`: deps and Build work at one explicit Site;
@@ -48,5 +61,5 @@ do not introduce separate state or mandatory workflows.
 ## Test
 
 ```bash
-PYTHONPATH=vnext python3 -m unittest discover -s vnext/tests -t vnext -v
+PYTHONPATH=. python3 -m unittest discover -s tests -t . -v
 ```

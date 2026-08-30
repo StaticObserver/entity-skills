@@ -20,7 +20,7 @@
         "source": {
           "items": [
             {
-              "git_commit": "0123456789abcdef",
+              "git_commit": "0123456789abcdef0123456789abcdef01234567",
               "repository": "https://github.com/entity-toolkit/entity.git",
               "source_id": "legacy-source"
             }

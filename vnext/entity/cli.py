@@ -205,6 +205,7 @@ def cmd_run_prepare(args: argparse.Namespace) -> dict[str, Any]:
         build_id=args.build,
         attempt_id=args.attempt,
         resource_override=_json_value(args.resources),
+        environment_override={str(key): str(value) for key, value in _json_value(args.environment).items()},
     )
     return {"ok": True, "record": record}
 
@@ -384,6 +385,7 @@ def build_parser() -> argparse.ArgumentParser:
     _add_run_identity(item)
     item.add_argument("--attempt")
     item.add_argument("--resources", help="Attempt resource overrides")
+    item.add_argument("--environment", help="Attempt environment overrides")
     item.set_defaults(func=cmd_run_prepare)
     for name, func in (("submit", cmd_run_submit), ("status", cmd_run_status)):
         item = run_sub.add_parser(name)
@@ -400,7 +402,7 @@ def build_parser() -> argparse.ArgumentParser:
     item = analysis_sub.add_parser("record")
     _add_project(item)
     item.add_argument("--id", required=True)
-    item.add_argument("--runs", nargs="+", required=True)
+    item.add_argument("--runs", nargs="+", required=True, metavar="[BUILD:]RUN")
     item.add_argument("--script", required=True)
     item.add_argument("--parameters", help="JSON object or @file")
     item.add_argument("--output", required=True)

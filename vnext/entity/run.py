@@ -24,7 +24,7 @@ def site_run_root(site: SiteOps, project_id: str, build_id: str, run_id: str) ->
 
 
 def _new_attempt_id() -> str:
-    return datetime.now(timezone.utc).strftime("attempt-%Y%m%dT%H%M%SZ")
+    return datetime.now(timezone.utc).strftime("attempt-%Y%m%dT%H%M%S%fZ")
 
 
 def _merge_resources(site_config: dict[str, Any], run: dict[str, Any], override: dict[str, Any] | None) -> dict[str, Any]:
@@ -45,36 +45,53 @@ def _launcher(site_config: dict[str, Any], build: dict[str, Any], resources: dic
     values.setdefault("tasks", "1")
     try:
         return [str(item).format(**values) for item in template]
-    except KeyError as exc:
-        raise EntityError(f"MPI template requires resource: {exc.args[0]}", code="invalid_record") from exc
+    except (KeyError, ValueError) as exc:
+        detail = exc.args[0] if isinstance(exc, KeyError) else str(exc)
+        raise EntityError(f"invalid MPI launcher template: {detail}", code="invalid_record") from exc
+
+
+def _expand_runtime_arguments(arguments: Any, values: dict[str, str]) -> list[str]:
+    if not isinstance(arguments, list):
+        raise EntityError("runtime.arguments must be a JSON array", code="invalid_record")
+    try:
+        return [str(item).format(**values) for item in arguments]
+    except (KeyError, ValueError) as exc:
+        detail = exc.args[0] if isinstance(exc, KeyError) else str(exc)
+        raise EntityError(f"invalid runtime argument placeholder: {detail}", code="invalid_record") from exc
+
+
+def _slurm_value(name: str, value: Any) -> str:
+    text = str(value)
+    if not text or text.strip() != text or any(
+        character.isspace() or ord(character) < 32 or ord(character) == 127
+        for character in text
+    ):
+        raise EntityError(f"invalid Slurm resource value for {name}: {value!r}", code="invalid_record")
+    return text
 
 
 def render_run_script(
     site: SiteOps,
     build: dict[str, Any],
-    run: dict[str, Any],
     resources: dict[str, Any],
+    environment: dict[str, str],
     run_root: PurePosixPath,
 ) -> str:
     site_env = site.path(str((site.config.get("environment") or {}).get("script") or "site-env.sh"))
     deps_env = site.path("deps", str(build["deps"]), "env.sh")
-    executable = site_build_root(site, "__PROJECT__", str(build["id"])) / "bin" / "entity"
-    # Replace the temporary project marker using the actual run path hierarchy.
     executable = run_root.parents[1] / "bin" / "entity"
     input_toml = run_root / "input.toml"
     data_root = run_root / "data"
     exports: list[str] = []
-    for key, value in sorted((run.get("environment") or {}).items()):
+    for key, value in sorted(environment.items()):
         if not ENV_NAME.fullmatch(str(key)):
             raise EntityError(f"invalid environment variable name: {key}", code="invalid_record")
         exports.append(f"export {key}={shlex.quote(str(value))}")
-    command = _launcher(site.config, build, resources) + [str(executable), str(input_toml)]
+    command = _launcher(site.config, build, resources) + [str(executable), "-input", str(input_toml)]
     extra = (build.get("runtime") or {}).get("arguments") or []
     if extra:
         values = {"toml": str(input_toml), "data": str(data_root), "executable": str(executable)}
-        command = _launcher(site.config, build, resources) + [str(executable)] + [
-            str(item).format(**values) for item in extra
-        ]
+        command.extend(_expand_runtime_arguments(extra, values))
     return "\n".join(
         [
             "#!/usr/bin/env bash",
@@ -112,12 +129,20 @@ def render_slurm_script(
     )
     for key, option in mapping:
         if key in resources:
-            directives.append(f"#SBATCH --{option}={resources[key]}")
+            value = _slurm_value(key, resources[key])
+            if key in {"nodes", "tasks", "tasks_per_node", "cpus_per_task"}:
+                if not value.isdigit() or int(value) < 1:
+                    raise EntityError(f"Slurm resource {key} must be a positive integer", code="invalid_record")
+                value = str(int(value))
+            directives.append(f"#SBATCH --{option}={value}")
     gres = resources.get("gres")
     if not gres and resources.get("gpus_per_node"):
-        gres = f"gpu:{resources['gpus_per_node']}"
+        gpu_count = _slurm_value("gpus_per_node", resources["gpus_per_node"])
+        if not gpu_count.isdigit() or int(gpu_count) < 1:
+            raise EntityError("Slurm resource gpus_per_node must be a positive integer", code="invalid_record")
+        gres = f"gpu:{int(gpu_count)}"
     if gres:
-        directives.append(f"#SBATCH --gres={gres}")
+        directives.append(f"#SBATCH --gres={_slurm_value('gres', gres)}")
     directives.extend(
         [
             "#SBATCH --output=stdout.log",
@@ -146,6 +171,7 @@ def prepare_attempt(
     build_id: str | None = None,
     attempt_id: str | None = None,
     resource_override: dict[str, Any] | None = None,
+    environment_override: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     resolved_build, local_run_root, run = load_run(workspace, project_id, run_id, build_id)
     build = load_build(workspace, project_id, resolved_build)
@@ -159,11 +185,24 @@ def prepare_attempt(
     attempt_root = run_root / "attempts" / attempt_id
     if site.exists(attempt_root):
         raise EntityError(f"attempt already exists: {attempt_id}", code="already_exists")
-    site.mkdir(run_root, run_root / "attempts", run_root / "data", run_root / "analysis", attempt_root)
-    if not site.is_file(run_root / "input.toml"):
-        site.put_file(local_run_root / "input.toml", run_root / "input.toml")
+    local_input = local_run_root / "input.toml"
+    site_input = run_root / "input.toml"
+    if site.is_file(site_input):
+        if site.read_text(site_input) != local_input.read_text(encoding="utf-8"):
+            raise EntityError(
+                f"Site Run TOML conflicts with Workspace record: {site_input}; repair it manually",
+                code="run_input_conflict",
+            )
     resources = _merge_resources(site.config, run, resource_override)
+    environment = {str(key): str(value) for key, value in (run.get("environment") or {}).items()}
+    environment.update({str(key): str(value) for key, value in (environment_override or {}).items()})
     scheduler = str((site.config.get("scheduler") or {}).get("kind") or "none")
+    run_script = render_run_script(site, build, resources, environment, run_root)
+    slurm_script = (
+        render_slurm_script(project_id, run_id, attempt_id, resources, attempt_root)
+        if scheduler == "slurm"
+        else None
+    )
     attempt = {
         "schema_version": 1,
         "id": attempt_id,
@@ -172,26 +211,34 @@ def prepare_attempt(
         "site": build["site"],
         "scheduler": scheduler,
         "resources": resources,
+        "environment": environment,
         "status": "prepared",
         "prepared_at": now_utc(),
     }
+    site.mkdir(run_root, run_root / "attempts", run_root / "data", run_root / "analysis", attempt_root)
+    if not site.is_file(site_input):
+        site.put_file(local_input, site_input)
     site.write_json(attempt_root / "attempt.json", attempt)
-    run_script = render_run_script(site, build, run, resources, run_root)
     site.write_text(attempt_root / "run.sh", run_script, executable=True)
-    if scheduler == "slurm":
+    if slurm_script is not None:
         site.write_text(
             attempt_root / "job.slurm",
-            render_slurm_script(project_id, run_id, attempt_id, resources, attempt_root),
+            slurm_script,
             executable=True,
         )
     return {**attempt, "root": str(attempt_root)}
 
 
 def _parse_job_id(output: str) -> str:
-    match = re.search(r"\b(\d+)\b", output)
-    if not match:
-        raise EntityError(f"cannot parse Slurm job id from: {output!r}", code="submit_unknown")
-    return match.group(1)
+    for line in output.splitlines():
+        text = line.strip()
+        match = re.fullmatch(r"Submitted batch job (\d+)", text, flags=re.IGNORECASE)
+        if match:
+            return match.group(1)
+        match = re.fullmatch(r"(\d+)(?:;[^\s;]+)?", text)
+        if match:
+            return match.group(1)
+    raise EntityError(f"cannot parse Slurm job id from: {output!r}", code="submit_unknown")
 
 
 def _parse_scheduler_state(output: str) -> str:
@@ -225,9 +272,30 @@ def submit_attempt(
     result_file = attempt_root / "submit-result.json"
     if site.is_file(result_file):
         return site.read_json(result_file)
+    intent_file = attempt_root / "submit-intent.json"
+    if site.is_file(intent_file):
+        raise EntityError(
+            f"submission outcome is uncertain for {attempt_id}; inspect the scheduler or process before manual repair",
+            code="submit_uncertain",
+        )
+    claim = attempt_root / "submit-intent.lock"
+    if not site.claim_directory(claim):
+        if site.is_file(result_file):
+            return site.read_json(result_file)
+        raise EntityError(
+            f"submission outcome is uncertain for {attempt_id}; inspect the scheduler or process before manual repair",
+            code="submit_uncertain",
+        )
     attempt = site.read_json(attempt_file)
     scheduler = str(attempt.get("scheduler") or "none")
     submitted_at = now_utc()
+    intent = {
+        "attempt": attempt_id,
+        "scheduler": scheduler,
+        "status": "submitting",
+        "created_at": submitted_at,
+    }
+    site.write_json(intent_file, intent)
     if scheduler == "slurm":
         submit = str((site.config.get("scheduler") or {}).get("submit") or "sbatch")
         result = site.run([*shlex.split(submit), "job.slurm"], cwd=attempt_root, check=False)
@@ -241,6 +309,7 @@ def submit_attempt(
                 "raw": (result.stderr or result.stdout).strip(),
             }
             site.write_json(result_file, failed)
+            site.write_json(intent_file, {**intent, "status": "resolved", "resolved_at": now_utc()})
             raise EntityError(
                 result.stderr.strip() or "Slurm submission failed",
                 code="submit_failed",
@@ -256,6 +325,7 @@ def submit_attempt(
                 "raw": result.stdout.strip(),
             }
             site.write_json(result_file, unknown)
+            site.write_json(intent_file, {**intent, "status": "resolved", "resolved_at": now_utc()})
             raise
         record = {
             "attempt": attempt_id,
@@ -275,11 +345,17 @@ def submit_attempt(
                 f">{shlex.quote(str(stdout_path))} 2>{shlex.quote(str(stderr_path))} </dev/null & echo $!"
             )
             result = site.run(["bash", "-lc", command], cwd=attempt_root)
-            pid = int(result.stdout.strip().splitlines()[-1])
+            try:
+                pid = int(result.stdout.strip().splitlines()[-1])
+            except (IndexError, ValueError) as exc:
+                raise EntityError("direct submission returned no process id", code="submit_unknown") from exc
         else:
             command = f"nohup bash -c {shlex.quote(wrapper)} >stdout.log 2>stderr.log </dev/null & echo $!"
             result = site.run(["bash", "-lc", command], cwd=attempt_root)
-            pid = int(result.stdout.strip().splitlines()[-1])
+            try:
+                pid = int(result.stdout.strip().splitlines()[-1])
+            except (IndexError, ValueError) as exc:
+                raise EntityError("direct submission returned no process id", code="submit_unknown") from exc
         record = {
             "attempt": attempt_id,
             "scheduler": "none",
@@ -287,6 +363,7 @@ def submit_attempt(
             "submitted_at": submitted_at,
         }
     site.write_json(result_file, record)
+    site.write_json(intent_file, {**intent, "status": "resolved", "resolved_at": now_utc()})
     return record
 
 
@@ -301,15 +378,27 @@ def attempt_status(
     resolved_build, _, _ = load_run(workspace, project_id, run_id, build_id)
     build = load_build(workspace, project_id, resolved_build)
     site = SiteOps.from_workspace(workspace, str(build["site"]))
+    attempt_id = require_id(attempt_id, "attempt id")
     root = site_run_root(site, project_id, resolved_build, run_id) / "attempts" / attempt_id
-    result = site.read_json(root / "submit-result.json")
+    result_file = root / "submit-result.json"
+    if not site.is_file(result_file):
+        intent_file = root / "submit-intent.json"
+        if site.is_file(intent_file):
+            intent = site.read_json(intent_file)
+            return {**intent, "state": "UNKNOWN"}
+        if site.exists(root / "submit-intent.lock"):
+            return {"attempt": attempt_id, "state": "UNKNOWN", "status": "submitting"}
+        if site.is_file(root / "attempt.json"):
+            return {"attempt": attempt_id, "state": "PREPARED"}
+        raise EntityError(f"attempt not prepared: {attempt_id}", code="not_prepared")
+    result = site.read_json(result_file)
     if result.get("scheduler") == "slurm":
         if not result.get("job_id"):
             return {**result, "state": "UNKNOWN"}
         scheduler = site.config.get("scheduler") or {}
         query = str(scheduler.get("query") or "squeue")
         probe = site.run([*shlex.split(query), "-h", "-j", str(result["job_id"]), "-o", "%T"], check=False)
-        state = probe.stdout.strip().splitlines()[0] if probe.stdout.strip() else ""
+        state = _parse_scheduler_state(probe.stdout) if probe.stdout.strip() else ""
         if not state:
             accounting = str(scheduler.get("accounting") or "sacct")
             probe = site.run(

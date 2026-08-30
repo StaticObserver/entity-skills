@@ -16,10 +16,16 @@ from .records import load_json, now_utc, require_fields, require_id, write_json,
 def add_site(workspace: Workspace, config: dict[str, Any]) -> dict[str, Any]:
     site_id = require_id(str(config.get("id") or ""), "site id")
     root = str(config.get("root") or "")
-    if not root.startswith("/"):
-        raise EntityError("site root must be an absolute path", code="invalid_record")
+    root_path = PurePosixPath(root)
+    if not root.startswith("/") or ".." in root_path.parts or root_path == PurePosixPath("/"):
+        raise EntityError(
+            "site root must be a non-root absolute path without '..'",
+            code="invalid_record",
+        )
     transport = config.get("transport") or {"kind": "local"}
     scheduler = config.get("scheduler") or {"kind": "none"}
+    if not isinstance(transport, dict) or not isinstance(scheduler, dict):
+        raise EntityError("transport and scheduler must be JSON objects", code="invalid_record")
     if transport.get("kind") not in {"local", "ssh"}:
         raise EntityError("transport.kind must be local or ssh", code="invalid_record")
     if transport.get("kind") == "ssh" and not transport.get("alias"):
@@ -104,6 +110,15 @@ class SiteOps:
                 Path(path).mkdir(parents=True, exist_ok=True)
         else:
             self.run(["mkdir", "-p", "--", *[str(path) for path in paths]])
+
+    def claim_directory(self, path: PurePosixPath) -> bool:
+        if self.kind == "local":
+            try:
+                Path(path).mkdir()
+                return True
+            except FileExistsError:
+                return False
+        return self.run(["mkdir", "--", str(path)], check=False).returncode == 0
 
     def exists(self, path: PurePosixPath) -> bool:
         if self.kind == "local":
@@ -192,6 +207,14 @@ def init_site(workspace: Workspace, site_id: str) -> dict[str, Any]:
         )
     config = load_site(workspace, site_id)
     site = SiteOps(config)
+    site_record_path = site.path("site.json")
+    if site.is_file(site_record_path):
+        actual = site.read_json(site_record_path)
+        if actual != config:
+            raise EntityError(
+                f"Site config conflicts with Workspace record: {site_record_path}; repair it manually",
+                code="site_config_conflict",
+            )
     roots = [
         site.root,
         site.path("checkouts"),
@@ -200,7 +223,8 @@ def init_site(workspace: Workspace, site_id: str) -> dict[str, Any]:
         site.path("projects"),
     ]
     site.mkdir(*roots)
-    site.write_json(site.path("site.json"), config)
+    if not site.is_file(site_record_path):
+        site.write_json(site_record_path, config)
     env_path = site.path(str((config.get("environment") or {}).get("script") or "site-env.sh"))
     if not site.exists(env_path):
         site.write_text(env_path, "#!/usr/bin/env bash\n# Site-wide shell initialization.\n", executable=True)

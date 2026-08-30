@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import os
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -8,6 +10,9 @@ from typing import Any
 from .errors import EntityError
 from .paths import Workspace
 from .records import copy_tree, load_json, now_utc, require_fields, require_id, write_json
+
+
+GIT_COMMIT_RE = re.compile(r"^(?:[0-9a-fA-F]{40}|[0-9a-fA-F]{64})$")
 
 
 def _git(path: Path, *args: str) -> str:
@@ -20,6 +25,50 @@ def _git(path: Path, *args: str) -> str:
     if result.returncode:
         raise EntityError(result.stderr.strip() or f"git failed in {path}", code="git_error")
     return result.stdout.strip()
+
+
+def _fixed_commit(value: str) -> str:
+    if not GIT_COMMIT_RE.fullmatch(value):
+        raise EntityError(
+            "git commit must be a fixed hexadecimal object id; use --checkout to resolve a branch or tag",
+            code="invalid_record",
+        )
+    return value.lower()
+
+
+def validate_pgen_tree(source_dir: Path) -> None:
+    for item in source_dir.rglob("*"):
+        if not item.is_symlink():
+            continue
+        target = Path(os.readlink(item))
+        if target.is_absolute():
+            raise EntityError(f"PGen contains absolute symlink: {item}", code="invalid_record")
+        try:
+            item.resolve(strict=True).relative_to(source_dir)
+        except FileNotFoundError as exc:
+            raise EntityError(f"PGen contains broken symlink: {item}", code="invalid_record") from exc
+        except (OSError, ValueError) as exc:
+            raise EntityError(f"PGen symlink escapes its directory: {item}", code="invalid_record") from exc
+
+
+def validate_pgen_snapshot(source_dir: Path, entry: str) -> str:
+    source_dir = source_dir.expanduser().resolve()
+    if not source_dir.is_dir():
+        raise EntityError(f"PGen directory not found: {source_dir}", code="not_found")
+    entry_path = Path(entry)
+    if entry_path.is_absolute() or ".." in entry_path.parts:
+        raise EntityError("PGen entry must be a relative path inside the PGen directory", code="invalid_record")
+    candidate = source_dir / entry_path
+    try:
+        candidate.resolve().relative_to(source_dir)
+    except (OSError, ValueError) as exc:
+        raise EntityError("PGen entry escapes the PGen directory", code="invalid_record") from exc
+    if candidate.is_symlink():
+        raise EntityError("PGen entry must be a regular file, not a symlink", code="invalid_record")
+    if not candidate.is_file():
+        raise EntityError(f"PGen entry not found: {candidate}", code="not_found")
+    validate_pgen_tree(source_dir)
+    return entry_path.as_posix()
 
 
 def add_source(
@@ -41,19 +90,19 @@ def add_source(
             f"partial Source directory exists without source.json: {root}; restore the JSON or move the directory before retrying",
             code="partial_record",
         )
-    root.mkdir(parents=True)
     checkout_name = "checkout"
     if checkout:
         checkout = checkout.expanduser().resolve()
         if not checkout.is_dir():
             raise EntityError(f"source checkout not found: {checkout}", code="not_found")
         actual = _git(checkout, "rev-parse", "HEAD")
-        expected = _git(checkout, "rev-parse", commit)
+        expected = _git(checkout, "rev-parse", "--verify", f"{commit}^{{commit}}")
         if actual != expected:
             raise EntityError(
                 f"checkout HEAD {actual} does not match requested commit {expected}",
                 code="source_mismatch",
             )
+        root.mkdir(parents=True)
         destination = root / checkout_name
         subprocess.run(
             ["git", "clone", "--no-hardlinks", "--no-checkout", str(checkout), str(destination)],
@@ -63,6 +112,9 @@ def add_source(
         )
         _git(destination, "checkout", "--detach", expected)
         commit = expected
+    else:
+        commit = _fixed_commit(commit)
+        root.mkdir(parents=True)
     record = {
         "schema_version": 1,
         "id": source_id,
@@ -85,10 +137,7 @@ def add_pgen(
 ) -> dict[str, Any]:
     pgen_id = require_id(pgen_id, "pgen id")
     source_dir = source_dir.expanduser().resolve()
-    if not source_dir.is_dir():
-        raise EntityError(f"PGen directory not found: {source_dir}", code="not_found")
-    if not (source_dir / entry).is_file():
-        raise EntityError(f"PGen entry not found: {source_dir / entry}", code="not_found")
+    entry = validate_pgen_snapshot(source_dir, entry)
     root = workspace.pgen_dir(project_id, pgen_id)
     if root.exists():
         raise EntityError(f"PGen already exists: {pgen_id}", code="already_exists")

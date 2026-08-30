@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import sqlite3
 import subprocess
 import tempfile
 import unittest
@@ -11,7 +12,7 @@ from entity.analysis import record_analysis
 from entity.check import check_workspace
 from entity.errors import EntityError
 from entity.migrate import migrate_legacy
-from entity.objects import add_run
+from entity.objects import add_build, add_run
 from entity.records import load_json, write_json
 
 from .support import Fixture
@@ -63,8 +64,51 @@ class DerivedAndCliTest(unittest.TestCase):
                 "outputs",
             )
             path = fixture.workspace.require_project("project-a") / "analysis/joint-a/analysis.json"
-            self.assertEqual(load_json(path)["runs"], ["run-a", "run-b"])
+            self.assertEqual(
+                load_json(path)["runs"],
+                [
+                    {"build": "build-a", "id": "run-a"},
+                    {"build": "build-a", "id": "run-b"},
+                ],
+            )
             self.assertEqual(record["script"], "scripts/analyze.py")
+        finally:
+            fixture.close()
+
+    def test_analysis_uses_build_and_run_as_exact_reference(self) -> None:
+        fixture = Fixture()
+        try:
+            self.add_run(fixture, "same-run")
+            add_build(
+                fixture.workspace,
+                "project-a",
+                "build-b",
+                "source-a",
+                "pgen-a",
+                "site-a",
+                "deps-a",
+            )
+            toml = fixture.root / "same-run-b.toml"
+            toml.write_text("name = \"same-run-b\"\n", encoding="utf-8")
+            add_run(fixture.workspace, "project-a", "same-run", "build-b", toml)
+            self.add_script(fixture)
+            record = record_analysis(
+                fixture.workspace,
+                "project-a",
+                "joint-exact",
+                ["build-a:same-run", "build-b:same-run"],
+                "scripts/analyze.py",
+                {},
+                "outputs",
+            )
+            self.assertEqual(
+                record["runs"],
+                [
+                    {"build": "build-a", "id": "same-run"},
+                    {"build": "build-b", "id": "same-run"},
+                ],
+            )
+            self.assertTrue(check_workspace(fixture.workspace)["ok"])
         finally:
             fixture.close()
 
@@ -164,7 +208,7 @@ class DerivedAndCliTest(unittest.TestCase):
                                             {
                                                 "source_id": "source-a",
                                                 "repository": "https://example.test/entity.git",
-                                                "git_commit": "abc123",
+                                                "git_commit": "0123456789abcdef0123456789abcdef01234567",
                                             }
                                         ]
                                     }
@@ -191,6 +235,58 @@ class DerivedAndCliTest(unittest.TestCase):
             with self.assertRaises(Exception):
                 migrate_legacy(export, destination)
 
+    def test_migration_reports_conflicting_duplicate_source(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="entity-migrate-test-") as temp:
+            root = Path(temp)
+            export = root / "export.json"
+            export.write_text(
+                json.dumps(
+                    {
+                        "projects": [{"project_uid": "p1", "slug": "project-a"}],
+                        "cases": [
+                            {
+                                "project_uid": "p1",
+                                "identities": {
+                                    "source": {
+                                        "items": [
+                                            {
+                                                "source_id": "source-a",
+                                                "repository": "https://example.test/one.git",
+                                                "git_commit": "1" * 40,
+                                            }
+                                        ]
+                                    }
+                                },
+                            },
+                            {
+                                "project_uid": "p1",
+                                "identities": {
+                                    "source": {
+                                        "items": [
+                                            {
+                                                "source_id": "source-a",
+                                                "repository": "https://example.test/two.git",
+                                                "git_commit": "2" * 40,
+                                            }
+                                        ]
+                                    }
+                                },
+                            },
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            destination = root / "workspace"
+            report = migrate_legacy(export, destination)
+            self.assertEqual(report["imported"]["sources"], 1)
+            self.assertIn(
+                "duplicate Source ID has different repository or Git commit",
+                {item["reason"] for item in report["conflicts"]},
+            )
+            source = load_json(destination / "projects/project-a/sources/source-a/source.json")
+            self.assertEqual(source["repository"], "https://example.test/one.git")
+
     def test_migration_invalid_json_is_structured_error(self) -> None:
         with tempfile.TemporaryDirectory(prefix="entity-migrate-test-") as temp:
             root = Path(temp)
@@ -199,6 +295,28 @@ class DerivedAndCliTest(unittest.TestCase):
             with self.assertRaises(EntityError) as raised:
                 migrate_legacy(source, root / "destination")
             self.assertEqual(raised.exception.code, "invalid_json")
+
+    def test_migration_malformed_sqlite_payload_is_structured_error(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="entity-migrate-test-") as temp:
+            root = Path(temp)
+            database = root / "legacy.sqlite"
+            connection = sqlite3.connect(database)
+            connection.executescript(
+                """
+                CREATE TABLE projects (project_uid TEXT, slug TEXT);
+                CREATE TABLE cases (case_uid TEXT, project_uid TEXT, source_json TEXT);
+                CREATE TABLE identities (
+                    case_uid TEXT, dimension TEXT, payload_json TEXT, is_current INTEGER
+                );
+                INSERT INTO projects VALUES ('p1', 'project-a');
+                INSERT INTO cases VALUES ('c1', 'p1', '{bad');
+                """
+            )
+            connection.commit()
+            connection.close()
+            with self.assertRaises(EntityError) as raised:
+                migrate_legacy(database, root / "destination")
+            self.assertEqual(raised.exception.code, "invalid_legacy")
 
     def test_cli_four_object_journey(self) -> None:
         fixture = Fixture()

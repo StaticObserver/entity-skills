@@ -52,6 +52,8 @@ the user unless they explicitly request it.
   carries defaults for new Attempts.
 - Before retrying an uncertain submission, query the scheduler or process
   state so the same Run is not launched twice.
+- A known failed or unknown submission result is retained. Inspect it and use
+  a new Attempt if another submission is required; do not erase the receipt.
 - External submission or remote mutation still requires the user's requested
   target and scope; the records do not grant additional authority.
 

@@ -18,7 +18,7 @@ raw-data safety are fixed.
 - Treat raw Data as read-only. Write scripts to the Project `scripts/`
   directory and results to the Run or Project analysis directory.
 - A single-Run analysis belongs under that Run. A joint analysis records all
-  input Run IDs under the Project analysis directory.
+  exact `{build, run}` inputs under the Project analysis directory.
 - Record an `analysis.json` when durable cross-session provenance is useful;
   do not force a report, notebook, registration step, or directory beyond the
   user's requested deliverable.

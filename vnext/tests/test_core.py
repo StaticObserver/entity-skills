@@ -58,6 +58,21 @@ class CoreTest(unittest.TestCase):
         finally:
             fixture.close()
 
+    def test_source_rejects_mutable_ref_without_checkout(self) -> None:
+        fixture = Fixture()
+        try:
+            with self.assertRaises(EntityError) as raised:
+                add_source(
+                    fixture.workspace,
+                    "project-a",
+                    "source-b",
+                    "https://example.test/entity.git",
+                    "main",
+                )
+            self.assertEqual(raised.exception.code, "invalid_record")
+        finally:
+            fixture.close()
+
     def test_pgen_is_independent_from_source(self) -> None:
         fixture = Fixture()
         try:
@@ -77,6 +92,24 @@ class CoreTest(unittest.TestCase):
                     fixture.root / "pgen-source",
                     "pgen.hpp",
                 )
+        finally:
+            fixture.close()
+
+    def test_pgen_entry_must_be_inside_snapshot(self) -> None:
+        fixture = Fixture()
+        try:
+            outside = fixture.root / "outside.hpp"
+            outside.write_text("// outside\n", encoding="utf-8")
+            with self.assertRaises(EntityError) as raised:
+                add_pgen(
+                    fixture.workspace,
+                    "project-a",
+                    "pgen-b",
+                    fixture.root / "pgen-source",
+                    str(outside),
+                )
+            self.assertEqual(raised.exception.code, "invalid_record")
+            self.assertFalse(fixture.workspace.pgen_dir("project-a", "pgen-b").exists())
         finally:
             fixture.close()
 
@@ -160,6 +193,20 @@ class CoreTest(unittest.TestCase):
             workspace = Workspace.init(Path(temp) / "workspace", "workspace-a")
             with self.assertRaisesRegex(EntityError, "site add --config"):
                 init_site(workspace, "missing-site")
+
+    def test_site_init_does_not_overwrite_conflicting_site_record(self) -> None:
+        fixture = Fixture()
+        try:
+            site_record = fixture.site_root / "site.json"
+            changed = load_json(site_record)
+            changed["manual_note"] = "keep"
+            write_json(site_record, changed)
+            with self.assertRaises(EntityError) as raised:
+                init_site(fixture.workspace, "site-a")
+            self.assertEqual(raised.exception.code, "site_config_conflict")
+            self.assertEqual(load_json(site_record), changed)
+        finally:
+            fixture.close()
 
 
 if __name__ == "__main__":

@@ -23,7 +23,10 @@ class CliJourneyTest(unittest.TestCase):
             subprocess.run(["git", "-C", str(repository), "config", "user.name", "Test"], check=True)
             executable = repository / "fake_entity"
             executable.write_text(
-                "#!/usr/bin/env bash\nprintf 'ok\\n' > result.txt\n",
+                "#!/usr/bin/env bash\nset -e\n"
+                "test \"$1\" = -input\n"
+                "test -f \"$2\"\n"
+                "printf 'ok\\n' > result.txt\n",
                 encoding="utf-8",
             )
             executable.chmod(0o755)

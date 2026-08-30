@@ -5,7 +5,7 @@ from pathlib import PurePosixPath
 from typing import Any, Iterable
 
 from .errors import EntityError
-from .objects import load_build, load_pgen, load_source
+from .objects import load_build, load_pgen, load_source, validate_pgen_snapshot
 from .paths import Workspace
 from .records import now_utc
 from .site import SiteOps, init_site, load_deps
@@ -25,8 +25,9 @@ def _expand_command(parts: list[Any], values: dict[str, str]) -> list[str]:
         text = str(part)
         try:
             expanded.append(text.format(**values))
-        except KeyError as exc:
-            raise EntityError(f"unknown build command placeholder: {exc.args[0]}", code="invalid_record") from exc
+        except (KeyError, ValueError) as exc:
+            detail = exc.args[0] if isinstance(exc, KeyError) else str(exc)
+            raise EntityError(f"invalid build command placeholder: {detail}", code="invalid_record") from exc
     return expanded
 
 
@@ -107,7 +108,11 @@ def render_build_script(
                 f'cmake --build "$WORK" -j {shlex.quote(jobs)}',
             ]
         )
-    executable_from = str(options.get("executable_from") or "{work}/src/entity.xc").format(**values)
+    try:
+        executable_from = str(options.get("executable_from") or "{work}/src/entity.xc").format(**values)
+    except (KeyError, ValueError) as exc:
+        detail = exc.args[0] if isinstance(exc, KeyError) else str(exc)
+        raise EntityError(f"invalid executable_from placeholder: {detail}", code="invalid_record") from exc
     if executable_from != str(bin_dir / "entity"):
         commands.append(f"cp {shlex.quote(executable_from)} \"$BIN/entity\"")
     body = "\n".join(f"{command} 2>&1 | tee -a \"$LOGS/build.log\"" for command in commands)
@@ -141,10 +146,12 @@ def prepare_build(workspace: Workspace, project_id: str, build_id: str) -> dict[
     root = site_build_root(site, project_id, build_id)
     if site.exists(root):
         raise EntityError(f"site build already prepared: {build_id}", code="already_exists")
+    local_pgen = workspace.pgen_dir(project_id, str(build["pgen"]))
+    pgen_entry_relative = validate_pgen_snapshot(local_pgen, str(pgen["entry"]))
     site.mkdir(root, root / "scripts", root / "work", root / "bin", root / "logs", root / "runs")
     pgen_destination = root / "pgen"
-    site.put_tree(workspace.pgen_dir(project_id, str(build["pgen"])), pgen_destination)
-    pgen_entry = pgen_destination / str(pgen["entry"])
+    site.put_tree(local_pgen, pgen_destination)
+    pgen_entry = pgen_destination / pgen_entry_relative
     script = render_build_script(site, build, source_checkout, pgen_entry, root)
     site.write_text(root / "scripts" / "build.sh", script, executable=True)
     prepared = {

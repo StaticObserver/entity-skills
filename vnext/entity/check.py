@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any
 
 from .errors import EntityError
+from .objects import validate_pgen_snapshot
 from .paths import Workspace
 from .records import load_json
 from .site import SiteOps
@@ -92,10 +93,12 @@ def check_workspace(workspace: Workspace) -> dict[str, Any]:
             pgen_id = str(pgen.get("id") or "")
             pgens[pgen_id] = pgen
             entry = pgen_file.parent / str(pgen.get("entry") or "")
-            if not entry.is_file():
-                _issue(issues, "pgen_entry_missing", entry, "PGen entry file does not exist")
+            try:
+                validate_pgen_snapshot(pgen_file.parent, str(pgen.get("entry") or ""))
+            except EntityError as exc:
+                _issue(issues, exc.code, entry, str(exc))
         builds_root = project / "builds"
-        run_ids: set[str] = set()
+        run_refs: set[tuple[str, str]] = set()
         for build_file in sorted(builds_root.glob("*/build.json")) if builds_root.exists() else []:
             build = _read(build_file, issues)
             if not build:
@@ -137,7 +140,8 @@ def check_workspace(workspace: Workspace) -> dict[str, Any]:
                 run = _read(run_file, issues)
                 if not run:
                     continue
-                run_ids.add(str(run.get("id") or run_file.parent.name))
+                run_id = str(run.get("id") or run_file.parent.name)
+                run_refs.add((build_id, run_id))
                 if run.get("build") != build_id:
                     _issue(issues, "run_build_conflict", run_file, f"Run must reference {build_id}")
                 toml = run_file.parent / str(run.get("toml") or "")
@@ -154,9 +158,29 @@ def check_workspace(workspace: Workspace) -> dict[str, Any]:
             analysis = _read(analysis_file, issues)
             if not analysis:
                 continue
-            for run_id in analysis.get("runs") or []:
-                if str(run_id) not in run_ids:
+            for reference in analysis.get("runs") or []:
+                if isinstance(reference, dict):
+                    run_id = str(reference.get("id") or "")
+                    build_id = str(reference.get("build") or "")
+                    if (build_id, run_id) not in run_refs:
+                        _issue(
+                            issues,
+                            "dangling_analysis_run",
+                            analysis_file,
+                            f"Run does not exist: {build_id}:{run_id}",
+                        )
+                    continue
+                run_id = str(reference)
+                matches = [item for item in run_refs if item[1] == run_id]
+                if not matches:
                     _issue(issues, "dangling_analysis_run", analysis_file, f"Run does not exist: {run_id}")
+                elif len(matches) > 1:
+                    _issue(
+                        issues,
+                        "ambiguous_analysis_run",
+                        analysis_file,
+                        f"Legacy Run reference is ambiguous: {run_id}",
+                    )
             script = project / str(analysis.get("script") or "")
             if not script.is_file():
                 _issue(issues, "analysis_script_missing", script, "Analysis script does not exist")

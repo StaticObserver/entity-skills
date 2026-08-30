@@ -13,7 +13,13 @@ from entity.site import add_deps, add_site
 
 
 class Fixture:
-    def __init__(self, *, scheduler: str = "none", mpi: bool = False) -> None:
+    def __init__(
+        self,
+        *,
+        scheduler: str = "none",
+        mpi: bool = False,
+        runtime_arguments: list[str] | None = None,
+    ) -> None:
         self.temp = tempfile.TemporaryDirectory(prefix="entity-vnext-test-")
         self.root = Path(self.temp.name)
         self.workspace = Workspace.init(self.root / "workspace", "test-workspace")
@@ -25,7 +31,11 @@ class Fixture:
         subprocess.run(["git", "-C", str(self.repo), "config", "user.name", "Test"], check=True)
         fake_entity = self.repo / "fake_entity"
         fake_entity.write_text(
-            "#!/usr/bin/env bash\nset -e\nprintf '%s\\n' \"$1\" > invoked-toml.txt\nprintf 'field\\n' > fields.bp\n",
+            "#!/usr/bin/env bash\nset -e\n"
+            "test \"$1\" = -input\n"
+            "test -f \"$2\"\n"
+            "printf '%s\\n' \"$2\" > invoked-toml.txt\n"
+            "printf 'field\\n' > fields.bp\n",
             encoding="utf-8",
         )
         fake_entity.chmod(0o755)
@@ -97,7 +107,11 @@ class Fixture:
                 "build_command": ["cp", "{source}/fake_entity", "{bin}/entity"],
                 "executable_from": "{bin}/entity",
             },
-            {"mpi": mpi, "gpu": False},
+            {
+                "mpi": mpi,
+                "gpu": False,
+                **({"arguments": runtime_arguments} if runtime_arguments is not None else {}),
+            },
         )
 
     def build(self) -> None:

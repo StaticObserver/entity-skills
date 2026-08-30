@@ -2,12 +2,13 @@ from __future__ import annotations
 
 import time
 import unittest
+from unittest import mock
 from pathlib import Path
 
 from entity.build import prepare_build, run_build, site_build_root
 from entity.errors import EntityError
 from entity.objects import add_run
-from entity.run import attempt_status, data_summary, prepare_attempt, site_run_root, submit_attempt
+from entity.run import _parse_job_id, attempt_status, data_summary, prepare_attempt, submit_attempt
 from entity.site import SiteOps
 
 from .support import Fixture
@@ -85,6 +86,7 @@ class BuildRunTest(unittest.TestCase):
             root = Path(prepared["root"])
             script = (root / "run.sh").read_text()
             self.assertNotIn("ENTITY_MPI_TASKS", script)
+            self.assertIn(" -input ", script)
             self.assertFalse((root / "job.slurm").exists())
         finally:
             fixture.close()
@@ -98,6 +100,30 @@ class BuildRunTest(unittest.TestCase):
             script = (Path(prepared["root"]) / "run.sh").read_text()
             self.assertIn("ENTITY_MPI_TASKS=4", script)
             self.assertNotIn("srun", script)
+        finally:
+            fixture.close()
+
+    def test_runtime_arguments_do_not_replace_input_contract(self) -> None:
+        fixture = Fixture(runtime_arguments=["--label", "trial"])
+        try:
+            fixture.build()
+            self.make_run(fixture)
+            prepared = prepare_attempt(fixture.workspace, "project-a", "run-a", attempt_id="attempt-001")
+            command = (Path(prepared["root"]) / "run.sh").read_text()
+            self.assertIn(" -input ", command)
+            self.assertIn(" --label trial", command)
+        finally:
+            fixture.close()
+
+    def test_build_rechecks_registered_pgen_containment(self) -> None:
+        fixture = Fixture()
+        try:
+            registered = fixture.workspace.pgen_dir("project-a", "pgen-a")
+            (registered / "escape").symlink_to(fixture.root / "outside")
+            with self.assertRaises(EntityError) as raised:
+                prepare_build(fixture.workspace, "project-a", "build-a")
+            self.assertEqual(raised.exception.code, "invalid_record")
+            self.assertFalse((fixture.site_root / "projects/project-a/builds/build-a").exists())
         finally:
             fixture.close()
 
@@ -167,6 +193,82 @@ class BuildRunTest(unittest.TestCase):
                 submit_attempt(fixture.workspace, "project-a", "run-a", "attempt-001")
             second = submit_attempt(fixture.workspace, "project-a", "run-a", "attempt-001")
             self.assertEqual(second["status"], "unknown")
+        finally:
+            fixture.close()
+
+    def test_slurm_parser_does_not_take_number_from_warning(self) -> None:
+        with self.assertRaises(EntityError):
+            _parse_job_id("warning: retry after 30 seconds\nsubmission pending\n")
+
+    def test_slurm_rejects_multiline_resource_before_writing_attempt(self) -> None:
+        fixture = Fixture(scheduler="slurm")
+        try:
+            fixture.build()
+            self.make_run(fixture)
+            with self.assertRaises(EntityError) as raised:
+                prepare_attempt(
+                    fixture.workspace,
+                    "project-a",
+                    "run-a",
+                    attempt_id="attempt-001",
+                    resource_override={"partition": "normal\n#SBATCH --account=other"},
+                )
+            self.assertEqual(raised.exception.code, "invalid_record")
+            attempt = fixture.site_root / "projects/project-a/builds/build-a/runs/run-a/attempts/attempt-001"
+            self.assertFalse(attempt.exists())
+        finally:
+            fixture.close()
+
+    def test_interrupted_submit_leaves_intent_and_blocks_repeat(self) -> None:
+        fixture = Fixture(scheduler="slurm")
+        try:
+            fixture.build()
+            self.make_run(fixture)
+            prepared = prepare_attempt(
+                fixture.workspace, "project-a", "run-a", attempt_id="attempt-001"
+            )
+            with mock.patch.object(SiteOps, "run", side_effect=RuntimeError("interrupted")):
+                with self.assertRaises(RuntimeError):
+                    submit_attempt(fixture.workspace, "project-a", "run-a", "attempt-001")
+            self.assertTrue((Path(prepared["root"]) / "submit-intent.json").is_file())
+            with self.assertRaises(EntityError) as raised:
+                submit_attempt(fixture.workspace, "project-a", "run-a", "attempt-001")
+            self.assertEqual(raised.exception.code, "submit_uncertain")
+        finally:
+            fixture.close()
+
+    def test_attempt_environment_override_is_recorded_and_rendered(self) -> None:
+        fixture = Fixture()
+        try:
+            fixture.build()
+            self.make_run(fixture)
+            prepared = prepare_attempt(
+                fixture.workspace,
+                "project-a",
+                "run-a",
+                attempt_id="attempt-001",
+                environment_override={"OMP_NUM_THREADS": "8", "RUN_LABEL": "trial"},
+            )
+            self.assertEqual(prepared["environment"]["OMP_NUM_THREADS"], "8")
+            script = (Path(prepared["root"]) / "run.sh").read_text()
+            self.assertIn("export OMP_NUM_THREADS=8", script)
+            self.assertIn("export RUN_LABEL=trial", script)
+        finally:
+            fixture.close()
+
+    def test_conflicting_site_toml_is_not_overwritten(self) -> None:
+        fixture = Fixture()
+        try:
+            fixture.build()
+            self.make_run(fixture)
+            prepare_attempt(fixture.workspace, "project-a", "run-a", attempt_id="attempt-001")
+            site_input = fixture.site_root / "projects/project-a/builds/build-a/runs/run-a/input.toml"
+            site_input.write_text("changed = true\n", encoding="utf-8")
+            with self.assertRaises(EntityError) as raised:
+                prepare_attempt(fixture.workspace, "project-a", "run-a", attempt_id="attempt-002")
+            self.assertEqual(raised.exception.code, "run_input_conflict")
+            self.assertEqual(site_input.read_text(), "changed = true\n")
+            self.assertFalse((site_input.parent / "attempts/attempt-002").exists())
         finally:
             fixture.close()
 

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import subprocess
+import shutil
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -36,7 +38,7 @@ class SkillPackageTest(unittest.TestCase):
             capture_output=True,
             text=True,
         )
-        self.assertEqual(completed.stdout.strip(), "0.1.0")
+        self.assertEqual(completed.stdout.strip(), "0.2.0")
 
     def test_specialist_resources_are_packaged(self) -> None:
         self.assertTrue(
@@ -45,6 +47,22 @@ class SkillPackageTest(unittest.TestCase):
         self.assertTrue(
             (self.skills / "entity-nt2py" / "scripts" / "inspect_nt2_data.py").is_file()
         )
+
+    def test_vnext_tree_has_no_external_symlink_dependencies(self) -> None:
+        links = [path for path in self.vnext.rglob("*") if path.is_symlink()]
+        self.assertEqual(links, [])
+
+    def test_copied_vnext_tree_runs_without_parent_repository(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="entity-vnext-copy-") as temp:
+            copied = Path(temp) / "standalone"
+            shutil.copytree(self.vnext, copied)
+            completed = subprocess.run(
+                [str(copied / "bin" / "entity"), "--version"],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(completed.stdout.strip(), "0.2.0")
 
 if __name__ == "__main__":
     unittest.main()
